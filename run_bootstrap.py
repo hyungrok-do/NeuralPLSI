@@ -23,7 +23,7 @@ res = {
 
 models = {
     'PLSI (3)': SplinePLSI,
-    #'PLSI (5)': SplinePLSI,
+    'PLSI (5)': SplinePLSI,
     'nPLSI': neuralPLSI,
 }
 

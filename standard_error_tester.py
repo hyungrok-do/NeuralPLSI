@@ -9,24 +9,28 @@ from sklearn.model_selection import train_test_split
 from models.PLSI import SplinePLSI
 from models.nPLSI import neuralPLSI
 from simulation import simulate_data, beta, gamma
+from time import perf_counter
 
 items = ['n', 'g_fn', 'model', 'seed', 'pred_mse', 'g_pred', 'beta_bias', 'gamma_bias', 'beta', 'gamma',
          'beta_se_sandwich', 'gamma_se_sandwich', 'beta_coverage_sandwich', 'gamma_coverage_sandwich',
-         'beta_se_bootstrap', 'gamma_se_bootstrap', 'beta_coverage_bootstrap', 'gamma_coverage_bootstrap']
+         'beta_se_bootstrap', 'gamma_se_bootstrap', 'beta_coverage_bootstrap', 'gamma_coverage_bootstrap',
+         'estimate_time', 'sandwich_time', 'bootstrap_time']
 res = {}
 for item in items:
     res[item] = []
 
 g_grid = np.linspace(-3, 3, 1000)
 for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
-    for seed in range(10):
+    for seed in range(50):
         n = 2000
         X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, g_type=g_fn, seed=seed)
 
         X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=42)
         
         model = neuralPLSI()
+        timer = perf_counter()
         model.fit(X_train, Z_train, y_train)
+        res['estimate_time'] = perf_counter() - timer
         preds = model.predict(X_test, Z_test)
 
         res['n'].append(n)
@@ -44,7 +48,9 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
         res['beta'].append(model.beta.tolist())
         res['gamma'].append(model.gamma.tolist())
 
+        timer = perf_counter()
         model.inference_sandwich(X_train, Z_train, y_train)
+        res['sandwich_time'] = perf_counter() - timer
         summary = model.summary()
 
         res['beta_se_sandwich'].append(model.beta_se.tolist())
@@ -52,7 +58,9 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
         res['beta_coverage_sandwich'].append(((model.beta_lb <= beta) & (beta <= model.beta_ub)).astype(int).tolist())
         res['gamma_coverage_sandwich'].append(((model.gamma_lb <= gamma) & (gamma <= model.gamma_ub)).astype(int).tolist())
 
+        timer = perf_counter()
         model.inference_bootstrap(X_train, Z_train, y_train)
+        res['bootstrap_time'] = perf_counter() - timer
         summary = model.summary()
 
         res['beta_se_bootstrap'].append(model.beta_se.tolist())
@@ -60,7 +68,9 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
         res['beta_coverage_bootstrap'].append(((model.beta_lb <= beta) & (beta <= model.beta_ub)).astype(int).tolist())
         res['gamma_coverage_bootstrap'].append(((model.gamma_lb <= gamma) & (gamma <= model.gamma_ub)).astype(int).tolist())
 
-
+import os
 import json
+
+os.makedirs('output', exist_ok=True)
 with open('output/standard_error_results.json', 'w') as f:
     json.dump(res, f)

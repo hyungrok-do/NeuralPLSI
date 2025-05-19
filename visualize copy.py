@@ -32,17 +32,29 @@ for n in ns:
             np.stack(res['gamma'].apply(np.array).values).std(0)
         ])
 
-        se = np.concatenate([
-            np.stack(res['beta_se'].apply(np.array).values).mean(0),
-            np.stack(res['gamma_se'].apply(np.array).values).mean(0)
+        se_sandwich = np.concatenate([
+            np.stack(res['beta_se_sandwich'].apply(np.array).values).mean(0),
+            np.stack(res['gamma_se_sandwich'].apply(np.array).values).mean(0)
         ])
 
-        cv = np.concatenate([
-            np.stack(res['beta_coverage'].apply(np.array).values).mean(0),
-            np.stack(res['gamma_coverage'].apply(np.array).values).mean(0)
+        se_bootstrap = np.concatenate([
+            np.stack(res['beta_se_bootstrap'].apply(np.array).values).mean(0),
+            np.stack(res['gamma_se_bootstrap'].apply(np.array).values).mean(0)
         ])
 
-        summary.append(pd.DataFrame([sd, se, cv], index=['sd', 'se', 'coverage']).T)
+        cv_sandwich  = np.concatenate([
+            np.stack(res['beta_coverage_sandwich'].apply(np.array).values).mean(0),
+            np.stack(res['gamma_coverage_sandwich'].apply(np.array).values).mean(0)
+        ])
+
+        cv_bootstrap = np.concatenate([
+            np.stack(res['beta_coverage_bootstrap'].apply(np.array).values).mean(0),
+            np.stack(res['gamma_coverage_bootstrap'].apply(np.array).values).mean(0)
+        ])
+
+        summary.append(pd.DataFrame([sd, se_sandwich, se_bootstrap, cv_sandwich, cv_bootstrap], index=['sd', 'se_sandwich', 'se_bootstrap', 'coverage_sandwich', 'coverage_bootstrap']).T)
+        print(res['estimate_time'].mean(), res['sandwich_time'].mean(), res['bootstrap_time'].mean())
 
 for i in range(len(summary)):
+    summary[i].to_csv(f'output/summary_{i}.csv', index=False)
     print(summary[i])

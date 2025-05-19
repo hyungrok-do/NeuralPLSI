@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+from torch.optim.swa_utils import AveragedModel, SWALR
 
 
 class SchedulerCallback:
@@ -85,10 +86,10 @@ class nPLSInet(nn.Module):
         self.z_input = nn.Linear(q, 1, bias=False)
         self.g_network = nn.Sequential(
             nn.Linear(1, 128),
-            nn.ELU(),
+            nn.SELU(),
             nn.Dropout(0.25),
             nn.Linear(128, 128),
-            nn.ELU(),
+            nn.SELU(),
             nn.Dropout(0.25),
             nn.Linear(128, 1)
         )
@@ -139,19 +140,19 @@ class neuralPLSI:
     @staticmethod
     def train(net, X, Z, y, device, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        batch_size = len(tr_x) // 10
+        batch_size = 64
         
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
-                          torch.from_numpy(tr_z).float(),
-                          torch.from_numpy(tr_y).float()
-                          ), batch_size=batch_size, sampler=torch.utils.data.RandomSampler(tr_x))
+                        torch.from_numpy(tr_z).float(),
+                        torch.from_numpy(tr_y).float()
+                        ), batch_size=batch_size, sampler=torch.utils.data.RandomSampler(tr_x))
         
         val_loader = DataLoader(
             TensorDataset(torch.from_numpy(val_x).float(),
-                          torch.from_numpy(val_z).float(),
-                          torch.from_numpy(val_y).float()
-                          ), batch_size=batch_size, shuffle=False)
+                        torch.from_numpy(val_z).float(),
+                        torch.from_numpy(val_y).float()
+                        ), batch_size=batch_size, shuffle=False)
         
         opt_g = torch.optim.Adam([
             {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
@@ -162,6 +163,11 @@ class neuralPLSI:
             {'params': net.z_input.parameters()}
             ], lr=1e-2, weight_decay=0.
         )
+
+        # SWA: Create averaged model and scheduler for opt_g
+        swa_model = AveragedModel(net)
+        swa_start = int(max_epoch * 0.75)  # Start SWA after 75% of training
+        swa_scheduler = SWALR(opt_g, swa_lr=5e-4)  # Lower learning rate during SWA
 
         mse = nn.MSELoss()
         loss_fn = nn.MSELoss()
@@ -189,19 +195,29 @@ class neuralPLSI:
 
                 net.normalize_beta(opt_z)
 
-            net.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for batch_x, batch_z, batch_y in val_loader:
-                    batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                    output = net(batch_x, batch_z).view(-1)
-                    loss = loss_fn(output, batch_y)
-                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                    val_loss += loss.item()
+            # If past swa_start, update the SWA model and adjust LR
+            if epoch > 10:
+                swa_model.update_parameters(net)
+                swa_scheduler.step()
 
-            if sch_g(val_loss) and sch_z(val_loss):
-                break
+            else:
+                # Normal scheduler step
+                net.eval()
+                val_loss = 0
+                with torch.no_grad():
+                    for batch_x, batch_z, batch_y in val_loader:
+                        batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
+                        output = net(batch_x, batch_z).view(-1)
+                        loss = loss_fn(output, batch_y)
+                        loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                        val_loss += loss.item()
 
+                if sch_g(val_loss) and sch_z(val_loss):
+                    break
+
+        # SWA: update batch norm statistics for the averaged model
+        torch.optim.swa_utils.update_bn(tr_loader, swa_model, device=device)
+        net = swa_model.module
         return net
 
     @property
@@ -276,8 +292,8 @@ class neuralPLSI:
         self.beta_ub = np.percentile(beta_samples, 97.5, axis=0)
         self.gamma_lb = np.percentile(gamma_samples, 2.5, axis=0)
         self.gamma_ub = np.percentile(gamma_samples, 97.5, axis=0)
-        self.beta_std = np.std(beta_samples, axis=0)
-        self.gamma_std = np.std(gamma_samples, axis=0)
+        self.beta_se = np.std(beta_samples, axis=0)
+        self.gamma_se = np.std(gamma_samples, axis=0)
         
     def inference_sandwich(self, X, Z, y):
         if self.net is None:
