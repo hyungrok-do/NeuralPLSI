@@ -16,7 +16,7 @@ res = {
     'model': [],
     'seed': [],
     'time': [],
-    'pred_mse': [],
+    'performance': [],
     'g_pred': [],
     'beta_bias': [],
     'gamma_bias': []
@@ -24,14 +24,14 @@ res = {
 
 models = {
     'PLSI': SplinePLSI,
-    'NeuralPLSI': neuralPLSI,
+    #'NeuralPLSI': neuralPLSI,
 }
 
 g_grid = np.linspace(-3, 3, 1000)
 for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
-    for outcome in ['continuous', 'binary', 'coxph']:
+    for outcome in ['continuous', 'binary', 'cox']:
         n = 500
-        X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, g_type=g_fn, seed=0)
+        X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=0)
 
         X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=42)
 
@@ -49,20 +49,19 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
             
             if outcome == 'continuous':
                 preds = model.predict(X_test, Z_test)
-                res['pred_performance'].append(np.mean((preds - y_test)**2))
-                res['pred_mse'].append(np.mean((preds - y_test)**2))
+                res['performance'].append(np.mean((preds - y_test)**2))
+                #res['pred_mse'].append(np.mean((preds - y_test)**2))
             elif outcome == 'binary':
                 preds = model.predict_proba(X_test, Z_test)
-                res['pred_performance'].append(roc_auc_score(y_test, preds))
-                res['pred_mse'].append(np.mean((preds - y_test)**2))
-            elif outcome == 'coxph':
+                res['performance'].append(roc_auc_score(y_test, preds))
+                #res['pred_mse'].append(np.mean((preds - y_test)**2))
+            elif outcome == 'cox':
                 preds = model.predict_partial_hazard(X_test, Z_test)
-                res['pred_performance'].append()
+                res['performance'].append(concordance_index(y_test[:, 0], -preds, y_test[:, 1]))
 
             res['beta_bias'].append((beta - model.beta).tolist() if hasattr(model, 'beta') else [None]*len(beta))
             res['gamma_bias'].append((gamma - model.gamma).tolist())
             res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None]*len(g_grid))
             res['time'].append(end - start)
         
-            print(g_fn, n, model_name, hasattr(model, 'g_function'), end - start)
-
+            print(g_fn, n, model_name, res['performance'][-1], end - start)

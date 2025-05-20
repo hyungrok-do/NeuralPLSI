@@ -18,7 +18,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
         Outcome type. One of:
         - 'continuous': Continuous outcome (default)
         - 'binary' : Binary outcome generated via logistic model
-        - 'coxph'  : Time-to-event outcome from exponential survival with censoring
+        - 'cox'  : Time-to-event outcome from exponential survival with censoring
 
     g_type : str
         Nonlinear transformation function g(x) applied to the index x @ beta. One of:
@@ -28,7 +28,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
         - 'logsquare' : Log(1 + x^2)
 
     censoring_rate : float, optional
-        Proportion of censoring in Cox model (only used if outcome='coxph').
+        Proportion of censoring in Cox model (only used if outcome='cox').
 
     seed : int, optional
         Random seed for reproducibility.
@@ -45,7 +45,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
         Outcome:
         - Continuous vector for 'continuous'
         - Binary vector for 'binary'
-        - (n, 2) array [time, event] for 'coxph'
+        - (n, 2) array [time, event] for 'cox'
 
     xb : ndarray (n,)
         Linear index x @ beta.
@@ -94,19 +94,19 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
         prob = 1 / (1 + np.exp(-logits))
         y = bernoulli.rvs(prob)
 
-    elif outcome == 'coxph':
+    elif outcome == 'cox':
         lin_pred = gxb + z @ gamma
         baseline_lambda = 1.0
         true_lambda = baseline_lambda * np.exp(lin_pred)
         T = expon.rvs(scale=1 / true_lambda)
 
         # Censoring
-        C = expon.rvs(scale=T.mean() / (1 - censoring_rate), size=n)
+        C = expon.rvs(scale= true_lambda / (1 - censoring_rate), size=n)
         time = np.minimum(T, C)
         event = (T <= C).astype(int)
         y = np.column_stack([time, event])
 
     else:
-        raise ValueError(f"Invalid outcome '{outcome}'. Choose from 'continuous', 'binary', or 'coxph'.")
+        raise ValueError(f"Invalid outcome '{outcome}'. Choose from 'continuous', 'binary', or 'cox'.")
 
     return x, z, y, xb, gxb, g_fn

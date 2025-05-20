@@ -1,14 +1,11 @@
-
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils
-import numpy as np
-import pandas as pd
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Dataset
 from sklearn.model_selection import train_test_split
-from torch.optim.swa_utils import AveragedModel, SWALR
-
 
 class SchedulerCallback:
     def __init__(self, optimizer, patience=5, higher_is_better=False, factor=0.1, max_reductions=0):
@@ -111,7 +108,6 @@ class nPLSInet(nn.Module):
                 if self.x_input.bias is not None:
                     self.x_input.bias.data = -self.x_input.bias.data
 
-            
             # Flip optimizer momentum (Adam's exp_avg)
             if optimizer is not None:
                 for group in optimizer.param_groups:
@@ -127,18 +123,116 @@ class nPLSInet(nn.Module):
         self.x_input.weight.data[0] = self.x_input.weight.data[0] / self.x_input.weight.data[0].square().sum().sqrt()
         
 
+
+class CoxCCDataset(Dataset):
+    def __init__(self, X, Z, y, random_state=None):
+        """
+        Dynamically samples one control per case at every call.
+        Only uncensored individuals are used as cases.
+        """
+        assert X.shape[0] == Z.shape[0] == y.shape[0]
+        self.X = torch.from_numpy(X).float()
+        self.Z = torch.from_numpy(Z).float()
+        self.time = y[:, 0]
+        self.event = y[:, 1]
+        self.n = len(y)
+        self.rng = np.random.default_rng(random_state)
+
+        # Indices of uncensored individuals (cases)
+        self.case_indices = np.where(self.event == 1)[0]
+
+    def __len__(self):
+        return len(self.case_indices)
+
+    def __getitem__(self, idx):
+        i = self.case_indices[idx]
+        t_i = self.time[i]
+
+        # Risk set: individuals still at risk at t_i (excluding self)
+        risk_set = np.where(self.time > t_i)[0]
+        risk_set = risk_set[risk_set != i]
+
+        if len(risk_set) == 0:
+            # fallback: just return the case twice
+            j = i
+        else:
+            j = self.rng.choice(risk_set)
+
+        return self.X[i], self.Z[i], self.X[j], self.Z[j]
+
+
 class neuralPLSI:
-    def __init__(self):
+    def __init__(self, family='continuous'):
+        self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.max_epoch = 100
         self.net = None
         
     def fit(self, X, Z, y):
         self.net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
-        self.net = self.train(self.net, X, Z, y, self.device, max_epoch=self.max_epoch)
+        self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
     @staticmethod
-    def train(net, X, Z, y, device, max_epoch=100, random_state=0):
+    def train_cox(net, X, Z, y, device, max_epoch=100, random_state=0):
+        tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
+
+        tr_dataset = CoxCCDataset(tr_x, tr_z, tr_y)
+        val_dataset = CoxCCDataset(val_x, val_z, val_y)
+
+        batch_size = 64
+        tr_loader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+        opt_g = torch.optim.Adam([
+            {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
+            ], lr=1e-3
+        )
+
+        opt_z = torch.optim.SGD([
+            {'params': net.x_input.parameters()},
+            {'params': net.z_input.parameters()}
+            ], lr=1e-2, weight_decay=0.
+        )
+
+        mse = nn.MSELoss()
+        
+        
+        net.normalize_beta(opt_z)
+        sch_z = SchedulerCallback(opt_z)
+        sch_g = SchedulerCallback(opt_g)
+        for epoch in range(max_epoch):
+            net.train()
+            for batch_x, batch_z, batch_x2, batch_z2 in dataloader:
+                batch_x, batch_z, batch_x2, batch_z2 = batch_x.to(device), batch_z.to(device), batch_x2.to(device), batch_z2.to(device)
+                
+                opt_g.zero_grad()
+                opt_z.zero_grad()
+                
+                output = net(batch_x, batch_z).view(-1)
+
+                loss = loss_fn(output, batch_x2.view(-1))
+                loss += mse(net.g_network(batch_x).view(-1), batch_x.view(-1))
+                loss.backward()
+                
+                opt_g.step()
+                opt_z.step()
+
+                net.normalize_beta(opt_z)
+
+            net.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_z, batch_x2, batch_z2 in dataloader:
+                    batch_x, batch_z, batch_x2, batch_z2 = batch_x.to(device), batch_z.to(device), batch_x2.to(device), batch_z2.to(device)
+                    output = net(batch_x, batch_z).view(-1)
+                    loss = loss_fn(output, batch_x2.view(-1))
+                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    val_loss += loss.item()
+
+            if sch_g(val_loss)
+
+    @staticmethod
+    def train(net, X, Z, y, family, device, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
         batch_size = 64
         
@@ -158,19 +252,18 @@ class neuralPLSI:
             {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
             ], lr=1e-3
         )
+
         opt_z = torch.optim.SGD([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
             ], lr=1e-2, weight_decay=0.
         )
 
-        # SWA: Create averaged model and scheduler for opt_g
-        swa_model = AveragedModel(net)
-        swa_start = int(max_epoch * 0.75)  # Start SWA after 75% of training
-        swa_scheduler = SWALR(opt_g, swa_lr=5e-4)  # Lower learning rate during SWA
-
         mse = nn.MSELoss()
-        loss_fn = nn.MSELoss()
+        if family == 'continuous':
+            loss_fn = nn.MSELoss()
+        elif family == 'binary':
+            loss_fn = nn.BCEWithLogitsLoss()
         
         net.normalize_beta(opt_z)
         sch_z = SchedulerCallback(opt_z)
@@ -195,29 +288,19 @@ class neuralPLSI:
 
                 net.normalize_beta(opt_z)
 
-            # If past swa_start, update the SWA model and adjust LR
-            if epoch > 10:
-                swa_model.update_parameters(net)
-                swa_scheduler.step()
+            net.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_z, batch_y in val_loader:
+                    batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
+                    output = net(batch_x, batch_z).view(-1)
+                    loss = loss_fn(output, batch_y)
+                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    val_loss += loss.item()
 
-            else:
-                # Normal scheduler step
-                net.eval()
-                val_loss = 0
-                with torch.no_grad():
-                    for batch_x, batch_z, batch_y in val_loader:
-                        batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                        output = net(batch_x, batch_z).view(-1)
-                        loss = loss_fn(output, batch_y)
-                        loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                        val_loss += loss.item()
+            if sch_g(val_loss) and sch_z(val_loss):
+                break
 
-                if sch_g(val_loss) and sch_z(val_loss):
-                    break
-
-        # SWA: update batch norm statistics for the averaged model
-        torch.optim.swa_utils.update_bn(tr_loader, swa_model, device=device)
-        net = swa_model.module
         return net
 
     @property
@@ -271,6 +354,22 @@ class neuralPLSI:
             for batch_x, batch_z in test_loader:
                 batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
                 output = self.net(batch_x, batch_z).view(-1)
+                preds.append(output.cpu())
+
+        return torch.cat(preds, axis=0).numpy()
+    
+    def predict_proba(self, X, Z):
+        self.net.eval()
+        test_loader = DataLoader(
+            TensorDataset(torch.from_numpy(X).float(),
+                          torch.from_numpy(Z).float()
+                          ), batch_size=128, shuffle=False)
+        
+        preds = []
+        with torch.no_grad():
+            for batch_x, batch_z in test_loader:
+                batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
+                output = self.net(batch_x, batch_z).view(-1).sigmoid()
                 preds.append(output.cpu())
 
         return torch.cat(preds, axis=0).numpy()

@@ -42,16 +42,16 @@ class SplinePLSI:
                 ridge.fit(X_design, y)
                 pred = ridge.predict(X_design)
                 return np.sum((y - pred) ** 2)
-            elif self.family == 'binomial':
+            elif self.family == 'binary':
                 model = LogisticRegression(penalty='l2', C=1.0/self.alpha, fit_intercept=False, solver='lbfgs')
                 model.fit(X_design, y)
                 pred_prob = model.predict_proba(X_design)[:, 1]
                 eps = 1e-9
                 return -np.sum(y * np.log(pred_prob + eps) + (1 - y) * np.log(1 - pred_prob + eps))
-            elif self.family == 'coxph':
+            elif self.family == 'cox':
                 df = pd.DataFrame(np.hstack((Z, B)), columns=[f'z{i}' for i in range(Z.shape[1])] + [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                cph = CoxPHFitter()
+                cph = CoxPHFitter(penalizer=self.alpha)
                 cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 return -cph.log_likelihood_
             else:
@@ -78,16 +78,16 @@ class SplinePLSI:
                 loss = np.sum(residuals ** 2)
                 self.gamma = model.coef_[:Z.shape[1]]
                 self.spline_coeffs = model.coef_[Z.shape[1]:]
-            elif self.family == 'binomial':
+            elif self.family == 'binary':
                 model = LogisticRegression(penalty='l2', C=1.0/self.alpha, fit_intercept=False, solver='lbfgs')
                 model.fit(X_design, y)
                 loss = -np.sum(y * np.log(model.predict_proba(X_design)[:, 1] + 1e-9))
                 self.gamma = model.coef_[0][:Z.shape[1]]
                 self.spline_coeffs = model.coef_[0][Z.shape[1]:]
-            elif self.family == 'coxph':
+            elif self.family == 'cox':
                 df = pd.DataFrame(X_design, columns=[f'z{i}' for i in range(Z.shape[1])] + [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                cph = CoxPHFitter()
+                cph = CoxPHFitter(penalizer=self.alpha)
                 cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 loss = -cph.log_likelihood_
                 self.gamma = cph.params_.values[:Z.shape[1]]
@@ -105,6 +105,18 @@ class SplinePLSI:
         eta = X @ self.beta
         B, _ = self._construct_spline_basis(eta)
         return Z @ self.gamma + B @ self.spline_coeffs
+    
+    def predict_proba(self, X, Z):
+        eta = X @ self.beta
+        B, _ = self._construct_spline_basis(eta)
+        linear_pred = Z @ self.gamma + B @ self.spline_coeffs
+        return 1 / (1 + np.exp(-linear_pred))
+    
+    def predict_partial_hazard(self, X, Z):
+        eta = X @ self.beta
+        B, _ = self._construct_spline_basis(eta)
+        linear_pred = Z @ self.gamma + B @ self.spline_coeffs
+        return np.exp(linear_pred)
 
     def g_function(self, x):
         B, _ = self._construct_spline_basis(x)
