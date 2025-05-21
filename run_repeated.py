@@ -62,6 +62,5 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
             
                 print(g_fn, n, seed, model_name, hasattr(model, 'g_function'), end - start)
 
-
 with open('output/simulator_results.json', 'w') as f:
     json.dump(res, f)

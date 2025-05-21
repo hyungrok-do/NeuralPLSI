@@ -161,6 +161,11 @@ class CoxCCDataset(Dataset):
         return self.X[i], self.Z[i], self.X[j], self.Z[j]
 
 
+class CoxCCLoss(nn.Module):
+    def forward(self, case_scores, control_scores):
+        loss = nn.functional.softplus(control_scores - case_scores).mean()
+        return loss
+    
 class neuralPLSI:
     def __init__(self, family='continuous'):
         self.family = family
@@ -170,16 +175,19 @@ class neuralPLSI:
         
     def fit(self, X, Z, y):
         self.net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
-        self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
+
+        if self.family == 'cox':
+            self.net = self.train_cox(self.net, X, Z, y, self.device, max_epoch=self.max_epoch)
+        else:
+            self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
     @staticmethod
-    def train_cox(net, X, Z, y, device, max_epoch=100, random_state=0):
+    def train_cox(net, X, Z, y, device, batch_size=32, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
 
         tr_dataset = CoxCCDataset(tr_x, tr_z, tr_y)
         val_dataset = CoxCCDataset(val_x, val_z, val_y)
 
-        batch_size = 64
         tr_loader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
@@ -191,27 +199,29 @@ class neuralPLSI:
         opt_z = torch.optim.SGD([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0.
+            ], lr=1e-2, weight_decay=0., momentum=0.9
         )
 
         mse = nn.MSELoss()
-        
+        loss_fn = CoxCCLoss()
         
         net.normalize_beta(opt_z)
         sch_z = SchedulerCallback(opt_z)
         sch_g = SchedulerCallback(opt_g)
         for epoch in range(max_epoch):
             net.train()
-            for batch_x, batch_z, batch_x2, batch_z2 in dataloader:
-                batch_x, batch_z, batch_x2, batch_z2 = batch_x.to(device), batch_z.to(device), batch_x2.to(device), batch_z2.to(device)
+            for batch_x, batch_z, batch_xc, batch_zc in tr_loader:
+                batch_x, batch_z, batch_xc, batch_zc = batch_x.to(device), batch_z.to(device), batch_xc.to(device), batch_zc.to(device)
                 
                 opt_g.zero_grad()
                 opt_z.zero_grad()
                 
                 output = net(batch_x, batch_z).view(-1)
+                output_c = net(batch_xc, batch_zc).view(-1)
+                batch_zero = torch.zeros(batch_x.shape[1]).view(-1, 1).to(device)
 
-                loss = loss_fn(output, batch_x2.view(-1))
-                loss += mse(net.g_network(batch_x).view(-1), batch_x.view(-1))
+                loss = loss_fn(output, output_c)
+                loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                 loss.backward()
                 
                 opt_g.step()
@@ -222,20 +232,25 @@ class neuralPLSI:
             net.eval()
             val_loss = 0
             with torch.no_grad():
-                for batch_x, batch_z, batch_x2, batch_z2 in dataloader:
-                    batch_x, batch_z, batch_x2, batch_z2 = batch_x.to(device), batch_z.to(device), batch_x2.to(device), batch_z2.to(device)
+                for batch_x, batch_z, batch_xc, batch_zc in val_loader:
+                    batch_x, batch_z, batch_xc, batch_zc = batch_x.to(device), batch_z.to(device), batch_xc.to(device), batch_zc.to(device)
                     output = net(batch_x, batch_z).view(-1)
-                    loss = loss_fn(output, batch_x2.view(-1))
-                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    output_c = net(batch_xc, batch_zc).view(-1)
+
+                    batch_zero = torch.zeros(batch_x.shape[1]).view(-1, 1).to(device)
+                    loss = loss_fn(output, output_c)
+                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
-            if sch_g(val_loss)
+            if sch_g(val_loss) and sch_z(val_loss):
+                break
+
+        return net
 
     @staticmethod
-    def train(net, X, Z, y, family, device, max_epoch=100, random_state=0):
+    def train(net, X, Z, y, family, device, batch_size=32, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        batch_size = 64
-        
+
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
                         torch.from_numpy(tr_z).float(),
@@ -256,7 +271,7 @@ class neuralPLSI:
         opt_z = torch.optim.SGD([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0.
+            ], lr=1e-2, weight_decay=0., momentum=0.9
         )
 
         mse = nn.MSELoss()
@@ -295,7 +310,7 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
-                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
             if sch_g(val_loss) and sch_z(val_loss):
@@ -370,6 +385,21 @@ class neuralPLSI:
             for batch_x, batch_z in test_loader:
                 batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
                 output = self.net(batch_x, batch_z).view(-1).sigmoid()
+                preds.append(output.cpu())
+
+        return torch.cat(preds, axis=0).numpy()
+    
+    def predict_partial_hazard(self, X, Z):
+        self.net.eval()
+        test_loader = DataLoader(
+            TensorDataset(torch.from_numpy(X).float(),
+                            torch.from_numpy(Z).float()
+                            ), batch_size=128, shuffle=False)
+        preds = []
+        with torch.no_grad():
+            for batch_x, batch_z in test_loader:
+                batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
+                output = self.net(batch_x, batch_z).view(-1).exp()
                 preds.append(output.cpu())
 
         return torch.cat(preds, axis=0).numpy()

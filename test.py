@@ -1,3 +1,5 @@
+
+import argparse
 import json
 import numpy as np
 
@@ -24,44 +26,54 @@ res = {
 
 models = {
     'PLSI': SplinePLSI,
-    #'NeuralPLSI': neuralPLSI,
+    'NeuralPLSI': neuralPLSI,
 }
 
+parser = argparse.ArgumentParser(description='Run repeated simulations for PLSI and NeuralPLSI models.')
+parser.add_argument('--n', type=int, default=500, help='Number of observations for each simulation.')
+parser.add_argument('--g_fn', type=str, default='sigmoid', choices=['linear', 'logsquare', 'sfun', 'sigmoid'], help='Nonlinear function g(x) to use in the simulation.')
+parser.add_argument('--outcome', type=str, default='continuous', choices=['continuous', 'binary', 'cox'], help='Type of outcome variable.')
+
+n = parser.parse_args().n
+g_fn = parser.parse_args().g_fn
+outcome = parser.parse_args().outcome
+
 g_grid = np.linspace(-3, 3, 1000)
-for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
-    for outcome in ['continuous', 'binary', 'cox']:
-        n = 500
-        X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=0)
 
-        X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=42)
+for seed in range(100):
+    X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=0)
 
-        for model_name, model_class in models.items():
-            np.random.seed(0)
-            model = model_class(family=outcome)
+    X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=42)
 
-            start = perf_counter()
-            model.fit(X_train, Z_train, y_train)
-            end = perf_counter()
+    for model_name, model_class in models.items():
+        np.random.seed(0)
+        model = model_class(family=outcome)
 
-            res['n'].append(n)
-            res['g_fn'].append(g_fn)
-            res['model'].append(model_name)
-            
-            if outcome == 'continuous':
-                preds = model.predict(X_test, Z_test)
-                res['performance'].append(np.mean((preds - y_test)**2))
-                #res['pred_mse'].append(np.mean((preds - y_test)**2))
-            elif outcome == 'binary':
-                preds = model.predict_proba(X_test, Z_test)
-                res['performance'].append(roc_auc_score(y_test, preds))
-                #res['pred_mse'].append(np.mean((preds - y_test)**2))
-            elif outcome == 'cox':
-                preds = model.predict_partial_hazard(X_test, Z_test)
-                res['performance'].append(concordance_index(y_test[:, 0], -preds, y_test[:, 1]))
+        start = perf_counter()
+        model.fit(X_train, Z_train, y_train)
+        end = perf_counter()
 
-            res['beta_bias'].append((beta - model.beta).tolist() if hasattr(model, 'beta') else [None]*len(beta))
-            res['gamma_bias'].append((gamma - model.gamma).tolist())
-            res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None]*len(g_grid))
-            res['time'].append(end - start)
+        res['n'].append(n)
+        res['g_fn'].append(g_fn)
+        res['model'].append(model_name)
         
-            print(g_fn, n, model_name, res['performance'][-1], end - start)
+        if outcome == 'continuous':
+            preds = model.predict(X_test, Z_test)
+            res['performance'].append(np.mean((preds - y_test)**2))
+            #res['pred_mse'].append(np.mean((preds - y_test)**2))
+        elif outcome == 'binary':
+            preds = model.predict_proba(X_test, Z_test)
+            res['performance'].append(roc_auc_score(y_test, preds))
+            #res['pred_mse'].append(np.mean((preds - y_test)**2))
+        elif outcome == 'cox':
+            preds = model.predict_partial_hazard(X_test, Z_test)
+            res['performance'].append(concordance_index(y_test[:, 0], -preds, y_test[:, 1]))
+
+        res['beta_bias'].append((beta - model.beta).tolist() if hasattr(model, 'beta') else [None]*len(beta))
+        res['gamma_bias'].append((gamma - model.gamma).tolist())
+        res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None]*len(g_grid))
+        res['time'].append(end - start)
+    
+with open(f'output/PLSI_res_{n}_{g_fn}_{outcome}.json', 'w') as f:
+    json.dump(res, f, indent=4)
+    
