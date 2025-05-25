@@ -267,7 +267,7 @@ class neuralPLSI:
         
         opt_g = torch.optim.SGD([
             {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3, monentum=0.0
+            ], lr=1e-3, momentum=0.0
         )
 
         opt_z = torch.optim.SGD([
