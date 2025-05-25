@@ -82,13 +82,13 @@ class nPLSInet(nn.Module):
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=False)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 128),
+            nn.Linear(1, 64),
             nn.SELU(),
-            nn.Dropout(0.25),
-            nn.Linear(128, 128),
+            #nn.Dropout(0.25),
+            nn.Linear(64, 64),
             nn.SELU(),
-            nn.Dropout(0.25),
-            nn.Linear(128, 1)
+            #nn.Dropout(0.25),
+            nn.Linear(64, 1)
         )
 
     def forward(self, x, z):
@@ -191,9 +191,9 @@ class neuralPLSI:
         tr_loader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        opt_g = torch.optim.Adam([
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
-            ], lr=1e-3
+        opt_g = torch.optim.SGD([
+            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
+            ], lr=1e-3, momentum=0.9
         )
 
         opt_z = torch.optim.SGD([
@@ -248,8 +248,10 @@ class neuralPLSI:
         return net
 
     @staticmethod
-    def train(net, X, Z, y, family, device, batch_size=32, max_epoch=100, random_state=0):
+    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
+
+        batch_size = len(tr_x) // 20 if len(tr_x) > 200 else len(tr_x)
 
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
@@ -259,13 +261,13 @@ class neuralPLSI:
         
         val_loader = DataLoader(
             TensorDataset(torch.from_numpy(val_x).float(),
-                        torch.from_numpy(val_z).float(),
-                        torch.from_numpy(val_y).float()
-                        ), batch_size=batch_size, shuffle=False)
+                          torch.from_numpy(val_z).float(),
+                          torch.from_numpy(val_y).float()
+                         ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
         
-        opt_g = torch.optim.Adam([
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
-            ], lr=1e-3
+        opt_g = torch.optim.SGD([
+            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
+            ], lr=1e-3, monentum=0.0
         )
 
         opt_z = torch.optim.SGD([

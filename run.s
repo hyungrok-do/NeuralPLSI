@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
-#SBATCH --time=4:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --time=12:00:00
 #SBATCH --mem=32GB
+#SBATCH --partition=cpu_short
 #SBATCH --job-name=PLSI
 #SBATCH --output=logs/simulation_%02a.log
 #SBATCH -a 0-23
