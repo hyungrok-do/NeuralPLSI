@@ -170,7 +170,7 @@ class neuralPLSI:
     def __init__(self, family='continuous'):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.max_epoch = 100
+        self.max_epoch = 500
         self.net = None
         
     def fit(self, X, Z, y):
