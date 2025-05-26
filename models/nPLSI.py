@@ -248,10 +248,10 @@ class neuralPLSI:
         return net
 
     @staticmethod
-    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=100, random_state=0):
+    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=500, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
 
-        batch_size = len(tr_x) // 20 if len(tr_x) > 200 else len(tr_x)
+        batch_size = 32
 
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
@@ -267,7 +267,7 @@ class neuralPLSI:
         
         opt_g = torch.optim.SGD([
             {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3, momentum=0.0
+            ], lr=1e-3, momentum=0.9
         )
 
         opt_z = torch.optim.SGD([

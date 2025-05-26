@@ -41,12 +41,12 @@ outcome = parser.parse_args().outcome
 g_grid = np.linspace(-3, 3, 1000)
 
 for seed in range(100):
-    X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=0)
+    X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=seed)
 
-    X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=42)
+    X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
     for model_name, model_class in models.items():
-        np.random.seed(0)
+        np.random.seed(seed)
         model = model_class(family=outcome)
 
         start = perf_counter()

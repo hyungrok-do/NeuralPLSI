@@ -25,7 +25,7 @@ for f in files:
 
 stack = pd.DataFrame(stack)
        
-palette = sns.color_palette("Paired", n_colors=len(stack['model'].unique()))
+palette = sns.color_palette("Paired", n_colors=len(stack['model'].unique())+1)
 
 g_dict = {
         'linear': lambda x, a=1: a*x,

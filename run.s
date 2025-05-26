@@ -7,18 +7,19 @@
 #SBATCH --partition=cpu_short
 #SBATCH --job-name=PLSI
 #SBATCH --output=logs/simulation_%02a.log
-#SBATCH -a 0-23
+#SBATCH -a 0-17
 
 module load singularity/3.9.8
 
 # Define parameter arrays
 n_values=(500 2000)
-g_values=(linear logsquare sfun sigmoid)
+g_values=(linear sfun sigmoid)  # Removed logsquare
 outcomes=(continuous binary cox)
 
+# Total combinations = 2 * 3 * 3 = 18
 # Compute the index for each parameter
-n_idx=$(( SLURM_ARRAY_TASK_ID / 12 ))
-g_idx=$(( (SLURM_ARRAY_TASK_ID % 12) / 3 ))
+n_idx=$(( SLURM_ARRAY_TASK_ID / 9 ))
+g_idx=$(( (SLURM_ARRAY_TASK_ID % 9) / 3 ))
 outcome_idx=$(( SLURM_ARRAY_TASK_ID % 3 ))
 
 n=${n_values[$n_idx]}
