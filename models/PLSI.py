@@ -20,6 +20,8 @@ class SplinePLSI:
 
     def _initialize_params(self, X):
         beta_init = np.random.randn(X.shape[1])
+        if beta_init[0] < 0:
+            beta_init = -beta_init
         return beta_init / np.linalg.norm(beta_init)
 
     def _construct_spline_basis(self, eta):
@@ -60,6 +62,8 @@ class SplinePLSI:
         constraints = [{'type': 'eq', 'fun': lambda b: np.linalg.norm(b) - 1}]
         result = opt.minimize(objective, beta_init, method='SLSQP', constraints=constraints, options={'maxiter': self.max_iter})
         beta = result.x
+        if self.beta[0] < 0:
+            beta = -beta
         return beta / np.linalg.norm(beta)
 
     def fit(self, X, Z, y):
