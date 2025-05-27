@@ -76,7 +76,7 @@ class SchedulerCallback:
     
 
 class CoxPHNLLLoss(nn.Module):
-    def forward(self, risk_scores, durations, events):
+    def forward(self, risk_scores, targets):
         """
         Compute the negative partial log-likelihood for Cox Proportional Hazards model.
         
@@ -88,6 +88,8 @@ class CoxPHNLLLoss(nn.Module):
         Returns:
             torch.Tensor: Negative partial log-likelihood loss.
         """
+
+        durations, events = targets[:, 0], targets[:, 1]
         if risk_scores.dim() > 1:
             risk_scores = risk_scores.squeeze(1)
 
@@ -108,16 +110,19 @@ class nPLSInet(nn.Module):
     def __init__(self, p, q):
         super(nPLSInet, self).__init__()
         
-        self.x_input = nn.Linear(p, 1, bias=False)
-        self.z_input = nn.Linear(q, 1, bias=False)
+        self.x_input = nn.Linear(p, 1, bias=True)
+        self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, 32),
             nn.SELU(),
             #nn.Dropout(0.25),
-            nn.Linear(64, 64),
+            nn.Linear(32, 64),
             nn.SELU(),
             #nn.Dropout(0.25),
-            nn.Linear(64, 1)
+            nn.Linear(64, 32),
+            nn.SELU(),
+            #nn.Dropout(0.25),
+            nn.Linear(32, 1)
         )
 
     def forward(self, x, z):
@@ -185,14 +190,18 @@ class neuralPLSI:
                           torch.from_numpy(val_z).float(),
                           torch.from_numpy(val_y).float()
                          ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
-        
-        opt = torch.optim.Adam([
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
+                        
+        opt_g = torch.optim.Adam([
             {'params': net.x_input.parameters()},
-            {'params': net.z_input.parameters()}
-            ], lr=1e-3, weight_decay=0.
+            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
+            ], lr=1e-3,
         )
-        
+
+        opt_z = torch.optim.SGD([
+            {'params': net.z_input.parameters()}
+            ], lr=1e-2, weight_decay=0.
+        )
+
         mse = nn.MSELoss()
         if family == 'continuous':
             loss_fn = nn.MSELoss()
@@ -201,14 +210,16 @@ class neuralPLSI:
         elif family == 'cox':
             loss_fn = CoxPHNLLLoss()
                 
-        net.normalize_beta(opt)
-        sch = SchedulerCallback(opt)
+        net.normalize_beta(opt_g)
+        sch_z = SchedulerCallback(opt_z)
+        sch_g = SchedulerCallback(opt_g)
         for epoch in range(max_epoch):
             net.train()
             for batch_x, batch_z, batch_y in tr_loader:
                 batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                 
-                opt.zero_grad()
+                opt_g.zero_grad()
+                opt_z.zero_grad()
                 
                 output = net(batch_x, batch_z).view(-1)
 
@@ -217,8 +228,10 @@ class neuralPLSI:
                 loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                 loss.backward()
                 
-                opt.step()
-                net.normalize_beta(opt)
+                opt_g.step()
+                opt_z.step()
+
+                net.normalize_beta(opt_g)
 
             net.eval()
             val_loss = 0
@@ -227,10 +240,11 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
+                    batch_zero = torch.zeros_like(batch_y).view(-1, 1).to(device)
                     loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
-            if sch(val_loss):
+            if sch_g(val_loss) and sch_z(val_loss):
                 break
 
         return net
