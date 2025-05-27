@@ -170,7 +170,7 @@ class neuralPLSI:
     def __init__(self, family='continuous'):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.max_epoch = 100
+        self.max_epoch = 500
         self.net = None
         
     def fit(self, X, Z, y):
@@ -191,15 +191,15 @@ class neuralPLSI:
         tr_loader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        opt_g = torch.optim.SGD([
+        opt_g = torch.optim.Adam([
             {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3, momentum=0.9
+            ], lr=1e-3,
         )
 
-        opt_z = torch.optim.SGD([
+        opt_z = torch.optim.Adam([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0., momentum=0.9
+            ], lr=1e-2, weight_decay=0.,
         )
 
         mse = nn.MSELoss()
@@ -248,8 +248,10 @@ class neuralPLSI:
         return net
 
     @staticmethod
-    def train(net, X, Z, y, family, device, batch_size=32, max_epoch=100, random_state=0):
+    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=500, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
+
+        batch_size = 32
 
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
@@ -259,19 +261,19 @@ class neuralPLSI:
         
         val_loader = DataLoader(
             TensorDataset(torch.from_numpy(val_x).float(),
-                        torch.from_numpy(val_z).float(),
-                        torch.from_numpy(val_y).float()
-                        ), batch_size=batch_size, shuffle=False)
+                          torch.from_numpy(val_z).float(),
+                          torch.from_numpy(val_y).float()
+                         ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
         
         opt_g = torch.optim.Adam([
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-6},
-            ], lr=1e-3
+            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
+            ], lr=1e-3,
         )
 
-        opt_z = torch.optim.SGD([
+        opt_z = torch.optim.Adam([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0., momentum=0.9
+            ], lr=1e-2, weight_decay=0.
         )
 
         mse = nn.MSELoss()

@@ -75,6 +75,35 @@ class SchedulerCallback:
         self.reduction_count = 0
     
 
+class CoxPHNLLLoss(nn.Module):
+    def forward(self, risk_scores, durations, events):
+        """
+        Compute the negative partial log-likelihood for Cox Proportional Hazards model.
+        
+        Args:
+            risk_scores (torch.Tensor): Predicted risk scores for each individual.
+            durations (torch.Tensor): Event or censoring times.
+            events (torch.Tensor): Event indicators (1 if event occurred, 0 if censored).
+        
+        Returns:
+            torch.Tensor: Negative partial log-likelihood loss.
+        """
+        if risk_scores.dim() > 1:
+            risk_scores = risk_scores.squeeze(1)
+
+        # Sort by durations in descending order
+        sorted_indices = torch.argsort(durations, descending=True)
+        risk_scores = risk_scores[sorted_indices]
+        durations = durations[sorted_indices]
+        events = events[sorted_indices]
+
+        eps = 1e-8
+
+        gamma = risk_scores.max()
+        log_cumsum_h = risk_scores.sub(gamma).exp().cumsum(0).add(eps).log().add(gamma)
+        return -risk_scores.sub(log_cumsum_h).mul(events).sum().div(events.sum())
+
+
 class nPLSInet(nn.Module):
     def __init__(self, p, q):
         super(nPLSInet, self).__init__()
@@ -122,49 +151,6 @@ class nPLSInet(nn.Module):
 
         self.x_input.weight.data[0] = self.x_input.weight.data[0] / self.x_input.weight.data[0].square().sum().sqrt()
         
-
-
-class CoxCCDataset(Dataset):
-    def __init__(self, X, Z, y, random_state=None):
-        """
-        Dynamically samples one control per case at every call.
-        Only uncensored individuals are used as cases.
-        """
-        assert X.shape[0] == Z.shape[0] == y.shape[0]
-        self.X = torch.from_numpy(X).float()
-        self.Z = torch.from_numpy(Z).float()
-        self.time = y[:, 0]
-        self.event = y[:, 1]
-        self.n = len(y)
-        self.rng = np.random.default_rng(random_state)
-
-        # Indices of uncensored individuals (cases)
-        self.case_indices = np.where(self.event == 1)[0]
-
-    def __len__(self):
-        return len(self.case_indices)
-
-    def __getitem__(self, idx):
-        i = self.case_indices[idx]
-        t_i = self.time[i]
-
-        # Risk set: individuals still at risk at t_i (excluding self)
-        risk_set = np.where(self.time > t_i)[0]
-        risk_set = risk_set[risk_set != i]
-
-        if len(risk_set) == 0:
-            # fallback: just return the case twice
-            j = i
-        else:
-            j = self.rng.choice(risk_set)
-
-        return self.X[i], self.Z[i], self.X[j], self.Z[j]
-
-
-class CoxCCLoss(nn.Module):
-    def forward(self, case_scores, control_scores):
-        loss = nn.functional.softplus(control_scores - case_scores).mean()
-        return loss
     
 class neuralPLSI:
     def __init__(self, family='continuous'):
@@ -181,71 +167,6 @@ class neuralPLSI:
         else:
             self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
-    @staticmethod
-    def train_cox(net, X, Z, y, device, batch_size=32, max_epoch=100, random_state=0):
-        tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-
-        tr_dataset = CoxCCDataset(tr_x, tr_z, tr_y)
-        val_dataset = CoxCCDataset(val_x, val_z, val_y)
-
-        tr_loader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-        opt_g = torch.optim.SGD([
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3, momentum=0.9
-        )
-
-        opt_z = torch.optim.SGD([
-            {'params': net.x_input.parameters()},
-            {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0., momentum=0.9
-        )
-
-        mse = nn.MSELoss()
-        loss_fn = CoxCCLoss()
-        
-        net.normalize_beta(opt_z)
-        sch_z = SchedulerCallback(opt_z)
-        sch_g = SchedulerCallback(opt_g)
-        for epoch in range(max_epoch):
-            net.train()
-            for batch_x, batch_z, batch_xc, batch_zc in tr_loader:
-                batch_x, batch_z, batch_xc, batch_zc = batch_x.to(device), batch_z.to(device), batch_xc.to(device), batch_zc.to(device)
-                
-                opt_g.zero_grad()
-                opt_z.zero_grad()
-                
-                output = net(batch_x, batch_z).view(-1)
-                output_c = net(batch_xc, batch_zc).view(-1)
-                batch_zero = torch.zeros(batch_x.shape[1]).view(-1, 1).to(device)
-
-                loss = loss_fn(output, output_c)
-                loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                loss.backward()
-                
-                opt_g.step()
-                opt_z.step()
-
-                net.normalize_beta(opt_z)
-
-            net.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for batch_x, batch_z, batch_xc, batch_zc in val_loader:
-                    batch_x, batch_z, batch_xc, batch_zc = batch_x.to(device), batch_z.to(device), batch_xc.to(device), batch_zc.to(device)
-                    output = net(batch_x, batch_z).view(-1)
-                    output_c = net(batch_xc, batch_zc).view(-1)
-
-                    batch_zero = torch.zeros(batch_x.shape[1]).view(-1, 1).to(device)
-                    loss = loss_fn(output, output_c)
-                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                    val_loss += loss.item()
-
-            if sch_g(val_loss) and sch_z(val_loss):
-                break
-
-        return net
 
     @staticmethod
     def train(net, X, Z, y, family, device, batch_size=None, max_epoch=500, random_state=0):
@@ -265,33 +186,29 @@ class neuralPLSI:
                           torch.from_numpy(val_y).float()
                          ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
         
-        opt_g = torch.optim.SGD([
+        opt = torch.optim.Adam([
             {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3, momentum=0.9
-        )
-
-        opt_z = torch.optim.SGD([
             {'params': net.x_input.parameters()},
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0., momentum=0.9
+            ], lr=1e-3, weight_decay=0.
         )
-
+        
         mse = nn.MSELoss()
         if family == 'continuous':
             loss_fn = nn.MSELoss()
         elif family == 'binary':
             loss_fn = nn.BCEWithLogitsLoss()
-        
-        net.normalize_beta(opt_z)
-        sch_z = SchedulerCallback(opt_z)
-        sch_g = SchedulerCallback(opt_g)
+        elif family == 'cox':
+            loss_fn = CoxPHNLLLoss()
+                
+        net.normalize_beta(opt)
+        sch = SchedulerCallback(opt)
         for epoch in range(max_epoch):
             net.train()
             for batch_x, batch_z, batch_y in tr_loader:
                 batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                 
-                opt_g.zero_grad()
-                opt_z.zero_grad()
+                opt.zero_grad()
                 
                 output = net(batch_x, batch_z).view(-1)
 
@@ -300,10 +217,8 @@ class neuralPLSI:
                 loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                 loss.backward()
                 
-                opt_g.step()
-                opt_z.step()
-
-                net.normalize_beta(opt_z)
+                opt.step()
+                net.normalize_beta(opt)
 
             net.eval()
             val_loss = 0
@@ -312,10 +227,10 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
-                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
-            if sch_g(val_loss) and sch_z(val_loss):
+            if sch(val_loss):
                 break
 
         return net
