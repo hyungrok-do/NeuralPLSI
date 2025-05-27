@@ -181,9 +181,9 @@ class neuralPLSI:
 
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
-                        torch.from_numpy(tr_z).float(),
-                        torch.from_numpy(tr_y).float()
-                        ), batch_size=batch_size, sampler=torch.utils.data.RandomSampler(tr_x))
+                          torch.from_numpy(tr_z).float(),
+                          torch.from_numpy(tr_y).float()
+                          ), batch_size=batch_size, sampler=torch.utils.data.RandomSampler(tr_x))
         
         val_loader = DataLoader(
             TensorDataset(torch.from_numpy(val_x).float(),
