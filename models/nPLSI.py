@@ -110,8 +110,8 @@ class nPLSInet(nn.Module):
     def __init__(self, p, q):
         super(nPLSInet, self).__init__()
         
-        self.x_input = nn.Linear(p, 1, bias=True)
-        self.z_input = nn.Linear(q, 1, bias=True)
+        self.x_input = nn.Linear(p, 1, bias=False)
+        self.z_input = nn.Linear(q, 1, bias=False)
         self.g_network = nn.Sequential(
             nn.Linear(1, 32),
             nn.SELU(),
@@ -218,7 +218,7 @@ class neuralPLSI:
                 
                 output = net(batch_x, batch_z).view(-1)
 
-                batch_zero = torch.zeros_like(batch_y).view(-1, 1).to(device)
+                batch_zero = torch.zeros((1, 1)).to(device)
                 loss = loss_fn(output, batch_y)
                 loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                 loss.backward()
@@ -235,7 +235,7 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
-                    batch_zero = torch.zeros_like(batch_y).view(-1, 1).to(device)
+                    batch_zero = torch.zeros((1, 1)).to(device)
                     loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
