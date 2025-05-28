@@ -166,12 +166,7 @@ class neuralPLSI:
         
     def fit(self, X, Z, y):
         self.net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
-
-        if self.family == 'cox':
-            self.net = self.train_cox(self.net, X, Z, y, self.device, max_epoch=self.max_epoch)
-        else:
-            self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
-
+        self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
     @staticmethod
     def train(net, X, Z, y, family, device, batch_size=None, max_epoch=500, random_state=0):
