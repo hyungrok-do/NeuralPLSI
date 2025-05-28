@@ -113,20 +113,20 @@ class nPLSInet(nn.Module):
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=False)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(1, 64),
             nn.SELU(),
-            #nn.Dropout(0.25),
-            nn.Linear(32, 64),
+            nn.Linear(64, 64),
             nn.SELU(),
-            #nn.Dropout(0.25),
-            nn.Linear(64, 32),
-            nn.SELU(),
-            #nn.Dropout(0.25),
-            nn.Linear(32, 1)
+            nn.Linear(64, 1)
         )
+
+        self.flip_sign = False
 
     def forward(self, x, z):
         xb = self.x_input(x)
+        if self.flip_sign:
+            xb = -xb
+
         return self.g_network(xb) + self.z_input(z)
     
     def normalize_beta(self, optimizer=None):
@@ -137,6 +137,8 @@ class nPLSInet(nn.Module):
 
         if weight[0] < 0:
             # Flip the weight
+            self.flip_sign = not self.flip_sign
+            
             with torch.no_grad():
                 self.x_input.weight.data[0] = -weight
                 if self.x_input.bias is not None:
@@ -192,7 +194,7 @@ class neuralPLSI:
             ], lr=1e-3,
         )
 
-        opt_z = torch.optim.Adam([
+        opt_z = torch.optim.SGD([
             {'params': net.z_input.parameters()}
             ], lr=1e-2, weight_decay=0.
         )
