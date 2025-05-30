@@ -128,6 +128,14 @@ class nPLSInet(nn.Module):
             xb = -xb
 
         return self.g_network(xb) + self.z_input(z)
+
+    def g_function(self, x):
+        """
+        Compute the g function for the input x.
+        """
+        if self.flip_sign:
+            x = -x
+        return self.g_network(x)
     
     def normalize_beta(self, optimizer=None):
         """
@@ -283,7 +291,7 @@ class neuralPLSI:
         self.net.eval()
         x = torch.from_numpy(x).float().to(self.device)
         with torch.no_grad():
-            return self.net.g_network(x).view(-1).cpu().numpy()
+            return self.net.g_function(x).view(-1).cpu().numpy()
 
     def predict(self, X, Z):
         self.net.eval()
