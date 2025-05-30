@@ -4,7 +4,8 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --time=12:00:00
 #SBATCH --mem=32GB
-#SBATCH --partition=cpu_short
+#SBATCH --partition=a100_short
+#SBATCH --gres=gpu:a100:1
 #SBATCH --job-name=PLSI
 #SBATCH --output=logs/simulation_%02a.log
 #SBATCH -a 0-17

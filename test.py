@@ -40,6 +40,7 @@ outcome = parser.parse_args().outcome
 
 g_grid = np.linspace(-3, 3, 1000)
 
+
 for seed in range(100):
     X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=seed)
 
