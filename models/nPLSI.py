@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset, Dataset
 from sklearn.model_selection import train_test_split
 
 class SchedulerCallback:
-    def __init__(self, optimizer, patience=5, higher_is_better=False, factor=0.1, max_reductions=0):
+    def __init__(self, optimizer, patience=3, higher_is_better=False, factor=0.1, max_reductions=0):
         """
         A learning rate scheduler with early stopping after a specified number of patience periods.
 
@@ -119,6 +119,15 @@ class nPLSInet(nn.Module):
             nn.SELU(),
             nn.Linear(64, 1)
         )
+
+        nn.init.zeros_(self.x_input.weight)
+        nn.init.zeros_(self.z_input.weight)
+
+        for m in self.g_network:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
         self.flip_sign = False
 
