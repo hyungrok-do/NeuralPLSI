@@ -202,9 +202,9 @@ class neuralPLSI:
             ], lr=1e-3,
         )
 
-        opt_z = torch.optim.Adam([
+        opt_z = torch.optim.SGD([
             {'params': net.z_input.parameters()}
-            ], lr=1e-3, weight_decay=0.
+            ], lr=1e-3, momentum=0.9, weight_decay=0.
         )
 
         mse = nn.MSELoss()
