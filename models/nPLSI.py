@@ -120,15 +120,7 @@ class nPLSInet(nn.Module):
             nn.Linear(64, 1)
         )
 
-        nn.init.zeros_(self.x_input.weight)
         nn.init.zeros_(self.z_input.weight)
-
-        for m in self.g_network:
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
         self.flip_sign = False
 
     def forward(self, x, z):
