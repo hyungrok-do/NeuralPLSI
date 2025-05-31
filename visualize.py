@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import os
 import json
 import numpy as np
@@ -44,15 +47,15 @@ for outcome in stack['outcome'].unique():
     res = stack[stack['outcome'] == outcome]
     ns = res['n'].unique()
     for n in ns:
-        plt.figure(figsize=(25, 20))
+        plt.figure(figsize=(20, 15))
         try:
             for i, g_fn in enumerate(res['g_fn'].unique()):
                 res[pnames[outcome]] = res['performance']
-                plt.subplot(4, 5, i*5 + 1)
+                plt.subplot(3, 5, i*5 + 1)
                 sns.boxplot(data=res[(res['g_fn'] == g_fn) & (res['n'] == n)], x='model', y=pnames[outcome], hue='model', palette=palette)
 
                 # visualize g function
-                plt.subplot(4, 5, i*5 + 2)
+                plt.subplot(3, 5, i*5 + 2)
                 sns.lineplot(x=g_grid, y=g_dict[g_fn](g_grid), label='True', color='black', linestyle='--')
                 for j, model in enumerate(res['model'].unique()):
                     g_estimates = np.stack(res[(res['g_fn'] == g_fn) & (res['n'] == n) & (res['model'] == model)]['g_pred']).astype(float)
@@ -64,7 +67,7 @@ for outcome in stack['outcome'].unique():
                 plt.plot([0], [0], color='black', marker='s')
 
                 # pivot beta estimates with models and seeds
-                plt.subplot(4, 5, i*5 + 3)
+                plt.subplot(3, 5, i*5 + 3)
                 beta_est = res[(res['g_fn'] == g_fn) & (res['n'] == n)][['model', 'seed', 'beta_bias']].explode('beta_bias').reset_index(drop=True)
                 beta_est['coefficient'] = beta_est.groupby(['model', 'seed']).cumcount() + 1
                 beta_est['coefficient'] = 'beta_' + beta_est['coefficient'].astype(str)
@@ -74,7 +77,7 @@ for outcome in stack['outcome'].unique():
                 plt.ylim(-0.9, 0.9)
 
                 # pivot gamma estimates with models appnd seeds
-                plt.subplot(4, 5, i*5 + 4)
+                plt.subplot(3, 5, i*5 + 4)
                 gamma_est = res[(res['g_fn'] == g_fn) & (res['n'] == n)][['model', 'seed', 'gamma_bias']].explode('gamma_bias').reset_index(drop=True)
                 gamma_est['coefficient'] = gamma_est.groupby(['model', 'seed']).cumcount() + 1
                 gamma_est['coefficient'] = 'gamma_' + gamma_est['coefficient'].astype(str)
@@ -83,7 +86,7 @@ for outcome in stack['outcome'].unique():
                 plt.axhline(0, color='black', linestyle='--', linewidth=1)
                 plt.ylim(-0.9, 0.9)
 
-                plt.subplot(4, 5, i*5 + 5)
+                plt.subplot(3, 5, i*5 + 5)
                 sns.boxplot(data=res[(res['g_fn'] == g_fn) & (res['n'] == n)], x='model', y='time', hue='model', palette=palette)
 
             plt.tight_layout()

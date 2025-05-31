@@ -111,7 +111,7 @@ class nPLSInet(nn.Module):
         super(nPLSInet, self).__init__()
         
         self.x_input = nn.Linear(p, 1, bias=False)
-        self.z_input = nn.Linear(q, 1, bias=False)
+        self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
             nn.Linear(1, 64),
             nn.SELU(),

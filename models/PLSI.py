@@ -76,14 +76,14 @@ class SplinePLSI:
             X_design = np.hstack((Z, B))
 
             if self.family == 'continuous':
-                model = Ridge(alpha=self.alpha, fit_intercept=False)
+                model = Ridge(alpha=self.alpha, fit_intercept=True)
                 model.fit(X_design, y)
                 residuals = y - model.predict(X_design)
                 loss = np.sum(residuals ** 2)
                 self.gamma = model.coef_[:Z.shape[1]]
                 self.spline_coeffs = model.coef_[Z.shape[1]:]
             elif self.family == 'binary':
-                model = LogisticRegression(penalty='l2', C=1.0/self.alpha, fit_intercept=False, solver='lbfgs')
+                model = LogisticRegression(penalty='l2', C=1.0/self.alpha, fit_intercept=True, solver='lbfgs')
                 model.fit(X_design, y)
                 loss = -np.sum(y * np.log(model.predict_proba(X_design)[:, 1] + 1e-9))
                 self.gamma = model.coef_[0][:Z.shape[1]]
