@@ -111,7 +111,7 @@ class nPLSInet(nn.Module):
         super(nPLSInet, self).__init__()
         
         self.x_input = nn.Linear(p, 1, bias=False)
-        self.z_input = nn.Linear(q, 1, bias=True)
+        self.z_input = nn.Linear(q, 1, bias=False)
         self.g_network = nn.Sequential(
             nn.Linear(1, 64),
             nn.SELU(),
@@ -202,9 +202,9 @@ class neuralPLSI:
             ], lr=1e-3,
         )
 
-        opt_z = torch.optim.SGD([
+        opt_z = torch.optim.Adam([
             {'params': net.z_input.parameters()}
-            ], lr=1e-2, weight_decay=0.
+            ], lr=1e-3, weight_decay=0.
         )
 
         mse = nn.MSELoss()
