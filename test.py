@@ -41,7 +41,7 @@ outcome = parser.parse_args().outcome
 g_grid = np.linspace(-3, 3, 1000)
 
 
-for seed in range(100):
+for seed in range(100, 200, 1):
     X, Z, y, xb, gxb, true_g_fn = simulate_data(n*2, outcome=outcome, g_type=g_fn, seed=seed)
 
     X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
