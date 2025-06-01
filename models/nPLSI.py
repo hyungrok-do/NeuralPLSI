@@ -198,14 +198,14 @@ class neuralPLSI:
                          ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
                         
         opt_g = torch.optim.Adam([
-            {'params': net.x_input.parameters(), 'weight_decay': 1e-8},
+            {'params': net.x_input.parameters(), 'weight_decay': 0.},
             {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
             ], lr=1e-3,
         )
 
-        opt_z = torch.optim.SGD([
+        opt_z = torch.optim.Adagrad([
             {'params': net.z_input.parameters()}
-            ], lr=1e-3, momentum=0.9, weight_decay=1e-8
+            ], lr=1e-3, weight_decay=0.
         )
 
         mse = nn.MSELoss()
