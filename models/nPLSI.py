@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset, Dataset
 from sklearn.model_selection import train_test_split
 
 class SchedulerCallback:
-    def __init__(self, optimizer, patience=3, higher_is_better=False, factor=0.1, max_reductions=0):
+    def __init__(self, optimizer, patience=5, higher_is_better=False, factor=0.1, max_reductions=0):
         """
         A learning rate scheduler with early stopping after a specified number of patience periods.
 
@@ -205,7 +205,7 @@ class neuralPLSI:
 
         opt_z = torch.optim.SGD([
             {'params': net.z_input.parameters()}
-            ], lr=1e-3, weight_decay=0.
+            ], lr=1e-3, momentum=0.9, weight_decay=0.
         )
 
         mse = nn.MSELoss()
@@ -248,8 +248,8 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
-                    #batch_zero = torch.zeros((1, 1)).to(device)
-                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    batch_zero = torch.zeros((1, 1)).to(device)
+                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
             if sch_g(val_loss) and sch_z(val_loss):
@@ -363,116 +363,3 @@ class neuralPLSI:
         self.beta_se = np.std(beta_samples, axis=0)
         self.gamma_se = np.std(gamma_samples, axis=0)
         
-    def inference_sandwich(self, X, Z, y):
-        if self.net is None:
-            raise ValueError("Model has not been fitted yet.")
-
-        self.net.eval()
-
-        for param in self.net.g_network.parameters():
-            param.requires_grad = False
-
-        X = torch.from_numpy(X).float().to(self.device)
-        Z = torch.from_numpy(Z).float().to(self.device)
-        y = torch.from_numpy(y).float().to(self.device)
-
-        n = X.shape[0]
-
-        beta_flat = self.net.x_input.weight.view(-1)
-        gamma_flat = self.net.z_input.weight.view(-1)
-
-        ### --- Functional Forward --- ###
-        def forward_with_custom_beta_gamma(X, Z, beta_flat=None, gamma_flat=None):
-            out = X
-            if beta_flat is not None:
-                out = F.linear(out, beta_flat.view_as(self.net.x_input.weight), bias=None)
-            else:
-                out = self.net.x_input(X)
-
-            if gamma_flat is not None:
-                out += F.linear(Z, gamma_flat.view_as(self.net.z_input.weight), bias=None)
-            else:
-                out += self.net.z_input(Z)
-
-            out = self.net.g_network(out)
-            return out
-
-        ### --- Gamma Inference First --- ###
-        def loss_fn_gamma(gamma_params):
-            outputs = forward_with_custom_beta_gamma(X, Z, gamma_flat=gamma_params)
-            loss = (outputs.view(-1) - y).pow(2).mean()
-            return loss
-
-        # Gamma Hessian
-        hessian_gamma = torch.autograd.functional.hessian(loss_fn_gamma, gamma_flat)
-        hessian_gamma_inv = torch.linalg.pinv(hessian_gamma)
-
-        # Gamma gradients per sample
-        grads_gamma = []
-        for i in range(n):
-            xi = X[i:i+1]
-            zi = Z[i:i+1]
-            yi = y[i:i+1]
-
-            def loss_i_gamma(gamma_params):
-                output = forward_with_custom_beta_gamma(xi, zi, gamma_flat=gamma_params)
-                loss = (output.view(-1) - yi).pow(2)
-                return loss
-
-            grad_gamma_i = torch.autograd.grad(loss_i_gamma(gamma_flat), gamma_flat, retain_graph=True)[0]
-            grads_gamma.append(grad_gamma_i.unsqueeze(0))
-
-        grads_gamma = torch.cat(grads_gamma, dim=0)  
-
-        S_gamma = (grads_gamma.T @ grads_gamma) / n
-        cov_gamma = (hessian_gamma_inv @ S_gamma @ hessian_gamma_inv) / n
-
-        se_gamma = torch.sqrt(torch.diag(cov_gamma)).cpu().numpy()
-
-        self.gamma_se = se_gamma
-
-        ### --- Now do Beta Inference separately --- ###
-        def loss_fn_beta(beta_params):
-            outputs = forward_with_custom_beta_gamma(X, Z, beta_flat=beta_params)
-            loss = (outputs.view(-1) - y).pow(2).mean()
-            return loss
-
-        # Beta Hessian
-        hessian_beta = torch.autograd.functional.hessian(loss_fn_beta, beta_flat)
-        hessian_beta_inv = torch.linalg.pinv(hessian_beta)
-
-        # Beta gradients per sample
-        grads_beta = []
-        for i in range(n):
-            xi = X[i:i+1]
-            zi = Z[i:i+1]
-            yi = y[i:i+1]
-
-            def loss_i_beta(beta_params):
-                output = forward_with_custom_beta_gamma(xi, zi, beta_flat=beta_params)
-                loss = (output.view(-1) - yi).pow(2)
-                return loss
-
-            grad_beta_i = torch.autograd.grad(loss_i_beta(beta_flat), beta_flat, retain_graph=True)[0]
-            grads_beta.append(grad_beta_i.unsqueeze(0))
-
-        grads_beta = torch.cat(grads_beta, dim=0)  # (n, p_beta)
-
-        S_beta = (grads_beta.T @ grads_beta) / n
-        cov_beta = (hessian_beta_inv @ S_beta @ hessian_beta_inv) / n
-
-        # Project beta covariance to tangent space
-        beta_norm = beta_flat.detach()
-        beta_norm = beta_norm / beta_norm.norm()
-
-        P = torch.eye(len(beta_norm), device=self.device) - beta_norm.unsqueeze(1) @ beta_norm.unsqueeze(0)  # (p, p)
-        cov_beta_adjusted = P @ cov_beta @ P
-
-        se_beta = torch.sqrt(torch.diag(cov_beta_adjusted)).cpu().numpy()
-
-        self.beta_se = se_beta
-
-        self.beta_lb = self.beta - 1.96 * self.beta_se
-        self.beta_ub = self.beta + 1.96 * self.beta_se
-        self.gamma_lb = self.gamma - 1.96 * self.gamma_se
-        self.gamma_ub = self.gamma + 1.96 * self.gamma_se
