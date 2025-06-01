@@ -215,6 +215,8 @@ class neuralPLSI:
             loss_fn = nn.BCEWithLogitsLoss()
         elif family == 'cox':
             loss_fn = CoxPHNLLLoss()
+        else:
+            raise ValueError("Unsupported family type. Use 'continuous', 'binary', or 'cox'.")
                 
         net.normalize_beta(opt_g)
         sch_z = SchedulerCallback(opt_z)
@@ -246,46 +248,11 @@ class neuralPLSI:
                     batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
                     output = net(batch_x, batch_z).view(-1)
                     loss = loss_fn(output, batch_y)
-                    batch_zero = torch.zeros((1, 1)).to(device)
-                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
+                    #batch_zero = torch.zeros((1, 1)).to(device)
+                    #loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
                     val_loss += loss.item()
 
             if sch_g(val_loss) and sch_z(val_loss):
-                break
-
-        sch_g = SchedulerCallback(opt_g)
-        net.eval()
-        net.x_input.weight.requires_grad = False
-        if net.x_input.bias is not None:
-            net.x_input.bias.requires_grad = False
-            
-        for m in net.g_network.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.requires_grad = False
-                if m.bias is not None:
-                    m.bias.requires_grad = False
-
-        for epoch in range(max_epoch):
-            for batch_x, batch_z, batch_y in tr_loader:
-                batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                
-                opt_z.zero_grad()
-                
-                output = net(batch_x, batch_z).view(-1)
-                loss = loss_fn(output, batch_y)
-                loss.backward()
-                
-                opt_z.step()
-
-            val_loss = 0
-            with torch.no_grad():
-                for batch_x, batch_z, batch_y in val_loader:
-                    batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                    output = net(batch_x, batch_z).view(-1)
-                    loss = loss_fn(output, batch_y)
-                    val_loss += loss.item()
-
-            if sch_z(val_loss):
                 break
 
         return net
