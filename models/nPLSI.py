@@ -203,7 +203,7 @@ class neuralPLSI:
             ], lr=1e-3,
         )
 
-        opt_z = torch.optim.Adagrad([
+        opt_z = torch.optim.SGD([
             {'params': net.z_input.parameters()}
             ], lr=1e-3, weight_decay=0.
         )
