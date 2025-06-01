@@ -120,7 +120,6 @@ class nPLSInet(nn.Module):
             nn.Linear(64, 1)
         )
 
-        nn.init.zeros_(self.z_input.weight)
         self.flip_sign = False
 
     def forward(self, x, z):
