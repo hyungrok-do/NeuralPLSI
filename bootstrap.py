@@ -101,6 +101,6 @@ for seed in range(100, 200):
         res['time'].append(end - start)
 
 # === Save results ===
-output_path = f'output/PLSI_res_{n}_{g_fn}_{outcome}.json'
+output_path = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json'
 with open(output_path, 'w') as f:
     json.dump(res, f, indent=4)
