@@ -78,7 +78,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     # Low-dimensional covariates Z
     z1 = np.random.normal(size=n)
     z2 = np.random.normal(size=n)
-    z3 = np.random.binomial(1, 0.5, size=n)
+    z3 = np.random.binomial(1, 0.5, size=n) * 2 - 1 # to standardize
     z = np.column_stack([z1, z2, z3])
 
     # Single index and nonlinear transformation
