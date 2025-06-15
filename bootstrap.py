@@ -20,6 +20,7 @@ res = {
     'performance': [],
     'g_pred': [],
     'beta': [],
+    'beta_boot': [],
     'gamma': [],
     'gamma_boot': [],
     'time': []
