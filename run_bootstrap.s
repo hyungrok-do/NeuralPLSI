@@ -1,11 +1,9 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=20
 #SBATCH --time=2-12:00:00
 #SBATCH --mem=32GB
-#SBATCH --partition=a100_short
-#SBATCH --gres=gpu:a100:1
 #SBATCH --job-name=PLSI_bootstrap
 #SBATCH --output=logs/bootstrap_%02a.log
 #SBATCH -a 0-17

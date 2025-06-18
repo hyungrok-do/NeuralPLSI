@@ -45,7 +45,7 @@ outcome = args.outcome
 g_grid = np.linspace(-3, 3, 1000)
 
 # === Main simulation loop ===
-for seed in range(100, 200):
+for seed in range(100, 150):
     X, Z, y, xb, gxb, true_g_fn = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed)
     X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
@@ -76,7 +76,7 @@ for seed in range(100, 200):
         beta_boot = []
         gamma_boot = []
 
-        for _ in range(1000):
+        for _ in range(500):
             bootstrap_idx = np.random.choice(range(len(X_train)), size=n, replace=True)
             X_bootstrap = X_train[bootstrap_idx]
             Z_bootstrap = Z_train[bootstrap_idx]
