@@ -76,7 +76,7 @@ for seed in range(100, 150):
         beta_boot = []
         gamma_boot = []
 
-        for _ in range(500):
+        for _ in range(100):
             bootstrap_idx = np.random.choice(range(len(X_train)), size=n, replace=True)
             X_bootstrap = X_train[bootstrap_idx]
             Z_bootstrap = Z_train[bootstrap_idx]
