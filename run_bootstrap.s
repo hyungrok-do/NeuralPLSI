@@ -2,7 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --time=2-12:00:00
+#SBATCH --time=3-20:00:00
 #SBATCH --mem=32GB
 #SBATCH --job-name=PLSI_bootstrap
 #SBATCH --output=logs/bootstrap_%02a.log

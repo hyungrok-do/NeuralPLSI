@@ -93,7 +93,6 @@ for seed in range(100, 150):
         res['g_fn'].append(g_fn)
         res['model'].append(model_name)
         res['seed'].append(seed)
-        res['performance'].append(res['performance'][-1])  # duplicate last performance
         res['beta'].append(orig_beta)
         res['gamma'].append(orig_gamma)
         res['beta_boot'].append(beta_boot)
