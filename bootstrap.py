@@ -100,7 +100,7 @@ for seed in range(100):
         res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid))
         res['time'].append(end - start)
 
-# === Save results ===
-output_path = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}_new.json'
-with open(output_path, 'w') as f:
-    json.dump(res, f, indent=4)
+    # === Save results ===
+    output_path = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}_new.json'
+    with open(output_path, 'w') as f:
+        json.dump(res, f, indent=4)
