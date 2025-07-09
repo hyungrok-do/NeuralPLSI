@@ -45,7 +45,7 @@ outcome = args.outcome
 g_grid = np.linspace(-3, 3, 1000)
 
 # === Main simulation loop ===
-for seed in range(100, 150):
+for seed in range(100):
     X, Z, y, xb, gxb, true_g_fn = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed)
     X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
@@ -101,6 +101,6 @@ for seed in range(100, 150):
         res['time'].append(end - start)
 
 # === Save results ===
-output_path = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json'
+output_path = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}_new.json'
 with open(output_path, 'w') as f:
     json.dump(res, f, indent=4)

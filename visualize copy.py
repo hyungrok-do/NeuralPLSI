@@ -17,35 +17,60 @@ for k in keys:
 beta = np.array([1, 0.7, -0.5, 0.5, 0.3, -0.1, 0, 0])
 beta = beta / np.linalg.norm(beta)
 gamma = np.array([1, -0.5, 0.5])
+alpha = 0.05
 
 stack = []
-for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
-    for j, outcome in enumerate(['continuous', 'binary']):
+for g_fn in ['linear', 'logsquare', 'sfun', 'sigmoid']:
+    for outcome in ['continuous', 'binary']:
         for n in [500, 2000]:
-            if not os.path.exists(f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json'):
-                print(f"File not found: output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json")
+            filename = f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json'
+            if not os.path.exists(filename):
+                print(f"File not found: {filename}")
                 continue
-            with open(f'output/bootstrap_PLSI_res_{n}_{g_fn}_{outcome}.json', 'r') as file:
+
+            with open(filename, 'r') as file:
                 res = json.load(file)
-                for key in res.keys():
+                for key in res:
                     res[key] = np.array(res[key])
 
-            row = []
             for model in ['PLSI', 'NeuralPLSI']:
                 mask = (res['g_fn'] == g_fn) & (res['model'] == model) & (res['n'] == n)
                 if not np.any(mask):
                     continue
+
                 row = [n, g_fn, outcome, model]
-                #row += res['beta_bias'][mask].mean(axis=0).tolist()
-                row += np.array(res['beta'][mask]).std(axis=0).tolist()
-                row += np.array(res['beta_boot'][mask]).std(axis=1, ddof=1).mean(0).tolist()
-                #row += res['gamma_bias'][mask].mean(axis=0).tolist()
-                row += np.array(res['gamma'][mask]).std(axis=0).tolist()
-                row += np.array(res['gamma_boot'][mask]).std(axis=1, ddof=1).mean(0).tolist()
+
+                # --- Standard deviation over replicates ---
+                row += res['beta'][mask].std(axis=0).tolist()
+                row += res['beta_boot'][mask].std(axis=1, ddof=1).mean(axis=0).tolist()
+                row += res['gamma'][mask].std(axis=0).tolist()
+                row += res['gamma_boot'][mask].std(axis=1, ddof=1).mean(axis=0).tolist()
+
+                # --- Coverage probability computation ---
+                beta_boot = res['beta_boot'][mask]  # shape: (n_reps, n_boot, p)
+                gamma_boot = res['gamma_boot'][mask]  # shape: (n_reps, n_boot, q)
+
+                # Percentile CI bounds
+                beta_lower = np.percentile(beta_boot, 100 * (alpha / 2), axis=1)
+                beta_upper = np.percentile(beta_boot, 100 * (1 - alpha / 2), axis=1)
+                gamma_lower = np.percentile(gamma_boot, 100 * (alpha / 2), axis=1)
+                gamma_upper = np.percentile(gamma_boot, 100 * (1 - alpha / 2), axis=1)
+
+                # Per-coefficient coverage
+                beta_covered = (beta >= beta_lower) & (beta <= beta_upper)
+                gamma_covered = (gamma >= gamma_lower) & (gamma <= gamma_upper)
+
+                beta_coverage = beta_covered.mean(axis=0).tolist()
+                gamma_coverage = gamma_covered.mean(axis=0).tolist()
+
+                # Append coverage results
+                row += beta_coverage
+                row += gamma_coverage
+
                 stack.append(row)
 
 print(pd.DataFrame(stack).shape)
-pd.DataFrame(stack).to_csv('output/PLSI_boot_results.csv', index=False)
+pd.DataFrame(stack).to_csv('output/PLSI_boot_results_.csv', index=False)
 
 
         

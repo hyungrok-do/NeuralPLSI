@@ -72,7 +72,7 @@ beta_stack = []
 gamma_stack = []
 g_stack = []
 
-for i in tqdm(range(500)):
+for i in tqdm(range(200)):
     print(f'Bootstrap iteration {i+1}')
     sample_indices = np.random.choice(covariates.index, size=len(covariates), replace=True)
     covariates_sample = covariates.loc[sample_indices]
@@ -111,4 +111,4 @@ plt.title('g Function Predictions')
 plt.xlabel('g Grid')
 plt.ylabel('g Function Value')
 plt.tight_layout()
-plt.savefig('output/nhanes_nplsi_results.png')
+plt.savefig('output/nhanes_nplsi_results2.png')
