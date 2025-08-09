@@ -108,18 +108,19 @@ class CoxPHNLLLoss(nn.Module):
 
 class nPLSInet(nn.Module):
     def __init__(self, p, q):
+        torch.manual_seed(0)
         super(nPLSInet, self).__init__()
         
         self.x_input = nn.Linear(p, 1, bias=False)
-        self.z_input = nn.Linear(q, 1, bias=False)
+        self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, 32),
             nn.SELU(),
-            nn.Linear(64, 64),
+            nn.Linear(32, 32),
             nn.SELU(),
-            nn.Linear(64, 64),
+            nn.Linear(32, 32),
             nn.SELU(),
-            nn.Linear(64, 1)
+            nn.Linear(32, 1)
         )
 
         self.flip_sign = False
@@ -139,6 +140,12 @@ class nPLSInet(nn.Module):
             x = -x
         return self.g_network(x)
     
+    def gxb(self, x):
+        xb = self.x_input(x)
+        if self.flip_sign:
+            xb = -xb
+        return self.g_network(xb)
+
     def normalize_beta(self, optimizer=None):
         """
         Normalize and sign-fix the beta vector and adjust optimizer state if needed.
@@ -173,7 +180,7 @@ class neuralPLSI:
     def __init__(self, family='continuous'):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.max_epoch = 500
+        self.max_epoch = 200
         self.net = None
         
     def fit(self, X, Z, y):
@@ -314,6 +321,15 @@ class neuralPLSI:
 
         return torch.cat(preds, axis=0).numpy()
     
+    def predict_gxb(self, X):
+        """
+        Predict the g(x) function for the input X.
+        """
+        self.net.eval()
+        X = torch.from_numpy(X).float().to(self.device)
+        with torch.no_grad():
+            return self.net.gxb(X).view(-1).cpu().numpy()
+
     def predict_proba(self, X, Z):
         self.net.eval()
         test_loader = DataLoader(
