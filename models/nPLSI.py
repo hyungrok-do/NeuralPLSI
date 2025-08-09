@@ -105,6 +105,9 @@ class CoxPHNLLLoss(nn.Module):
         log_cumsum_h = risk_scores.sub(gamma).exp().cumsum(0).add(eps).log().add(gamma)
         return -risk_scores.sub(log_cumsum_h).mul(events).sum().div(events.sum())
 
+def _nearest_power_of_two(x: int) -> int:
+    if x <= 1: return 1
+    return 2 ** int(round(np.log2(x)))
 
 class nPLSInet(nn.Module):
     def __init__(self, p, q):
@@ -189,11 +192,16 @@ class neuralPLSI:
         self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
     @staticmethod
-    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=500, random_state=0):
+    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=100, random_state=0):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-
-        batch_size = 32
-
+        
+        n_samples = len(tr_x)
+        min_bs = 8
+        max_bs = 128
+        raw = max(1, int(round(n_samples / 20)))
+        batch_size = _nearest_power_of_two(raw)
+        batch_size = max(min_bs, min(max_bs, batch_size, n_samples))
+        
         tr_loader = DataLoader(
             TensorDataset(torch.from_numpy(tr_x).float(),
                           torch.from_numpy(tr_z).float(),
