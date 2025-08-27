@@ -189,6 +189,7 @@ class neuralPLSI:
     def fit(self, X, Z, y):
         torch.manual_seed(0)
         self.net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
+        self.net = torch.compile(self.net)
         self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
 
     @staticmethod

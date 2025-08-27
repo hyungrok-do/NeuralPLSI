@@ -33,19 +33,21 @@ models = {
 
 # === Parse arguments ===
 parser = argparse.ArgumentParser(description='Run repeated simulations for PLSI and NeuralPLSI models.')
-parser.add_argument('--n', type=int, default=500, help='Number of observations for each simulation.')
-parser.add_argument('--g_fn', type=str, default='sigmoid', choices=['linear', 'logsquare', 'sfun', 'sigmoid'], help='Nonlinear function g(x) to use in the simulation.')
+parser.add_argument('--n_instances', type=int, default=500, help='Number of observations for each simulation.')
+parser.add_argument('--n_replicates', type=int, default=100, help='Number of simulation replicates.')
+parser.add_argument('--n_bootstrap', type=int, default=100, help='Number of bootstrap samples.')
+parser.add_argument('--g_fn', type=str, default='sigmoid', choices=['linear', 'sfun', 'sigmoid'], help='Nonlinear function g(x) to use in the simulation.')
 parser.add_argument('--outcome', type=str, default='continuous', choices=['continuous', 'binary', 'cox'], help='Type of outcome variable.')
 args = parser.parse_args()
 
-n = args.n
+n = args.n_instances
 g_fn = args.g_fn
 outcome = args.outcome
 
 g_grid = np.linspace(-3, 3, 1000)
 
 # === Main simulation loop ===
-for seed in range(1000):
+for seed in range(args.n_replicates):
     X, Z, y, xb, gxb, true_g_fn = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed)
     X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
@@ -76,7 +78,7 @@ for seed in range(1000):
         beta_boot = []
         gamma_boot = []
 
-        for _ in range(100):
+        for _ in range(args.n_bootstrap):
             bootstrap_idx = np.random.choice(range(len(X_train)), size=n, replace=True)
             X_bootstrap = X_train[bootstrap_idx]
             Z_bootstrap = Z_train[bootstrap_idx]
@@ -93,10 +95,10 @@ for seed in range(1000):
         res['g_fn'].append(g_fn)
         res['model'].append(model_name)
         res['seed'].append(seed)
-        res['beta'].append(orig_beta)
-        res['gamma'].append(orig_gamma)
-        res['beta_boot'].append(beta_boot)
-        res['gamma_boot'].append(gamma_boot)
+        res['beta_estimate'].append(orig_beta)
+        res['gamma_estimate'].append(orig_gamma)
+        res['beta_bootstrap'].append(beta_boot)
+        res['gamma_bootstrap'].append(gamma_boot)
         res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid))
         res['time'].append(end - start)
 

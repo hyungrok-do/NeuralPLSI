@@ -21,8 +21,7 @@ res = {
 }
 
 models = {
-    'PLSI (3)': SplinePLSI,
-    #'PLSI (5)': SplinePLSI,
+    'PLSI': SplinePLSI,
     'nPLSI': neuralPLSI,
 }
 
@@ -37,13 +36,10 @@ for i, g_fn in enumerate(['linear', 'logsquare', 'sfun', 'sigmoid']):
             for model_name, model_class in models.items():
                 np.random.seed(seed)
 
-                if 'PLSI' in model_name:
-                    if '3' in model_name:
-                        model = model_class(X_train.shape[1], 3)
-                    elif '5' in model_name:
-                        model = model_class(X_train.shape[1], 5)
-                    else:
-                        model = model_class()        
+                if model_name == "PLSI":
+                    model = model_class(X_train.shape[1], 3)
+                else:
+                    model = model_class()        
 
                 start = perf_counter()
                 model.fit(X_train, Z_train, y_train)
