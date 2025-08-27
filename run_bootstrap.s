@@ -2,10 +2,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --time=6-20:00:00
+#SBATCH --time=2-00:00:00
+#SBATCH --partition=cpu_medium
 #SBATCH --mem=32GB
-#SBATCH --job-name=PLSI_bootstrap
-#SBATCH --output=logs/bootstrap_%02a.log
+#SBATCH --job-name=SIM
+#SBATCH --output=logs/simulation_%02a.log
 #SBATCH -a 0-35
 
 module load singularity/3.9.8
@@ -35,4 +36,3 @@ echo "Running simulation with n=$n, g_fn=$g_fn, outcome=$outcome, model=$model"
 singularity exec --nv --bind $SCRATCH --overlay $SCRATCH/containers/domain-generalization.ext3:ro \
     $SCRATCH/containers/cuda11.8.86-cudnn8.7-devel-ubuntu22.04.2.sif \
     /ext3/miniconda3/bin/python simulation_main.py --n_instances $n --g_fn $g_fn --outcome $outcome --model $model
-    
