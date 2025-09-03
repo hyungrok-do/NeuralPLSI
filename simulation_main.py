@@ -80,6 +80,7 @@ for seed in range(args.n_replicates):
     beta_boot = []
     gamma_boot = []
 
+    start_bootstrap = perf_counter()
     for _ in range(args.n_bootstrap):
         bootstrap_idx = np.random.choice(range(len(X_train)), size=n, replace=True)
         X_bootstrap = X_train[bootstrap_idx]
@@ -92,6 +93,8 @@ for seed in range(args.n_replicates):
         beta_boot.append(model_b.beta.tolist())
         gamma_boot.append(model_b.gamma.tolist())
 
+    end_bootstrap = perf_counter()
+
     res['n'].append(n)
     res['g_fn'].append(g_fn)
     res['model'].append(model_name)
@@ -102,6 +105,7 @@ for seed in range(args.n_replicates):
     res['gamma_bootstrap'].append(gamma_boot)
     res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid))
     res['time'].append(end - start)
+    res['time_bootstrap'].append(end_bootstrap - start_bootstrap)
 
     output_path = f'output/simulation+{model_name}+{n}+{g_fn}+{outcome}.json'
     with open(output_path, 'w') as f:
