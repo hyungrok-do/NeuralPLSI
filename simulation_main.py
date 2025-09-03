@@ -36,7 +36,7 @@ models = {
 parser = argparse.ArgumentParser(description='Run repeated simulations for PLSI and NeuralPLSI models.')
 parser.add_argument('--n_instances', type=int, default=500, help='Number of observations for each simulation.')
 parser.add_argument('--n_replicates', type=int, default=100, help='Number of simulation replicates.')
-parser.add_argument('--n_bootstrap', type=int, default=100, help='Number of bootstrap samples.')
+parser.add_argument('--n_bootstrap', type=int, default=500, help='Number of bootstrap samples.')
 parser.add_argument('--g_fn', type=str, default='sigmoid', choices=['linear', 'sfun', 'sigmoid'], help='Nonlinear function g(x) to use in the simulation.')
 parser.add_argument('--outcome', type=str, default='continuous', choices=['continuous', 'binary', 'cox'], help='Type of outcome variable.')
 parser.add_argument('--model', type=str, default='NeuralPLSI', choices=['PLSI', 'NeuralPLSI'], help='Model to use for the simulation.')
@@ -103,6 +103,6 @@ for seed in range(args.n_replicates):
     res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid))
     res['time'].append(end - start)
 
-output_path = f'output/simulation+{model_name}+{n}+{g_fn}+{outcome}.json'
-with open(output_path, 'w') as f:
-    json.dump(res, f, indent=4)
+    output_path = f'output/simulation+{model_name}+{n}+{g_fn}+{outcome}.json'
+    with open(output_path, 'w') as f:
+        json.dump(res, f, indent=4)
