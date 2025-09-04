@@ -24,7 +24,8 @@ res = {
     'beta_bootstrap': [],
     'gamma_estimate': [],
     'gamma_bootstrap': [],
-    'time': []
+    'time': [],
+    'time_bootstrap': []
 }
 
 models = {
@@ -107,6 +108,7 @@ for seed in range(args.n_replicates):
     res['time'].append(end - start)
     res['time_bootstrap'].append(end_bootstrap - start_bootstrap)
 
+    print(np.mean(res['time_bootstrap']))
     output_path = f'output/simulation+{model_name}+{n}+{g_fn}+{outcome}.json'
     with open(output_path, 'w') as f:
         json.dump(res, f, indent=4)
