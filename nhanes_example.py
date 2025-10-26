@@ -91,11 +91,7 @@ covariates = ["age", "sex", "race1", "race2", "race3", "race4"]
 
 # Outcomes
 y_name = "normed_triglyceride"
-y = df[y_name]
-
-# Binary outcome for high triglycerides: trigl_bin = 1{triglyceride >= 150}
-df["trigl_bin"] = (df["triglyceride"] >= 150).astype(int)
-y_bin = df["trigl_bin"]
+y = df[y_name].values
 
 # Placeholder for weights (R sets weights <- NULL initially)
 weights = None
@@ -137,16 +133,13 @@ z = df[covariates].copy().values
 z[:, 0] = (z[:, 0] - z[:, 0].mean()) / z[:, 0].std()
 z[:, 1] = z[:, 1] - 1
 
-y = y_bin.copy().values
-print(np.unique(y, return_counts=True))
-
 print(f"Prepared X shape: {x.shape}, Z shape: {z.shape}, y shape: {y.shape}")
 
 #model.fit(covariates.values, select_z.values, TELO)
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-model = neuralPLSI(family='binary')
+model = neuralPLSI(family='continuous')
 model.fit(x, z, y)
 
 gxb = model.predict_gxb(x)
@@ -165,7 +158,7 @@ beta_stack = []
 gamma_stack = []
 g_stack = []
 
-n_bootstrap = 1000
+n_bootstrap = 100
 for i in tqdm(range(n_bootstrap)):
     print(f'Bootstrap iteration {i+1}')
     np.random.seed(i)

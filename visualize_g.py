@@ -22,7 +22,9 @@ g_dict = {
     }
 
 g_grid = np.linspace(-3, 3, 1000)
+model = 'NeuralPLSI'
 plt.figure(figsize=(12, 4))
+
 for g_fn, caption in zip(['linear', 'sfun', 'sigmoid'], ['Linear', 's-shaped', 'Sigmoid']):
     g_true = g_dict[g_fn](g_grid)
     outcome = 'continuous'
@@ -37,11 +39,9 @@ for g_fn, caption in zip(['linear', 'sfun', 'sigmoid'], ['Linear', 's-shaped', '
 
     plt.subplot(1, 3, ['linear', 'sfun', 'sigmoid'].index(g_fn) + 1)
     sns.lineplot(x=g_grid, y=g_true, label='True', color='black', linestyle='--')
-    for model in ['NeuralPLSI', 'PLSI']:
-    
-        g_estimates = np.stack(res[res['model'] == model]['g_pred']).astype(float)
-        plt.plot(g_grid, np.mean(g_estimates, 0), label=model, color=sns.color_palette("pastel")[['NeuralPLSI', 'PLSI'].index(model)])
-        plt.fill_between(g_grid, np.percentile(g_estimates, 2.5, axis=0), np.percentile(g_estimates, 97.5, axis=0), alpha=0.2, color=sns.color_palette("pastel")[['NeuralPLSI', 'PLSI'].index(model)])
+    g_estimates = np.stack(res[res['model'] == model]['g_pred']).astype(float)
+    plt.plot(g_grid, np.mean(g_estimates, 0), label=model, color=sns.color_palette("pastel")[['NeuralPLSI', 'PLSI'].index(model)])
+    plt.fill_between(g_grid, np.percentile(g_estimates, 2.5, axis=0), np.percentile(g_estimates, 97.5, axis=0), alpha=0.2, color=sns.color_palette("pastel")[['NeuralPLSI', 'PLSI'].index(model)])
 
     plt.legend()
     plt.title(f'{caption}')

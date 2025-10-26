@@ -1,232 +1,220 @@
+# ==========================================================
+# neuralPLSI (PyTorch) — eager training + compiled inference
+# ==========================================================
 import numpy as np
 import pandas as pd
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 
+
+# --------- Helpers for speed ---------
+def _torch_version_geq(v: str) -> bool:
+    try:
+        from packaging.version import Version
+        return Version(torch.__version__) >= Version(v)
+    except Exception:
+        return False
+
+def _enable_fast_matmul():
+    try:
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high")
+    except Exception:
+        pass
+    try:
+        if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
+
+
+class _SummaryMixin:
+    def _build_summary(self, blocks, prefix_order):
+        names, coeffs, ses, lbs, ubs = [], [], [], [], []
+        for name in prefix_order:
+            blk = blocks.get(name)
+            if not blk:
+                continue
+            c = np.asarray(blk.get('coeff', []), dtype=float)
+            if c.size == 0:
+                continue
+            se = blk.get('se')
+            lb = blk.get('lb')
+            ub = blk.get('ub')
+            if se is None: se = np.full_like(c, np.nan, dtype=float)
+            if lb is None: lb = np.full_like(c, np.nan, dtype=float)
+            if ub is None: ub = np.full_like(c, np.nan, dtype=float)
+            if name == 'beta':
+                names.extend([f'beta_{i:02d}' for i in range(c.size)])
+            elif name == 'gamma':
+                names.extend([f'gamma_{i:02d}' for i in range(c.size)])
+            else:
+                names.extend([f'{name}_{i:02d}' for i in range(c.size)])
+            coeffs.append(c); ses.append(np.asarray(se)); lbs.append(np.asarray(lb)); ubs.append(np.asarray(ub))
+
+        if not coeffs:
+            return pd.DataFrame(columns=['Parameter', 'Coefficient', 'SE (bootstrap)', 'CI Lower', 'CI Upper'])
+        coeffs = np.concatenate(coeffs); ses = np.concatenate(ses); lbs = np.concatenate(lbs); ubs = np.concatenate(ubs)
+        return pd.DataFrame({
+            'Parameter': names,
+            'Coefficient': coeffs,
+            'SE (bootstrap)': ses,
+            'CI Lower': lbs,
+            'CI Upper': ubs
+        })
+
+    def _percentile_ci(self, samples, ci=0.95):
+        lo = (1 - ci) / 2 * 100
+        hi = (1 + ci) / 2 * 100
+        return np.percentile(samples, [lo, hi], axis=0)
+
+
+# --------- Loss (Cox) ---------
+class CoxPHNLLLoss(nn.Module):
+    def forward(self, risk_scores, targets):
+        durations, events = targets[:, 0], targets[:, 1]
+        if risk_scores.dim() > 1:
+            risk_scores = risk_scores.squeeze(1)
+        idx = torch.argsort(durations, descending=True)
+        r = risk_scores[idx]; e = events[idx]
+        eps = 1e-8; gamma = r.max()
+        log_cumsum_h = (r - gamma).exp().cumsum(0).add(eps).log().add(gamma)
+        return -(r - log_cumsum_h).mul(e).sum() / (e.sum() + eps)
+
+
+# --------- Small scheduler/ES ---------
 class SchedulerCallback:
     def __init__(self, optimizer, patience=5, higher_is_better=False, factor=0.1, max_reductions=0):
-        """
-        A learning rate scheduler with early stopping after a specified number of patience periods.
-
-        Args:
-            optimizer (torch.optim.Optimizer): Optimizer whose learning rate needs adjustment.
-            patience (int): Number of epochs to wait before reducing LR.
-            higher_is_better (bool): Whether a higher metric is better (e.g., accuracy) or lower is better (e.g., loss).
-            factor (float): Multiplicative factor to reduce the learning rate.
-            max_reductions (int): Maximum number of times to reduce the learning rate before stopping training.
-        """
         self.optimizer = optimizer
         self.patience = patience
         self.higher_is_better = higher_is_better
         self.factor = factor
-        self.max_reductions = max_reductions  # Stop after reducing LR this many times
-
+        self.max_reductions = max_reductions
         self.best_metric = -float('inf') if higher_is_better else float('inf')
-        self.wait = 0  # Counter for consecutive epochs without improvement
-        self.reduction_count = 0  # Number of times LR has been reduced
+        self.wait = 0
+        self.reduction_count = 0
 
-    def __call__(self, current_metric):
-        """
-        Check if the metric has improved and update learning rate if needed.
-
-        Args:
-            current_metric (float): The current metric value to compare.
-
-        Returns:
-            bool: True if training should stop, False otherwise.
-        """
-        if self.higher_is_better:
-            improvement = current_metric > self.best_metric
+    def __call__(self, metric):
+        improve = (metric > self.best_metric) if self.higher_is_better else (metric < self.best_metric)
+        if improve:
+            self.best_metric = metric; self.wait = 0
         else:
-            improvement = current_metric < self.best_metric
-
-        if improvement:
-            self.best_metric = current_metric
-            self.wait = 0  # Reset patience counter
-        else:
-            self.wait += 1  # Increase patience counter
-
+            self.wait += 1
             if self.wait >= self.patience:
                 if self.reduction_count < self.max_reductions:
-                    self._reduce_lr()
-                    self.wait = 0  # Reset patience counter after LR reduction
+                    for g in self.optimizer.param_groups:
+                        g['lr'] *= self.factor
+                    self.reduction_count += 1
+                    self.wait = 0
                 else:
-                    return True  # Stop training after max reductions
+                    return True
+        return False
 
-        return False  # Continue training
 
-    def _reduce_lr(self):
-        """
-        Reduces the learning rate of the optimizer.
-        """
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] *= self.factor
-
-        self.reduction_count += 1
-    
-    def reset(self):
-        self.best_metric = -float('inf') if self.higher_is_better else float('inf')
-        self.wait = 0
-        self.patience = 0
-        self.reduction_count = 0
-    
-
-class CoxPHNLLLoss(nn.Module):
-    def forward(self, risk_scores, targets):
-        """
-        Compute the negative partial log-likelihood for Cox Proportional Hazards model.
-        
-        Args:
-            risk_scores (torch.Tensor): Predicted risk scores for each individual.
-            durations (torch.Tensor): Event or censoring times.
-            events (torch.Tensor): Event indicators (1 if event occurred, 0 if censored).
-        
-        Returns:
-            torch.Tensor: Negative partial log-likelihood loss.
-        """
-
-        durations, events = targets[:, 0], targets[:, 1]
-        if risk_scores.dim() > 1:
-            risk_scores = risk_scores.squeeze(1)
-
-        # Sort by durations in descending order
-        sorted_indices = torch.argsort(durations, descending=True)
-        risk_scores = risk_scores[sorted_indices]
-        durations = durations[sorted_indices]
-        events = events[sorted_indices]
-
-        eps = 1e-8
-
-        gamma = risk_scores.max()
-        log_cumsum_h = risk_scores.sub(gamma).exp().cumsum(0).add(eps).log().add(gamma)
-        return -risk_scores.sub(log_cumsum_h).mul(events).sum().div(events.sum())
-
-def _nearest_power_of_two(x: int) -> int:
-    if x <= 1: return 1
-    return 2 ** int(round(np.log2(x)))
-
-class nPLSInet(nn.Module):
+# --------- Network ---------
+class _nPLSInet(nn.Module):
     def __init__(self, p, q):
-        torch.manual_seed(0)
-        super(nPLSInet, self).__init__()
-        
+        super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 32),
-            nn.SELU(),
-            nn.Linear(32, 32),
-            nn.SELU(),
-            nn.Linear(32, 32),
-            nn.SELU(),
+            nn.Linear(1, 32), nn.SELU(),
+            nn.Linear(32, 32), nn.SELU(),
+            nn.Linear(32, 32), nn.SELU(),
             nn.Linear(32, 1)
         )
-
         self.flip_sign = False
 
     def forward(self, x, z):
         xb = self.x_input(x)
-        if self.flip_sign:
-            xb = -xb
-
+        if self.flip_sign: xb = -xb
         return self.g_network(xb) + self.z_input(z)
 
     def g_function(self, x):
-        """
-        Compute the g function for the input x.
-        """
-        if self.flip_sign:
-            x = -x
+        if self.flip_sign: x = -x
         return self.g_network(x)
-    
+
     def gxb(self, x):
         xb = self.x_input(x)
-        if self.flip_sign:
-            xb = -xb
+        if self.flip_sign: xb = -xb
         return self.g_network(xb)
 
     def normalize_beta(self, optimizer=None):
-        """
-        Normalize and sign-fix the beta vector and adjust optimizer state if needed.
-        """
-        weight = self.x_input.weight.data[0]
-
-        if weight[0] < 0:
-            # Flip the weight
+        w = self.x_input.weight.data[0]
+        if w[0] < 0:
             self.flip_sign = not self.flip_sign
-            
             with torch.no_grad():
-                self.x_input.weight.data[0] = -weight
+                self.x_input.weight.data[0] = -w
                 if self.x_input.bias is not None:
                     self.x_input.bias.data = -self.x_input.bias.data
-
-            # Flip optimizer momentum (Adam's exp_avg)
             if optimizer is not None:
                 for group in optimizer.param_groups:
                     for p in group['params']:
                         if (p is self.x_input.weight) or (p is self.x_input.bias):
-                            state = optimizer.state[p]
-                            if ('exp_avg' in state) and (state['exp_avg'] is not None):
-                                state['exp_avg'].mul_(-1.)
+                            st = optimizer.state.get(p, {})
+                            if 'exp_avg' in st and st['exp_avg'] is not None: st['exp_avg'].mul_(-1.)
+                            if 'momentum_buffer' in st and st['momentum_buffer'] is not None: st['momentum_buffer'].mul_(-1.)
+        denom = self.x_input.weight.data[0].square().sum().sqrt() + 1e-12
+        self.x_input.weight.data[0] = self.x_input.weight.data[0] / denom
 
-                            if ('momentum_buffer' in state) and (state['momentum_buffer'] is not None):
-                                state['momentum_buffer'].mul_(-1.)
 
-        self.x_input.weight.data[0] = self.x_input.weight.data[0] / self.x_input.weight.data[0].square().sum().sqrt()
-        
-    
-class neuralPLSI:
-    def __init__(self, family='continuous'):
+# --------- Public Model ---------
+class neuralPLSI(_SummaryMixin):
+    def __init__(self, family='continuous', max_epoch=200, batch_size=32,
+                 precompile=True, compile_backend=None, compile_mode=None, num_workers=0):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.max_epoch = 200
+        self.max_epoch = max_epoch
+        self.batch_size = batch_size
+        self.precompile = precompile
+        self.compile_backend = compile_backend
+        self.compile_mode = compile_mode
+        self.num_workers = num_workers
         self.net = None
-        
-    def fit(self, X, Z, y):
+        self._net_infer = None
+        self._compiled = False
+        _enable_fast_matmul()
+
+    # ---------- Fit / Train (eager) ----------
+    def fit(self, X, Z, y, random_state=0):
         torch.manual_seed(0)
-        self.net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
-        self.net = torch.compile(self.net)
-        self.net = self.train(self.net, X, Z, y, self.family, self.device, max_epoch=self.max_epoch)
+        p, q = X.shape[1], Z.shape[1]
+        self.net = _nPLSInet(p, q).to(self.device)
+
+        # Train in eager mode (normalize_beta is a Python helper)
+        self.net = self._train(self.net, X, Z, y, self.family, self.device,
+                               batch_size=self.batch_size, max_epoch=self.max_epoch, random_state=random_state)
+
+        # Build a separate inference engine (optional)
+        if self.precompile:
+            self._maybe_build_inference_engine(self.net, X, Z)
+        else:
+            self._net_infer = self.net.eval()
 
     @staticmethod
-    def train(net, X, Z, y, family, device, batch_size=None, max_epoch=100, random_state=0):
+    def _train(net, X, Z, y, family, device, batch_size=32, max_epoch=100, random_state=0):
+        X = np.asarray(X, dtype=np.float32)
+        Z = np.asarray(Z, dtype=np.float32)
+        y = np.asarray(y, dtype=np.float32)
+
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        
-        n_samples = len(tr_x)
-        min_bs = 8
-        max_bs = 128
-        raw = max(1, int(round(n_samples / 20)))
-        batch_size = _nearest_power_of_two(raw)
-        batch_size = max(min_bs, min(max_bs, batch_size, n_samples))
-        
-        tr_loader = DataLoader(
-            TensorDataset(torch.from_numpy(tr_x).float(),
-                          torch.from_numpy(tr_z).float(),
-                          torch.from_numpy(tr_y).float()
-                          ), batch_size=batch_size, sampler=torch.utils.data.RandomSampler(tr_x))
-        
-        val_loader = DataLoader(
-            TensorDataset(torch.from_numpy(val_x).float(),
-                          torch.from_numpy(val_z).float(),
-                          torch.from_numpy(val_y).float()
-                         ), batch_size=batch_size if batch_size > len(val_x) else len(val_x), shuffle=False)
-                        
-        opt_g = torch.optim.Adam([
-            {'params': net.x_input.parameters(), 'weight_decay': 0.},
-            {'params': net.g_network.parameters(), 'weight_decay': 1e-4},
-            ], lr=1e-3,
-        )
+        pin = (device.type == 'cuda')
+        tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
+        val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
+        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=pin)
+        val_loader = DataLoader(val_ds, batch_size=min(batch_size if batch_size else len(val_x), len(val_x)),
+                                shuffle=False, num_workers=0, pin_memory=pin)
 
-        opt_z = torch.optim.SGD([
-            {'params': net.z_input.parameters()}
-            ], lr=1e-3, momentum=0.9, weight_decay=0.
+        opt_g = torch.optim.Adam(
+            [{'params': net.x_input.parameters(), 'weight_decay': 0.},
+             {'params': net.g_network.parameters(), 'weight_decay': 1e-4}], lr=1e-3
         )
+        opt_z = torch.optim.SGD([{'params': net.z_input.parameters()}], lr=1e-3, momentum=0.9, weight_decay=0.)
 
-        mse = nn.MSELoss()
         if family == 'continuous':
             loss_fn = nn.MSELoss()
         elif family == 'binary':
@@ -234,159 +222,238 @@ class neuralPLSI:
         elif family == 'cox':
             loss_fn = CoxPHNLLLoss()
         else:
-            raise ValueError("Unsupported family type. Use 'continuous', 'binary', or 'cox'.")
-                
+            raise ValueError("family must be 'continuous', 'binary', or 'cox'.")
+
+        mse0 = nn.MSELoss()
         net.normalize_beta(opt_g)
         sch_z = SchedulerCallback(opt_z)
         sch_g = SchedulerCallback(opt_g)
-        for epoch in range(max_epoch):
+        scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+
+        for _ in range(max_epoch):
             net.train()
-            for batch_x, batch_z, batch_y in tr_loader:
-                batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                
-                opt_g.zero_grad()
-                opt_z.zero_grad()
-                
-                output = net(batch_x, batch_z).view(-1)
+            for bx, bz, by in tr_loader:
+                bx = bx.to(device, non_blocking=pin)
+                bz = bz.to(device, non_blocking=pin)
+                by = by.to(device, non_blocking=pin)
 
-                batch_zero = torch.zeros((1, 1)).to(device)
-                loss = loss_fn(output, batch_y)
-                loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                loss.backward()
-                
-                opt_g.step()
-                opt_z.step()
-
+                opt_g.zero_grad(set_to_none=True); opt_z.zero_grad(set_to_none=True)
+                with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                    out = net(bx, bz).view(-1)
+                    if family == 'binary':
+                        target = by.float().view_as(out)
+                    elif family == 'cox':
+                        target = by
+                    else:
+                        target = by.view_as(out)
+                    loss = loss_fn(out, target)
+                    zero = torch.zeros((1, 1), device=device)
+                    loss = loss + mse0(net.g_network(zero).view(-1), zero.view(-1))
+                scaler.scale(loss).backward()
+                scaler.step(opt_g); scaler.step(opt_z); scaler.update()
                 net.normalize_beta(opt_g)
 
-            net.eval()
-            val_loss = 0
+            # validation to drive LR scheduler / early stop
+            net.eval(); val_loss = 0.0
             with torch.no_grad():
-                for batch_x, batch_z, batch_y in val_loader:
-                    batch_x, batch_z, batch_y = batch_x.to(device), batch_z.to(device), batch_y.to(device)
-                    output = net(batch_x, batch_z).view(-1)
-                    loss = loss_fn(output, batch_y)
-                    batch_zero = torch.zeros((1, 1)).to(device)
-                    loss += mse(net.g_network(batch_zero).view(-1), batch_zero.view(-1))
-                    val_loss += loss.item()
-
+                for bx, bz, by in val_loader:
+                    bx = bx.to(device, non_blocking=pin)
+                    bz = bz.to(device, non_blocking=pin)
+                    by = by.to(device, non_blocking=pin)
+                    with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                        out = net(bx, bz).view(-1)
+                        if family == 'binary':
+                            target = by.float().view_as(out)
+                        elif family == 'cox':
+                            target = by
+                        else:
+                            target = by.view_as(out)
+                        l = loss_fn(out, target)
+                        zero = torch.zeros((1, 1), device=device)
+                        l = l + mse0(net.g_network(zero).view(-1), zero.view(-1))
+                        val_loss += float(l.item())
             if sch_g(val_loss) and sch_z(val_loss):
                 break
-
         return net
 
+    # ---------- Inference engine (compile → eager) ----------
+    def _maybe_build_inference_engine(self, trained_net, X, Z):
+        self._net_infer = trained_net.eval()  # default: eager inference
+        try:
+            if _torch_version_geq("2.0"):
+                compiled = torch.compile(
+                    trained_net.eval(),
+                    backend=self.compile_backend,   # e.g., "inductor"
+                    mode=self.compile_mode,         # e.g., "max-autotune"
+                    fullgraph=False, dynamic=False
+                )
+                xb = torch.from_numpy(X[:min(64, len(X))].astype(np.float32)).to(self.device)
+                zb = torch.from_numpy(Z[:min(64, len(Z))].astype(np.float32)).to(self.device)
+                with torch.no_grad():
+                    _ = compiled(xb, zb)  # warmup
+                self._net_infer = compiled
+                self._compiled = True
+                return
+        except Exception:
+            # If compile fails, we simply fall back to eager inference.
+            self._compiled = False
+
+    def _infer_net(self):
+        # Always returns an eval()'d module (compiled or eager)
+        if self._net_infer is None:
+            self._net_infer = self.net.eval()
+        return self._net_infer.eval()
+
+    # ---------- Accessors / Summary ----------
     @property
     def beta(self):
-        return self.net.x_input.weight.data.cpu().flatten().flatten().numpy()
+        return self.net.x_input.weight.detach().cpu().flatten().numpy()
 
     @property
     def gamma(self):
-        return self.net.z_input.weight.data.cpu().flatten().flatten().numpy()
-            
-    def summary(self):
+        return self.net.z_input.weight.detach().cpu().flatten().numpy()
+
+    def summary(self, include_beta=True, include_gamma=True, include_spline=False):
         if self.net is None:
             raise ValueError("Model has not been fitted yet.")
-        
-        beta = self.beta
-        gamma = self.gamma
+        blocks = {}
+        if include_beta:
+            blocks['beta'] = dict(coeff=self.beta,
+                                  se=getattr(self, 'beta_se', None),
+                                  lb=getattr(self, 'beta_lb', None),
+                                  ub=getattr(self, 'beta_ub', None))
+        if include_gamma:
+            blocks['gamma'] = dict(coeff=self.gamma,
+                                   se=getattr(self, 'gamma_se', None),
+                                   lb=getattr(self, 'gamma_lb', None),
+                                   ub=getattr(self, 'gamma_ub', None))
+        # include_spline is ignored for neural model
+        return self._build_summary(blocks, ['beta', 'gamma'])
 
-        beta_se = self.beta_se
-        gamma_se = self.gamma_se
-        beta_lb = self.beta_lb
-        beta_ub = self.beta_ub
-        gamma_lb = self.gamma_lb
-        gamma_ub = self.gamma_ub
-
-        summary_df = pd.DataFrame({
-            'Parameter': [f'beta_{i:02d}' for i in range(len(beta))] + [f'gamma_{i:02d}' for i in range(len(gamma))],
-            'Coefficient': list(beta) + list(gamma),
-            'Standard Error': list(beta_se) + list(gamma_se),
-            '95% CI Lower Bound': list(beta_lb) + list(gamma_lb),
-            '95% CI Upper Bound': list(beta_ub) + list(gamma_ub)
-        })
-
-        return summary_df
-    
+    # ---------- g() and predictions ----------
     def g_function(self, x):
-        x = x.reshape(-1, 1)
-        self.net.eval()
-        x = torch.from_numpy(x).float().to(self.device)
+        x = np.asarray(x, dtype=np.float32).reshape(-1, 1)
+        net = self._infer_net()
         with torch.no_grad():
-            return self.net.g_function(x).view(-1).cpu().numpy()
+            tx = torch.from_numpy(x).to(self.device)
+            return net.g_function(tx).view(-1).cpu().numpy()
 
-    def predict(self, X, Z):
-        self.net.eval()
-        test_loader = DataLoader(
-            TensorDataset(torch.from_numpy(X).float(),
-                          torch.from_numpy(Z).float()
-                          ), batch_size=128, shuffle=False)
-        
-        preds = []
+    def predict(self, X, Z, batch_size=128):
+        net = self._infer_net()
+        net.eval()
+        pin = (self.device.type == 'cuda')
+        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        outs = []
         with torch.no_grad():
-            for batch_x, batch_z in test_loader:
-                batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
-                output = self.net(batch_x, batch_z).view(-1)
-                preds.append(output.cpu())
+            for bx, bz in dl:
+                bx = bx.to(self.device, non_blocking=pin)
+                bz = bz.to(self.device, non_blocking=pin)
+                outs.append(net(bx, bz).view(-1).cpu())
+        return torch.cat(outs, 0).numpy()
 
-        return torch.cat(preds, axis=0).numpy()
-    
-    def predict_gxb(self, X):
-        """
-        Predict the g(x) function for the input X.
-        """
-        self.net.eval()
-        X = torch.from_numpy(X).float().to(self.device)
+    def predict_proba(self, X, Z, batch_size=128):
+        net = self._infer_net()
+        net.eval()
+        pin = (self.device.type == 'cuda')
+        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        outs = []
         with torch.no_grad():
-            return self.net.gxb(X).view(-1).cpu().numpy()
+            for bx, bz in dl:
+                bx = bx.to(self.device, non_blocking=pin)
+                bz = bz.to(self.device, non_blocking=pin)
+                outs.append(net(bx, bz).view(-1).sigmoid().cpu())
+        return torch.cat(outs, 0).numpy()
 
-    def predict_proba(self, X, Z):
-        self.net.eval()
-        test_loader = DataLoader(
-            TensorDataset(torch.from_numpy(X).float(),
-                          torch.from_numpy(Z).float()
-                          ), batch_size=128, shuffle=False)
-        
-        preds = []
+    def predict_partial_hazard(self, X, Z, batch_size=128):
+        net = self._infer_net()
+        net.eval()
+        pin = (self.device.type == 'cuda')
+        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        outs = []
         with torch.no_grad():
-            for batch_x, batch_z in test_loader:
-                batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
-                output = self.net(batch_x, batch_z).view(-1).sigmoid()
-                preds.append(output.cpu())
+            for bx, bz in dl:
+                bx = bx.to(self.device, non_blocking=pin)
+                bz = bz.to(self.device, non_blocking=pin)
+                outs.append(net(bx, bz).view(-1).exp().cpu())
+        return torch.cat(outs, 0).numpy()
 
-        return torch.cat(preds, axis=0).numpy()
-    
-    def predict_partial_hazard(self, X, Z):
-        self.net.eval()
-        test_loader = DataLoader(
-            TensorDataset(torch.from_numpy(X).float(),
-                            torch.from_numpy(Z).float()
-                            ), batch_size=128, shuffle=False)
-        preds = []
-        with torch.no_grad():
-            for batch_x, batch_z in test_loader:
-                batch_x, batch_z = batch_x.to(self.device), batch_z.to(self.device)
-                output = self.net(batch_x, batch_z).view(-1).exp()
-                preds.append(output.cpu())
+    # ---------- Bootstrap ----------
+    def _draw_bootstrap_indices(self, N, rng, cluster_ids=None):
+        if cluster_ids is None:
+            return rng.integers(0, N, size=N)
+        cluster_ids = np.asarray(cluster_ids)
+        unique_c = np.unique(cluster_ids)
+        c_sample = rng.choice(unique_c, size=len(unique_c), replace=True)
+        idx = np.concatenate([np.where(cluster_ids == c)[0] for c in c_sample])
+        if idx.size == 0: idx = rng.integers(0, N, size=N)
+        return idx
 
-        return torch.cat(preds, axis=0).numpy()
+    def _refit_one(self, Xb, Zb, yb, seed):
+        torch.manual_seed(seed)
+        p, q = Xb.shape[1], Zb.shape[1]
+        net = _nPLSInet(p, q).to(self.device)
+        net = self._train(net, Xb, Zb, yb, self.family, self.device,
+                          batch_size=self.batch_size, max_epoch=self.max_epoch, random_state=seed)
+        beta = net.x_input.weight.detach().cpu().flatten().numpy()
+        gamma = net.z_input.weight.detach().cpu().flatten().numpy()
+        return beta, gamma, net  # net is eager; safe to call .g_function
 
-    def inference_bootstrap(self, X, Z, y, n_samples=100):
-        beta_samples, gamma_samples = [], []
-        for i in range(n_samples):
-            bootstrap_indices = np.random.choice(len(X), len(X), replace=True)
-            X_bootstrap = X[bootstrap_indices]
-            Z_bootstrap = Z[bootstrap_indices]
-            y_bootstrap = y[bootstrap_indices]
+    def inference_bootstrap(self, X, Z, y, n_samples=100, random_state=0, ci=0.95, cluster_ids=None, g_grid=None):
+        X = np.asarray(X, dtype=np.float32); Z = np.asarray(Z, dtype=np.float32); y = np.asarray(y, dtype=np.float32)
+        if self.net is None:
+            self.fit(X, Z, y)
+        N, p, q = len(X), X.shape[1], Z.shape[1]
+        rng = np.random.default_rng(random_state)
 
-            net = nPLSInet(X.shape[1], Z.shape[1]).to(self.device)
-            net = self.train(net, X_bootstrap, Z_bootstrap, y_bootstrap, self.device, max_epoch=self.max_epoch, random_state=i)
-            beta_samples.append(net.x_input.weight.data.cpu().flatten().numpy())
-            gamma_samples.append(net.z_input.weight.data.cpu().flatten().numpy())
+        beta_samples = np.empty((n_samples, p))
+        gamma_samples = np.empty((n_samples, q))
 
-        self.beta_lb = np.percentile(beta_samples, 2.5, axis=0)
-        self.beta_ub = np.percentile(beta_samples, 97.5, axis=0)
-        self.gamma_lb = np.percentile(gamma_samples, 2.5, axis=0)
-        self.gamma_ub = np.percentile(gamma_samples, 97.5, axis=0)
-        self.beta_se = np.std(beta_samples, axis=0)
-        self.gamma_se = np.std(gamma_samples, axis=0)
-        
+        do_g = g_grid is not None
+        if do_g:
+            g_grid = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
+            g_samples = np.empty((n_samples, g_grid.shape[0]))
+
+        for b in range(n_samples):
+            idx = self._draw_bootstrap_indices(N, rng, cluster_ids)
+            Xb, Zb, yb = X[idx], Z[idx], y[idx]
+            beta_b, gamma_b, net_b = self._refit_one(Xb, Zb, yb, random_state + 1337 + b)
+            beta_samples[b] = beta_b; gamma_samples[b] = gamma_b
+
+            if do_g:
+                net_b.eval()
+                with torch.no_grad():
+                    gx = net_b.g_function(torch.from_numpy(g_grid).to(self.device)).view(-1).cpu().numpy()
+                g_samples[b] = gx
+
+        # point estimates
+        beta_hat, gamma_hat = self.beta, self.gamma
+
+        # se / CI
+        self.beta_se = beta_samples.std(axis=0, ddof=1)
+        self.gamma_se = gamma_samples.std(axis=0, ddof=1)
+        self.beta_lb, self.beta_ub = self._percentile_ci(beta_samples, ci)
+        self.gamma_lb, self.gamma_ub = self._percentile_ci(gamma_samples, ci)
+
+        out = {
+            "beta_hat": beta_hat, "beta_se": self.beta_se, "beta_lb": self.beta_lb, "beta_ub": self.beta_ub,
+            "gamma_hat": gamma_hat, "gamma_se": self.gamma_se, "gamma_lb": self.gamma_lb, "gamma_ub": self.gamma_ub,
+            "beta_samples": beta_samples, "gamma_samples": gamma_samples
+        }
+
+        if do_g:
+            g_mean = g_samples.mean(axis=0); g_se = g_samples.std(axis=0, ddof=1)
+            g_lb, g_ub = self._percentile_ci(g_samples, ci)
+            self.g_grid = g_grid.ravel(); self.g_grid_mean = g_mean; self.g_grid_se = g_se
+            self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
+            out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
+        return out
+
+    # ---------- Utility (inherit summary helpers) ----------
+    def _build_summary(self, blocks, prefix_order):
+        return super()._build_summary(blocks, prefix_order)
+
+    def _percentile_ci(self, samples, ci=0.95):
+        return super()._percentile_ci(samples, ci)

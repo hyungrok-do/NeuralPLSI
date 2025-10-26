@@ -1,114 +1,228 @@
+#!/usr/bin/env python3
 import argparse
 import json
-import numpy as np
-
+import os
 from time import perf_counter
+
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
-
-from models.PLSI import SplinePLSI
-from models.nPLSI import neuralPLSI
-from simulation import simulate_data, beta, gamma
 from lifelines.utils import concordance_index
 
+# Local modules
+from models.PLSI import SplinePLSI
+from models.nPLSI import neuralPLSI
+from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
 
-# === Initialize result dictionary ===
-res = {
-    'n': [],
-    'g_fn': [],
-    'model': [],
-    'seed': [],
-    'performance': [],
-    'g_pred': [],
-    'beta_estimate': [],
-    'beta_bootstrap': [],
-    'gamma_estimate': [],
-    'gamma_bootstrap': [],
-    'time': [],
-    'time_bootstrap': []
-}
 
-models = {
+MODELS = {
     'PLSI': SplinePLSI,
     'NeuralPLSI': neuralPLSI,
 }
 
-# === Parse arguments ===
-parser = argparse.ArgumentParser(description='Run repeated simulations for PLSI and NeuralPLSI models.')
-parser.add_argument('--n_instances', type=int, default=500, help='Number of observations for each simulation.')
-parser.add_argument('--n_replicates', type=int, default=100, help='Number of simulation replicates.')
-parser.add_argument('--n_bootstrap', type=int, default=500, help='Number of bootstrap samples.')
-parser.add_argument('--g_fn', type=str, default='sigmoid', choices=['linear', 'sfun', 'sigmoid'], help='Nonlinear function g(x) to use in the simulation.')
-parser.add_argument('--outcome', type=str, default='continuous', choices=['continuous', 'binary', 'cox'], help='Type of outcome variable.')
-parser.add_argument('--model', type=str, default='NeuralPLSI', choices=['PLSI', 'NeuralPLSI'], help='Model to use for the simulation.')
-args = parser.parse_args()
 
-n = args.n_instances
-g_fn = args.g_fn
-outcome = args.outcome
+def _parse_models(arg_models):
+    """Return canonical list of models to run."""
+    if arg_models is None:
+        return ['NeuralPLSI']
+    return _parse_models_list(arg_models)
 
-g_grid = np.linspace(-3, 3, 1000)
-model_name = args.model
-model_class = models[model_name]
-# === Main simulation loop ===
-for seed in range(args.n_replicates):
-    X, Z, y, xb, gxb, true_g_fn = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed)
-    X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
-    np.random.seed(seed)
-    model = model_class(family=outcome)
+def _parse_models_list(arg_models):
+    if len(arg_models) == 1 and arg_models[0].lower() in {'all', 'both'}:
+        return ['PLSI', 'NeuralPLSI']
+    out = []
+    for m in arg_models:
+        ml = m.strip().lower()
+        if ml in ('plsi', 'splineplsi'):
+            key = 'PLSI'
+        elif ml in ('neuralplsi', 'nplsi'):
+            key = 'NeuralPLSI'
+        else:
+            raise ValueError(f"Unknown model name: {m}. Use PLSI, NeuralPLSI, or all.")
+        if key not in out:
+            out.append(key)
+    return out
 
-    # === Fit on original training data ===
-    start = perf_counter()
-    model.fit(X_train, Z_train, y_train)
-    end = perf_counter()
 
-    # === Evaluate model ===
-    if outcome == 'continuous':
-        preds = model.predict(X_test, Z_test)
-        res['performance'].append(np.mean((preds - y_test) ** 2))
-    elif outcome == 'binary':
-        preds = model.predict_proba(X_test, Z_test)
-        res['performance'].append(roc_auc_score(y_test, preds))
-    elif outcome == 'cox':
-        preds = model.predict_partial_hazard(X_test, Z_test)
-        res['performance'].append(concordance_index(y_test[:, 0], -preds, y_test[:, 1]))
+def _output_path_for_model(base_out, model_name, n, g_fn, outcome, x_dist):
+    """
+    Resolve per-model JSON output path.
+    Includes x_dist in filename for clarity.
+    """
+    default_name = f"simulation+{model_name}+{n}+{g_fn}+{outcome}+{x_dist}.json"
+    if base_out is None:
+        os.makedirs("output", exist_ok=True)
+        return os.path.join("output", default_name)
 
-    # === Store original parameter estimates ===
-    orig_beta = model.beta.tolist() if hasattr(model, 'beta') else [None] * len(beta)
-    orig_gamma = model.gamma.tolist()
+    if base_out.lower().endswith(".json"):
+        root, ext = os.path.splitext(base_out)
+        return f"{root}+{model_name}+{x_dist}{ext}"
+    else:
+        os.makedirs(base_out, exist_ok=True)
+        return os.path.join(base_out, default_name)
 
-    beta_boot = []
-    gamma_boot = []
 
-    start_bootstrap = perf_counter()
-    for _ in range(args.n_bootstrap):
-        bootstrap_idx = np.random.choice(range(len(X_train)), size=n, replace=True)
-        X_bootstrap = X_train[bootstrap_idx]
-        Z_bootstrap = Z_train[bootstrap_idx]
-        y_bootstrap = y_train[bootstrap_idx]
+def main():
+    parser = argparse.ArgumentParser(
+        description="Repeated simulations for PLSI / NeuralPLSI with efficient bootstrap (per-model output files)."
+    )
+    parser.add_argument('--n_instances', type=int, default=500,
+                        help='Number of observations per replicate (train/test split will use n for test).')
+    
+    parser.add_argument('--n_replicates', type=int, default=10,
+                        help='Number of simulation replicates.')
+    
+    parser.add_argument('--n_bootstrap', type=int, default=10,
+                        help='Bootstrap refits per replicate (per model).')
+    
+    parser.add_argument('--g_fn', type=str, default='sigmoid',
+                            choices=['linear', 'sfun', 'sigmoid'],
+                        help='Nonlinear g(x) used in simulation.')
+    
+    parser.add_argument('--outcome', type=str, default='continuous',
+                        choices=['continuous', 'binary', 'cox'],
+                        help='Outcome family.')
+    
+    parser.add_argument('--exposure_dist', type=str, default='normal',
+                        choices=['normal', 'uniform', 't'],
+                        help="Distribution of exposures X : normal, uniform, or student-t (heavy-tailed).")
+    
+    parser.add_argument('--models', nargs='+', default=['all'],
+                        help="Space-separated list of models to run, e.g., --models PLSI NeuralPLSI, or --models all.")
 
-        model_b = model_class(family=outcome)
-        model_b.fit(X_bootstrap, Z_bootstrap, y_bootstrap)
+    parser.add_argument('--seed0', type=int, default=0,
+                        help='Base random seed for replicates.')
+    
+    parser.add_argument('--save_every', type=int, default=1,
+                        help='Write results to disk every K replicates.')
+    
+    parser.add_argument('--out', type=str, default=None,
+                        help='Output path or directory. If multiple models, per-model files are created.')
+    
+    parser.add_argument('--g_grid_min', type=float, default=-3.0,
+                        help='Lower bound for g(x) diagnostic grid.')
+    
+    parser.add_argument('--g_grid_max', type=float, default=3.0,
+                        help='Upper bound for g(x) diagnostic grid.')
+    
+    parser.add_argument('--g_grid_n', type=int, default=1000,
+                        help='Number of points in g(x) diagnostic grid (also used for spline g bootstrap).')
+    
+    args = parser.parse_args()
 
-        beta_boot.append(model_b.beta.tolist())
-        gamma_boot.append(model_b.gamma.tolist())
+    # Determine models to run
+    model_list = _parse_models(args.models)
 
-    end_bootstrap = perf_counter()
+    n = args.n_instances
+    g_fn = args.g_fn
+    outcome = args.outcome
+    x_dist = args.exposure_dist
 
-    res['n'].append(n)
-    res['g_fn'].append(g_fn)
-    res['model'].append(model_name)
-    res['seed'].append(seed)
-    res['beta_estimate'].append(orig_beta)
-    res['gamma_estimate'].append(orig_gamma)
-    res['beta_bootstrap'].append(beta_boot)
-    res['gamma_bootstrap'].append(gamma_boot)
-    res['g_pred'].append(model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid))
-    res['time'].append(end - start)
-    res['time_bootstrap'].append(end_bootstrap - start_bootstrap)
+    # Build per-model result holders and output paths
+    res_by_model = {}
+    out_path_by_model = {}
+    for mname in model_list:
+        res_by_model[mname] = {
+            'n': [], 'g_fn': [], 'x_dist': [], 'model': [], 'seed': [],
+            'performance': [], 'g_pred': [],
+            'beta_estimate': [], 'beta_bootstrap': [],
+            'gamma_estimate': [], 'gamma_bootstrap': [],
+            'time': [], 'time_bootstrap': []
+        }
+        out_path_by_model[mname] = _output_path_for_model(args.out, mname, n, g_fn, outcome, x_dist)
 
-    print(np.mean(res['time_bootstrap']))
-    output_path = f'output/simulation+{model_name}+{n}+{g_fn}+{outcome}.json'
-    with open(output_path, 'w') as f:
-        json.dump(res, f, indent=4)
+    # g diagnostic grid
+    g_grid = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n, dtype=float)
+
+    # Main simulation loop
+    for rep in range(args.n_replicates):
+        seed = args.seed0 + rep
+
+        # Simulate once per replicate (shared for all models)
+        X, Z, y, xb, gxb, true_g_fn = simulate_data(
+            n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist
+        )
+        X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(
+            X, Z, y, test_size=n, random_state=seed
+        )
+
+        for model_name in model_list:
+            Model = MODELS[model_name]
+            res = res_by_model[model_name]
+
+            np.random.seed(seed)
+            model = Model(family=outcome)
+
+            # Fit
+            t0 = perf_counter()
+            model.fit(X_tr, Z_tr, y_tr)
+            t1 = perf_counter()
+
+            # Evaluate
+            if outcome == 'continuous':
+                preds = model.predict(X_te, Z_te)
+                perf = float(np.mean((preds - y_te) ** 2))
+            elif outcome == 'binary':
+                preds = model.predict_proba(X_te, Z_te)
+                perf = float(roc_auc_score(y_te, preds))
+            elif outcome == 'cox':
+                preds = model.predict_partial_hazard(X_te, Z_te)
+                perf = float(concordance_index(y_te[:, 0], preds, y_te[:, 1]))
+            else:
+                raise ValueError("Unexpected outcome")
+
+            # Point estimates
+            beta_hat = model.beta.tolist()
+            gamma_hat = model.gamma.tolist()
+            g_pred = model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid)
+
+            # Bootstrap
+            tb0 = perf_counter()
+            boot = model.inference_bootstrap(
+                X_tr, Z_tr, y_tr,
+                n_samples=args.n_bootstrap,
+                random_state=seed,
+                ci=0.95,
+                cluster_ids=None,
+                g_grid=g_grid
+            )
+            tb1 = perf_counter()
+
+            beta_samples = boot.get('beta_samples')
+            gamma_samples = boot.get('gamma_samples')
+
+            # Append results
+            res['n'].append(n)
+            res['g_fn'].append(g_fn)
+            res['x_dist'].append(x_dist)
+            res['model'].append(model_name)
+            res['seed'].append(seed)
+            res['performance'].append(perf)
+            res['g_pred'].append(g_pred)
+            res['beta_estimate'].append(beta_hat)
+            res['gamma_estimate'].append(gamma_hat)
+            res['beta_bootstrap'].append(beta_samples.tolist() if beta_samples is not None else [])
+            res['gamma_bootstrap'].append(gamma_samples.tolist() if gamma_samples is not None else [])
+            res['time'].append(float(t1 - t0))
+            res['time_bootstrap'].append(float(tb1 - tb0))
+
+            print(f"[rep {rep+1}/{args.n_replicates}] {model_name:12s} "
+                  f"perf={perf:.4f} | fit={res['time'][-1]:.3f}s | boot={res['time_bootstrap'][-1]:.3f}s")
+
+            # Checkpoint
+            if (rep + 1) % args.save_every == 0:
+                out_path = out_path_by_model[model_name]
+                with open(out_path, 'w') as f:
+                    json.dump(res, f, indent=2)
+
+    # Final write
+    for model_name, res in res_by_model.items():
+        out_path = out_path_by_model[model_name]
+        with open(out_path, 'w') as f:
+            json.dump(res, f, indent=2)
+        print(f"Saved results to {out_path}")
+
+
+if __name__ == "__main__":
+    main()
