@@ -33,7 +33,7 @@ def simulate_data(
         Marginal distribution for X:
         - 'normal'  : multivariate normal N(0, Σ)
         - 'uniform' : Gaussian copula → Uniform[-1,1] margins
-        - 't1'      : Gaussian copula → Student-t(df=1) margins
+        - 't'      : Gaussian copula → Student-t(df=1) margins
 
     Returns
     -------
@@ -69,11 +69,11 @@ def simulate_data(
         X = U  # already correct
     elif x_dist == 'uniform':
         X = 2 * V - 1  # Uniform[-1,1]
-    elif x_dist == 't1':
+    elif x_dist == 't':
         # heavy-tailed t(1) margins (Cauchy-like)
         X = t.ppf(V, df=1)
     else:
-        raise ValueError(f"Invalid x_dist '{x_dist}'. Choose 'normal', 'uniform', or 't1'.")
+        raise ValueError(f"Invalid x_dist '{x_dist}'. Choose 'normal', 'uniform', or 't'.")
 
     # --- Low-dimensional covariates Z ---
     z1 = np.random.normal(size=n)

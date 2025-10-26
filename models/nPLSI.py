@@ -122,9 +122,15 @@ class _nPLSInet(nn.Module):
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 32), nn.SELU(),
-            nn.Linear(32, 32), nn.SELU(),
-            nn.Linear(32, 32), nn.SELU(),
+            nn.Linear(1, 32),
+            nn.SELU(),
+            nn.Dropout(0.1),
+            nn.Linear(32, 32),
+            nn.SELU(),
+            nn.Dropout(0.1),
+            nn.Linear(32, 32),
+            nn.SELU(),
+            nn.Dropout(0.1),
             nn.Linear(32, 1)
         )
         self.flip_sign = False
@@ -164,7 +170,7 @@ class _nPLSInet(nn.Module):
 
 # --------- Public Model ---------
 class neuralPLSI(_SummaryMixin):
-    def __init__(self, family='continuous', max_epoch=200, batch_size=32,
+    def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  precompile=True, compile_backend=None, compile_mode=None, num_workers=0):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -202,12 +208,11 @@ class neuralPLSI(_SummaryMixin):
         y = np.asarray(y, dtype=np.float32)
 
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        pin = (device.type == 'cuda')
         tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
         val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
-        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=pin)
+        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_ds, batch_size=min(batch_size if batch_size else len(val_x), len(val_x)),
-                                shuffle=False, num_workers=0, pin_memory=pin)
+                                shuffle=False, num_workers=0)
 
         opt_g = torch.optim.Adam(
             [{'params': net.x_input.parameters(), 'weight_decay': 0.},
@@ -233,9 +238,9 @@ class neuralPLSI(_SummaryMixin):
         for _ in range(max_epoch):
             net.train()
             for bx, bz, by in tr_loader:
-                bx = bx.to(device, non_blocking=pin)
-                bz = bz.to(device, non_blocking=pin)
-                by = by.to(device, non_blocking=pin)
+                bx = bx.to(device)
+                bz = bz.to(device)
+                by = by.to(device)
 
                 opt_g.zero_grad(set_to_none=True); opt_z.zero_grad(set_to_none=True)
                 with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
@@ -257,9 +262,9 @@ class neuralPLSI(_SummaryMixin):
             net.eval(); val_loss = 0.0
             with torch.no_grad():
                 for bx, bz, by in val_loader:
-                    bx = bx.to(device, non_blocking=pin)
-                    bz = bz.to(device, non_blocking=pin)
-                    by = by.to(device, non_blocking=pin)
+                    bx = bx.to(device)
+                    bz = bz.to(device)
+                    by = by.to(device)
                     with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
                         out = net(bx, bz).view(-1)
                         if family == 'binary':
@@ -272,6 +277,7 @@ class neuralPLSI(_SummaryMixin):
                         zero = torch.zeros((1, 1), device=device)
                         l = l + mse0(net.g_network(zero).view(-1), zero.view(-1))
                         val_loss += float(l.item())
+                        
             if sch_g(val_loss) and sch_z(val_loss):
                 break
         return net
@@ -341,42 +347,39 @@ class neuralPLSI(_SummaryMixin):
     def predict(self, X, Z, batch_size=128):
         net = self._infer_net()
         net.eval()
-        pin = (self.device.type == 'cuda')
         ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         outs = []
         with torch.no_grad():
             for bx, bz in dl:
-                bx = bx.to(self.device, non_blocking=pin)
-                bz = bz.to(self.device, non_blocking=pin)
+                bx = bx.to(self.device)
+                bz = bz.to(self.device)
                 outs.append(net(bx, bz).view(-1).cpu())
         return torch.cat(outs, 0).numpy()
 
     def predict_proba(self, X, Z, batch_size=128):
         net = self._infer_net()
         net.eval()
-        pin = (self.device.type == 'cuda')
         ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         outs = []
         with torch.no_grad():
             for bx, bz in dl:
-                bx = bx.to(self.device, non_blocking=pin)
-                bz = bz.to(self.device, non_blocking=pin)
+                bx = bx.to(self.device)
+                bz = bz.to(self.device)
                 outs.append(net(bx, bz).view(-1).sigmoid().cpu())
         return torch.cat(outs, 0).numpy()
 
     def predict_partial_hazard(self, X, Z, batch_size=128):
         net = self._infer_net()
         net.eval()
-        pin = (self.device.type == 'cuda')
         ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=pin)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         outs = []
         with torch.no_grad():
             for bx, bz in dl:
-                bx = bx.to(self.device, non_blocking=pin)
-                bz = bz.to(self.device, non_blocking=pin)
+                bx = bx.to(self.device)
+                bz = bz.to(self.device)
                 outs.append(net(bx, bz).view(-1).exp().cpu())
         return torch.cat(outs, 0).numpy()
 

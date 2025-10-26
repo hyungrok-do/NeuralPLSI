@@ -208,7 +208,7 @@ def main():
             res['time_bootstrap'].append(float(tb1 - tb0))
 
             print(f"[rep {rep+1}/{args.n_replicates}] {model_name:12s} "
-                  f"perf={perf:.4f} | fit={res['time'][-1]:.3f}s | boot={res['time_bootstrap'][-1]:.3f}s")
+                  f"performance={perf:.4f} | fit={res['time'][-1]:.3f}s | bootstrap={res['time_bootstrap'][-1]:.3f}s")
 
             # Checkpoint
             if (rep + 1) % args.save_every == 0:
