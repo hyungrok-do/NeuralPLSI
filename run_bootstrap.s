@@ -12,7 +12,7 @@
 module load singularity/3.9.8
 
 # Define parameter arrays
-n_values=(2000)
+n_values=(1000)
 g_values=(sigmoid sfun linear)
 outcomes=(continuous binary cox)
 models=(NeuralPLSI PLSI)

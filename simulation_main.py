@@ -70,10 +70,10 @@ def main():
     parser.add_argument('--n_instances', type=int, default=500,
                         help='Number of observations per replicate (train/test split will use n for test).')
     
-    parser.add_argument('--n_replicates', type=int, default=10,
+    parser.add_argument('--n_replicates', type=int, default=100,
                         help='Number of simulation replicates.')
     
-    parser.add_argument('--n_bootstrap', type=int, default=10,
+    parser.add_argument('--n_bootstrap', type=int, default=100,
                         help='Bootstrap refits per replicate (per model).')
     
     parser.add_argument('--g_fn', type=str, default='sigmoid',
@@ -168,7 +168,7 @@ def main():
                 perf = float(roc_auc_score(y_te, preds))
             elif outcome == 'cox':
                 preds = model.predict_partial_hazard(X_te, Z_te)
-                perf = float(concordance_index(y_te[:, 0], preds, y_te[:, 1]))
+                perf = float(concordance_index(y_te[:, 0], -preds, y_te[:, 1]))
             else:
                 raise ValueError("Unexpected outcome")
 

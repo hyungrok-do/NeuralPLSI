@@ -122,16 +122,13 @@ class _nPLSInet(nn.Module):
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=True)
         self.g_network = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(1, 64),
             nn.SELU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 32),
+            nn.Linear(64, 64),
             nn.SELU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 32),
+            nn.Linear(64, 64),
             nn.SELU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1)
+            nn.Linear(64, 1)
         )
         self.flip_sign = False
 

@@ -70,8 +70,11 @@ def simulate_data(
     elif x_dist == 'uniform':
         X = 2 * V - 1  # Uniform[-1,1]
     elif x_dist == 't':
-        # heavy-tailed t(1) margins (Cauchy-like)
-        X = t.ppf(V, df=1)
+        # heavy-tailed t distribution
+        # Option 1: t(df=1) scaled down (Cauchy-like, infinite variance)
+        # X = t.ppf(V, df=1) / np.sqrt(3)  # approximate standardization
+        # Option 2: t(df=3) - finite variance, still heavy-tailed
+        X = t.ppf(V, df=5)
     else:
         raise ValueError(f"Invalid x_dist '{x_dist}'. Choose 'normal', 'uniform', or 't'.")
 
