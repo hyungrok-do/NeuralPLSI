@@ -38,6 +38,6 @@ exposure_dist=${exposure_dist[$exposure_idx]}
 
 echo "Running simulation with n=$n, g_fn=$g_fn, outcome=$outcome, model=$model, exposure_dist=$exposure_dist"
 
-singularity exec --nv --bind $SCRATCH --overlay $SCRATCH/containers/domain-generalization.ext3:ro \
-    $SCRATCH/containers/cuda11.8.86-cudnn8.7-devel-ubuntu22.04.2.sif \
+singularity exec --nv --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
+    $SCRATCH/containers/nvidia-cuda12.9.sif \
     /ext3/miniconda3/bin/python simulation_main.py --n_instances $n --g_fn $g_fn --outcome $outcome --model $model --exposure_dist $exposure_dist
