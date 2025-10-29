@@ -7,56 +7,14 @@ import scipy.optimize as opt
 from sklearn.linear_model import Ridge, LogisticRegression
 from lifelines import CoxPHFitter
 
+from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
+
 # Optional Numba for spline basis acceleration
 try:
     from numba import njit
     _HAVE_NUMBA = True
 except Exception:
     _HAVE_NUMBA = False
-
-class _SummaryMixin:
-    def _build_summary(self, blocks, prefix_order):
-        names, coeffs, ses, lbs, ubs = [], [], [], [], []
-        for name in prefix_order:
-            blk = blocks.get(name)
-            if not blk:
-                continue
-            c = np.asarray(blk.get('coeff', []), dtype=float)
-            if c.size == 0:
-                continue
-            se = blk.get('se')
-            lb = blk.get('lb')
-            ub = blk.get('ub')
-            if se is None: se = np.full_like(c, np.nan, dtype=float)
-            if lb is None: lb = np.full_like(c, np.nan, dtype=float)
-            if ub is None: ub = np.full_like(c, np.nan, dtype=float)
-
-            if name == 'beta':
-                names.extend([f'beta_{i:02d}' for i in range(c.size)])
-            elif name == 'gamma':
-                names.extend([f'gamma_{i:02d}' for i in range(c.size)])
-            elif name == 'spline':
-                names.extend([f'spline_{i:02d}' for i in range(c.size)])
-            else:
-                names.extend([f'{name}_{i:02d}' for i in range(c.size)])
-            coeffs.append(c); ses.append(np.asarray(se)); lbs.append(np.asarray(lb)); ubs.append(np.asarray(ub))
-
-        if not coeffs:
-            return pd.DataFrame(columns=['Parameter', 'Coefficient', 'SE (bootstrap)', 'CI Lower', 'CI Upper'])
-        coeffs = np.concatenate(coeffs); ses = np.concatenate(ses); lbs = np.concatenate(lbs); ubs = np.concatenate(ubs)
-
-        return pd.DataFrame({
-            'Parameter': names,
-            'Coefficient': coeffs,
-            'SE (bootstrap)': ses,
-            'CI Lower': lbs,
-            'CI Upper': ubs
-        })
-
-    def _percentile_ci(self, samples, ci=0.95):
-        lo = (1 - ci) / 2 * 100
-        hi = (1 + ci) / 2 * 100
-        return np.percentile(samples, [lo, hi], axis=0)
 
 
 class SplinePLSI(_SummaryMixin):
@@ -269,27 +227,32 @@ class SplinePLSI(_SummaryMixin):
         return B @ self.spline_coeffs
 
     # ---------- Bootstrap ----------
-    def _draw_bootstrap_indices(self, N, rng, cluster_ids=None):
-        if cluster_ids is None:
-            return rng.integers(0, N, size=N)
-        cluster_ids = np.asarray(cluster_ids)
-        unique_c = np.unique(cluster_ids)
-        c_sample = rng.choice(unique_c, size=len(unique_c), replace=True)
-        idx = np.concatenate([np.where(cluster_ids == c)[0] for c in c_sample])
-        if idx.size == 0: idx = rng.integers(0, N, size=N)
-        return idx
-
     def _refit_clone(self, Xb, Zb, yb, seed):
         m = SplinePLSI(self.family, self.num_knots, self.spline_degree, self.alpha, self.max_iter, self.tol)
         np.random.seed(seed)
         m.fit(Xb, Zb, yb)
         return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy()
 
-    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None):
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None, n_jobs=-1):
+        """
+        Perform bootstrap inference for parameter uncertainty estimation.
+
+        Args:
+            X, Z, y: data arrays
+            n_samples: number of bootstrap samples (default 200)
+            random_state: random seed
+            ci: confidence level (default 0.95)
+            cluster_ids: optional cluster IDs for clustered bootstrap
+            g_grid: optional grid points for g function estimation
+            n_jobs: number of parallel jobs (default -1 for all cores, 1 for sequential)
+
+        Returns:
+            dict with bootstrap results
+        """
         X = np.asarray(X); Z = np.asarray(Z); y = np.asarray(y)
         if self.beta is None:
             self.fit(X, Z, y)
-        N = len(X); rng = np.random.default_rng(random_state)
+        N = len(X)
 
         p, q, s = self.beta.size, self.gamma.size, self.spline_coeffs.size
         beta_samples = np.empty((n_samples, p))
@@ -301,16 +264,35 @@ class SplinePLSI(_SummaryMixin):
             g_grid = np.asarray(g_grid, dtype=float).reshape(-1)
             g_samples = np.empty((n_samples, g_grid.size))
 
-        for b in range(n_samples):
-            idx = self._draw_bootstrap_indices(N, rng, cluster_ids)
-            Xb, Zb, yb = X[idx], Z[idx], y[idx]
-            b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, random_state + 1337 + b)
-            beta_samples[b] = b_beta; gamma_samples[b] = b_gamma; spline_samples[b] = b_spline
+        if n_jobs == 1:
+            # Sequential bootstrap
+            rng = np.random.default_rng(random_state)
+            for b in range(n_samples):
+                idx = draw_bootstrap_indices(N, rng, cluster_ids)
+                Xb, Zb, yb = X[idx], Z[idx], y[idx]
+                b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, random_state + 1337 + b)
+                beta_samples[b] = b_beta; gamma_samples[b] = b_gamma; spline_samples[b] = b_spline
 
-            if do_g:
-                t = self._make_knot_vector(g_grid.min(), g_grid.max(), self.num_knots, self.spline_degree)
-                B = self._bspline_basis_matrix(g_grid, t, self.spline_degree)
-                g_samples[b] = B @ b_spline
+                if do_g:
+                    t = self._make_knot_vector(g_grid.min(), g_grid.max(), self.num_knots, self.spline_degree)
+                    B = self._bspline_basis_matrix(g_grid, t, self.spline_degree)
+                    g_samples[b] = B @ b_spline
+        else:
+            # Parallel bootstrap
+            def refit_wrapper(Xb, Zb, yb, seed):
+                b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, seed)
+                if do_g:
+                    t = SplinePLSI._make_knot_vector(g_grid.min(), g_grid.max(), self.num_knots, self.spline_degree)
+                    B = SplinePLSI._bspline_basis_matrix(g_grid, t, self.spline_degree)
+                    g_vals = B @ b_spline
+                    return b_beta, b_gamma, b_spline, g_vals
+                return b_beta, b_gamma, b_spline, None
+
+            results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, cluster_ids, n_jobs)
+            for b, result in enumerate(results):
+                beta_samples[b], gamma_samples[b], spline_samples[b] = result[0], result[1], result[2]
+                if do_g:
+                    g_samples[b] = result[3]
 
         # point estimates
         beta_hat, gamma_hat, spline_hat = self.beta, self.gamma, self.spline_coeffs

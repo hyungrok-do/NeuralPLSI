@@ -9,6 +9,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 
+from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
+
 
 # --------- Helpers for speed ---------
 def _torch_version_geq(v: str) -> bool:
@@ -30,47 +32,6 @@ def _enable_fast_matmul():
             torch.backends.cudnn.allow_tf32 = True
     except Exception:
         pass
-
-
-class _SummaryMixin:
-    def _build_summary(self, blocks, prefix_order):
-        names, coeffs, ses, lbs, ubs = [], [], [], [], []
-        for name in prefix_order:
-            blk = blocks.get(name)
-            if not blk:
-                continue
-            c = np.asarray(blk.get('coeff', []), dtype=float)
-            if c.size == 0:
-                continue
-            se = blk.get('se')
-            lb = blk.get('lb')
-            ub = blk.get('ub')
-            if se is None: se = np.full_like(c, np.nan, dtype=float)
-            if lb is None: lb = np.full_like(c, np.nan, dtype=float)
-            if ub is None: ub = np.full_like(c, np.nan, dtype=float)
-            if name == 'beta':
-                names.extend([f'beta_{i:02d}' for i in range(c.size)])
-            elif name == 'gamma':
-                names.extend([f'gamma_{i:02d}' for i in range(c.size)])
-            else:
-                names.extend([f'{name}_{i:02d}' for i in range(c.size)])
-            coeffs.append(c); ses.append(np.asarray(se)); lbs.append(np.asarray(lb)); ubs.append(np.asarray(ub))
-
-        if not coeffs:
-            return pd.DataFrame(columns=['Parameter', 'Coefficient', 'SE (bootstrap)', 'CI Lower', 'CI Upper'])
-        coeffs = np.concatenate(coeffs); ses = np.concatenate(ses); lbs = np.concatenate(lbs); ubs = np.concatenate(ubs)
-        return pd.DataFrame({
-            'Parameter': names,
-            'Coefficient': coeffs,
-            'SE (bootstrap)': ses,
-            'CI Lower': lbs,
-            'CI Upper': ubs
-        })
-
-    def _percentile_ci(self, samples, ci=0.95):
-        lo = (1 - ci) / 2 * 100
-        hi = (1 + ci) / 2 * 100
-        return np.percentile(samples, [lo, hi], axis=0)
 
 
 # --------- Loss (Cox) ---------
@@ -117,19 +78,21 @@ class SchedulerCallback:
 
 # --------- Network ---------
 class _nPLSInet(nn.Module):
-    def __init__(self, p, q):
+    def __init__(self, p, q, hidden_units=64, n_hidden_layers=3):
         super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, 1, bias=True)
-        self.g_network = nn.Sequential(
-            nn.Linear(1, 64),
-            nn.SELU(),
-            nn.Linear(64, 64),
-            nn.SELU(),
-            nn.Linear(64, 64),
-            nn.SELU(),
-            nn.Linear(64, 1)
-        )
+
+        # Build g_network with configurable architecture
+        layers = []
+        layers.append(nn.Linear(1, hidden_units))
+        layers.append(nn.SELU())
+        for _ in range(n_hidden_layers - 1):
+            layers.append(nn.Linear(hidden_units, hidden_units))
+            layers.append(nn.SELU())
+        layers.append(nn.Linear(hidden_units, 1))
+        self.g_network = nn.Sequential(*layers)
+
         self.flip_sign = False
 
     def forward(self, x, z):
@@ -168,11 +131,35 @@ class _nPLSInet(nn.Module):
 # --------- Public Model ---------
 class neuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
+                 learning_rate=1e-3, weight_decay=1e-4, momentum=0.9,
+                 hidden_units=64, n_hidden_layers=3,
                  precompile=True, compile_backend=None, compile_mode=None, num_workers=0):
+        """
+        Initialize neuralPLSI model.
+
+        Args:
+            family: outcome type ('continuous', 'binary', or 'cox')
+            max_epoch: maximum training epochs (default 200)
+            batch_size: training batch size (default 64)
+            learning_rate: learning rate for optimizers (default 1e-3)
+            weight_decay: L2 regularization for g_network (default 1e-4)
+            momentum: momentum for Z optimizer (default 0.9)
+            hidden_units: number of units per hidden layer in g_network (default 64)
+            n_hidden_layers: number of hidden layers in g_network (default 3)
+            precompile: whether to compile model for inference (default True)
+            compile_backend: torch.compile backend (default None, uses inductor)
+            compile_mode: torch.compile mode (default None)
+            num_workers: DataLoader workers (default 0)
+        """
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.max_epoch = max_epoch
         self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+        self.hidden_units = hidden_units
+        self.n_hidden_layers = n_hidden_layers
         self.precompile = precompile
         self.compile_backend = compile_backend
         self.compile_mode = compile_mode
@@ -186,11 +173,13 @@ class neuralPLSI(_SummaryMixin):
     def fit(self, X, Z, y, random_state=0):
         torch.manual_seed(0)
         p, q = X.shape[1], Z.shape[1]
-        self.net = _nPLSInet(p, q).to(self.device)
+        self.net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers).to(self.device)
 
         # Train in eager mode (normalize_beta is a Python helper)
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
-                               batch_size=self.batch_size, max_epoch=self.max_epoch, random_state=random_state)
+                               batch_size=self.batch_size, max_epoch=self.max_epoch,
+                               learning_rate=self.learning_rate, weight_decay=self.weight_decay,
+                               momentum=self.momentum, random_state=random_state)
 
         # Build a separate inference engine (optional)
         if self.precompile:
@@ -199,7 +188,8 @@ class neuralPLSI(_SummaryMixin):
             self._net_infer = self.net.eval()
 
     @staticmethod
-    def _train(net, X, Z, y, family, device, batch_size=32, max_epoch=100, random_state=0):
+    def _train(net, X, Z, y, family, device, batch_size=32, max_epoch=100,
+               learning_rate=1e-3, weight_decay=1e-4, momentum=0.9, random_state=0):
         X = np.asarray(X, dtype=np.float32)
         Z = np.asarray(Z, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32)
@@ -213,9 +203,9 @@ class neuralPLSI(_SummaryMixin):
 
         opt_g = torch.optim.Adam(
             [{'params': net.x_input.parameters(), 'weight_decay': 0.},
-             {'params': net.g_network.parameters(), 'weight_decay': 1e-4}], lr=1e-3
+             {'params': net.g_network.parameters(), 'weight_decay': weight_decay}], lr=learning_rate
         )
-        opt_z = torch.optim.SGD([{'params': net.z_input.parameters()}], lr=1e-3, momentum=0.9, weight_decay=0.)
+        opt_z = torch.optim.SGD([{'params': net.z_input.parameters()}], lr=learning_rate, momentum=momentum, weight_decay=0.)
 
         if family == 'continuous':
             loss_fn = nn.MSELoss()
@@ -341,6 +331,20 @@ class neuralPLSI(_SummaryMixin):
             tx = torch.from_numpy(x).to(self.device)
             return net.g_function(tx).view(-1).cpu().numpy()
 
+    def predict_gxb(self, X, batch_size=128):
+        """Compute g(X @ beta) - the nonlinear transformation of the single index."""
+        net = self._infer_net()
+        net.eval()
+        X = np.asarray(X, dtype=np.float32)
+        ds = TensorDataset(torch.from_numpy(X))
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
+        outs = []
+        with torch.no_grad():
+            for (bx,) in dl:
+                bx = bx.to(self.device)
+                outs.append(net.gxb(bx).view(-1).cpu())
+        return torch.cat(outs, 0).numpy()
+
     def predict(self, X, Z, batch_size=128):
         net = self._infer_net()
         net.eval()
@@ -381,32 +385,39 @@ class neuralPLSI(_SummaryMixin):
         return torch.cat(outs, 0).numpy()
 
     # ---------- Bootstrap ----------
-    def _draw_bootstrap_indices(self, N, rng, cluster_ids=None):
-        if cluster_ids is None:
-            return rng.integers(0, N, size=N)
-        cluster_ids = np.asarray(cluster_ids)
-        unique_c = np.unique(cluster_ids)
-        c_sample = rng.choice(unique_c, size=len(unique_c), replace=True)
-        idx = np.concatenate([np.where(cluster_ids == c)[0] for c in c_sample])
-        if idx.size == 0: idx = rng.integers(0, N, size=N)
-        return idx
-
     def _refit_one(self, Xb, Zb, yb, seed):
         torch.manual_seed(seed)
         p, q = Xb.shape[1], Zb.shape[1]
-        net = _nPLSInet(p, q).to(self.device)
+        net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers).to(self.device)
         net = self._train(net, Xb, Zb, yb, self.family, self.device,
-                          batch_size=self.batch_size, max_epoch=self.max_epoch, random_state=seed)
+                          batch_size=self.batch_size, max_epoch=self.max_epoch,
+                          learning_rate=self.learning_rate, weight_decay=self.weight_decay,
+                          momentum=self.momentum, random_state=seed)
         beta = net.x_input.weight.detach().cpu().flatten().numpy()
         gamma = net.z_input.weight.detach().cpu().flatten().numpy()
         return beta, gamma, net  # net is eager; safe to call .g_function
 
-    def inference_bootstrap(self, X, Z, y, n_samples=100, random_state=0, ci=0.95, cluster_ids=None, g_grid=None):
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None, n_jobs=1):
+        """
+        Perform bootstrap inference for parameter uncertainty estimation.
+
+        Args:
+            X, Z, y: data arrays
+            n_samples: number of bootstrap samples (default 200)
+            random_state: random seed
+            ci: confidence level (default 0.95)
+            cluster_ids: optional cluster IDs for clustered bootstrap
+            g_grid: optional grid points for g function estimation
+            n_jobs: number of parallel jobs (default 1 for sequential, -1 for all cores).
+                   Note: parallel bootstrap with n_jobs>1 may not work well with GPU training.
+
+        Returns:
+            dict with bootstrap results
+        """
         X = np.asarray(X, dtype=np.float32); Z = np.asarray(Z, dtype=np.float32); y = np.asarray(y, dtype=np.float32)
         if self.net is None:
             self.fit(X, Z, y)
         N, p, q = len(X), X.shape[1], Z.shape[1]
-        rng = np.random.default_rng(random_state)
 
         beta_samples = np.empty((n_samples, p))
         gamma_samples = np.empty((n_samples, q))
@@ -416,17 +427,40 @@ class neuralPLSI(_SummaryMixin):
             g_grid = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
             g_samples = np.empty((n_samples, g_grid.shape[0]))
 
-        for b in range(n_samples):
-            idx = self._draw_bootstrap_indices(N, rng, cluster_ids)
-            Xb, Zb, yb = X[idx], Z[idx], y[idx]
-            beta_b, gamma_b, net_b = self._refit_one(Xb, Zb, yb, random_state + 1337 + b)
-            beta_samples[b] = beta_b; gamma_samples[b] = gamma_b
+        # For neuralPLSI, parallel bootstrap with GPU can be problematic
+        # Use sequential by default (n_jobs=1) unless user explicitly requests parallel
+        if n_jobs == 1:
+            # Sequential bootstrap
+            rng = np.random.default_rng(random_state)
+            for b in range(n_samples):
+                idx = draw_bootstrap_indices(N, rng, cluster_ids)
+                Xb, Zb, yb = X[idx], Z[idx], y[idx]
+                beta_b, gamma_b, net_b = self._refit_one(Xb, Zb, yb, random_state + 1337 + b)
+                beta_samples[b] = beta_b; gamma_samples[b] = gamma_b
 
-            if do_g:
-                net_b.eval()
-                with torch.no_grad():
-                    gx = net_b.g_function(torch.from_numpy(g_grid).to(self.device)).view(-1).cpu().numpy()
-                g_samples[b] = gx
+                if do_g:
+                    net_b.eval()
+                    with torch.no_grad():
+                        gx = net_b.g_function(torch.from_numpy(g_grid).to(self.device)).view(-1).cpu().numpy()
+                    g_samples[b] = gx
+        else:
+            # Parallel bootstrap - only recommended for CPU training
+            def refit_wrapper(Xb, Zb, yb, seed):
+                beta_b, gamma_b, net_b = self._refit_one(Xb, Zb, yb, seed)
+                if do_g:
+                    net_b.eval()
+                    with torch.no_grad():
+                        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                        gx = net_b.g_function(torch.from_numpy(g_grid).to(device)).view(-1).cpu().numpy()
+                    return beta_b, gamma_b, gx
+                return beta_b, gamma_b, None
+
+            results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, cluster_ids, n_jobs)
+            for b, result in enumerate(results):
+                if do_g:
+                    beta_samples[b], gamma_samples[b], g_samples[b] = result
+                else:
+                    beta_samples[b], gamma_samples[b] = result[0], result[1]
 
         # point estimates
         beta_hat, gamma_hat = self.beta, self.gamma
@@ -450,10 +484,3 @@ class neuralPLSI(_SummaryMixin):
             self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
             out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
         return out
-
-    # ---------- Utility (inherit summary helpers) ----------
-    def _build_summary(self, blocks, prefix_order):
-        return super()._build_summary(blocks, prefix_order)
-
-    def _percentile_ci(self, samples, ci=0.95):
-        return super()._percentile_ci(samples, ci)
