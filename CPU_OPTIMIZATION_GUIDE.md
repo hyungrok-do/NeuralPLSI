@@ -167,6 +167,26 @@ results = model.inference_bootstrap(X, Z, y, n_jobs=4)
 
 ## Troubleshooting
 
+### "RuntimeError: cannot set number of interop threads"
+
+**This has been fixed!** The error occurred when PyTorch thread settings were applied after parallel work started.
+
+**Fix applied:**
+- Thread settings now attempted at module import time (before any operations)
+- Graceful fallback with try-except blocks
+- Safe to create multiple models
+
+If you still see this error, try:
+```python
+# Set threads before importing
+import torch
+import os
+torch.set_num_threads(os.cpu_count())
+
+# Then import model
+from models.nPLSI import neuralPLSI
+```
+
 ### "Running out of memory"
 Reduce the number of parallel workers:
 ```python
