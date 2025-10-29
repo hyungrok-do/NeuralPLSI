@@ -136,7 +136,14 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                cph = CoxPHFitter(penalizer=alpha).fit(df, duration_col='T', event_col='E', show_progress=False)
+                # Increase step_size for better convergence, use higher penalizer for stability
+                cph = CoxPHFitter(penalizer=alpha, l1_ratio=0.0)
+                try:
+                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                except Exception:
+                    # If fitting fails, try with stronger penalization
+                    cph = CoxPHFitter(penalizer=alpha * 10, l1_ratio=0.0)
+                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
                 return float(-cph.log_likelihood_)
             else:
                 raise ValueError("Unsupported family")
@@ -184,7 +191,14 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                cph = CoxPHFitter(penalizer=self.alpha).fit(df, duration_col='T', event_col='E', show_progress=False)
+                # Use step_size for better convergence, pure L2 penalty
+                cph = CoxPHFitter(penalizer=self.alpha, l1_ratio=0.0)
+                try:
+                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                except Exception as e:
+                    # If fitting fails, try with stronger penalization for numerical stability
+                    cph = CoxPHFitter(penalizer=self.alpha * 10, l1_ratio=0.0)
+                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
                 loss = float(-cph.log_likelihood_)
                 params = cph.params_.values
                 self.gamma = params[:Z.shape[1]]

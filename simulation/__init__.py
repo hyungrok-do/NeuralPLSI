@@ -68,7 +68,7 @@ def simulate_data(
     if x_dist == 'normal':
         X = U  # already correct
     elif x_dist == 'uniform':
-        X = 2 * V - 1  # Uniform[-1,1]
+        X = 5 * V - 2.5  # Uniform[-2.5, 2.5]
     elif x_dist == 't':
         # heavy-tailed t distribution
         # Option 1: t(df=1) scaled down (Cauchy-like, infinite variance)

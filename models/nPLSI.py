@@ -197,7 +197,7 @@ class _nPLSInet(nn.Module):
 class neuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, momentum=0.9,
-                 hidden_units=64, n_hidden_layers=3,
+                 hidden_units=64, n_hidden_layers=3, grad_clip=1.0, label_smoothing=0.0,
                  precompile=True, compile_backend=None, compile_mode=None, num_workers=0):
         """
         Initialize neuralPLSI model.
@@ -211,6 +211,8 @@ class neuralPLSI(_SummaryMixin):
             momentum: momentum for Z optimizer (default 0.9)
             hidden_units: number of units per hidden layer in g_network (default 64)
             n_hidden_layers: number of hidden layers in g_network (default 3)
+            grad_clip: gradient clipping value (default 1.0, 0 to disable)
+            label_smoothing: label smoothing for binary classification (default 0.0)
             precompile: whether to compile model for inference (default True)
             compile_backend: torch.compile backend (default None, uses inductor)
             compile_mode: torch.compile mode (default None)
@@ -225,6 +227,8 @@ class neuralPLSI(_SummaryMixin):
         self.momentum = momentum
         self.hidden_units = hidden_units
         self.n_hidden_layers = n_hidden_layers
+        self.grad_clip = grad_clip
+        self.label_smoothing = label_smoothing
         self.precompile = precompile
         self.compile_backend = compile_backend
         self.compile_mode = compile_mode
@@ -248,7 +252,8 @@ class neuralPLSI(_SummaryMixin):
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,
                                learning_rate=self.learning_rate, weight_decay=self.weight_decay,
-                               momentum=self.momentum, random_state=random_state)
+                               momentum=self.momentum, grad_clip=self.grad_clip,
+                               label_smoothing=self.label_smoothing, random_state=random_state)
 
         # Build a separate inference engine (optional)
         if self.precompile:
@@ -258,7 +263,8 @@ class neuralPLSI(_SummaryMixin):
 
     @staticmethod
     def _train(net, X, Z, y, family, device, batch_size=32, max_epoch=100,
-               learning_rate=1e-3, weight_decay=1e-4, momentum=0.9, random_state=0):
+               learning_rate=1e-3, weight_decay=1e-4, momentum=0.9,
+               grad_clip=1.0, label_smoothing=0.0, random_state=0):
         X = np.asarray(X, dtype=np.float32)
         Z = np.asarray(Z, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32)
@@ -270,16 +276,21 @@ class neuralPLSI(_SummaryMixin):
         val_loader = DataLoader(val_ds, batch_size=min(batch_size if batch_size else len(val_x), len(val_x)),
                                 shuffle=False, num_workers=0)
 
+        # Adjust learning rate for binary outcome (can be more unstable)
+        lr_g = learning_rate if family != 'binary' else learning_rate * 0.5
+        lr_z = learning_rate if family != 'binary' else learning_rate * 0.5
+
         opt_g = torch.optim.Adam(
             [{'params': net.x_input.parameters(), 'weight_decay': 0.},
-             {'params': net.g_network.parameters(), 'weight_decay': weight_decay}], lr=learning_rate
+             {'params': net.g_network.parameters(), 'weight_decay': weight_decay}], lr=lr_g
         )
-        opt_z = torch.optim.SGD([{'params': net.z_input.parameters()}], lr=learning_rate, momentum=momentum, weight_decay=0.)
+        opt_z = torch.optim.SGD([{'params': net.z_input.parameters()}], lr=lr_z, momentum=momentum, weight_decay=0.)
 
         if family == 'continuous':
             loss_fn = nn.MSELoss()
         elif family == 'binary':
-            loss_fn = nn.BCEWithLogitsLoss()
+            # Use label smoothing for better stability
+            loss_fn = nn.BCEWithLogitsLoss(label_smoothing=label_smoothing if label_smoothing > 0 else 0.0)
         elif family == 'cox':
             loss_fn = CoxPHNLLLoss()
         else:
@@ -311,6 +322,13 @@ class neuralPLSI(_SummaryMixin):
                     zero = torch.zeros((1, 1), device=device)
                     loss = loss + mse0(net.g_network(zero).view(-1), zero.view(-1))
                 scaler.scale(loss).backward()
+
+                # Apply gradient clipping if enabled (improves stability especially for binary)
+                if grad_clip > 0:
+                    scaler.unscale_(opt_g)
+                    scaler.unscale_(opt_z)
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
+
                 scaler.step(opt_g); scaler.step(opt_z); scaler.update()
                 net.normalize_beta(opt_g)
 
@@ -461,7 +479,8 @@ class neuralPLSI(_SummaryMixin):
         net = self._train(net, Xb, Zb, yb, self.family, self.device,
                           batch_size=self.batch_size, max_epoch=self.max_epoch,
                           learning_rate=self.learning_rate, weight_decay=self.weight_decay,
-                          momentum=self.momentum, random_state=seed)
+                          momentum=self.momentum, grad_clip=self.grad_clip,
+                          label_smoothing=self.label_smoothing, random_state=seed)
         beta = net.x_input.weight.detach().cpu().flatten().numpy()
         gamma = net.z_input.weight.detach().cpu().flatten().numpy()
         return beta, gamma, net  # net is eager; safe to call .g_function
@@ -536,6 +555,8 @@ class neuralPLSI(_SummaryMixin):
             learning_rate = self.learning_rate
             weight_decay = self.weight_decay
             momentum = self.momentum
+            grad_clip = self.grad_clip
+            label_smoothing = self.label_smoothing
             hidden_units = self.hidden_units
             n_hidden_layers = self.n_hidden_layers
 
@@ -552,7 +573,8 @@ class neuralPLSI(_SummaryMixin):
                     net_b, Xb, Zb, yb, family, device,
                     batch_size=batch_size, max_epoch=max_epoch,
                     learning_rate=learning_rate, weight_decay=weight_decay,
-                    momentum=momentum, random_state=seed
+                    momentum=momentum, grad_clip=grad_clip,
+                    label_smoothing=label_smoothing, random_state=seed
                 )
 
                 # Extract parameters
