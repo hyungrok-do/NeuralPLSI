@@ -21,6 +21,7 @@ def _torch_version_geq(v: str) -> bool:
         return False
 
 def _enable_fast_matmul():
+    """Enable fast matrix multiplication for both CPU and GPU."""
     try:
         if hasattr(torch, "set_float32_matmul_precision"):
             torch.set_float32_matmul_precision("high")
@@ -30,6 +31,29 @@ def _enable_fast_matmul():
         if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
+
+def _optimize_cpu_training():
+    """Optimize PyTorch for CPU training performance."""
+    import os
+    # Use all available CPU cores for intra-op parallelism
+    num_threads = os.cpu_count()
+    if num_threads:
+        torch.set_num_threads(num_threads)
+        torch.set_num_interop_threads(num_threads)
+
+    # Enable MKL optimizations if available
+    try:
+        if hasattr(torch.backends, "mkl") and torch.backends.mkl.is_available():
+            torch.backends.mkl.enabled = True
+    except Exception:
+        pass
+
+    # Enable MKLDNN optimizations if available
+    try:
+        if hasattr(torch.backends, "mkldnn"):
+            torch.backends.mkldnn.enabled = True
     except Exception:
         pass
 
@@ -168,6 +192,10 @@ class neuralPLSI(_SummaryMixin):
         self._net_infer = None
         self._compiled = False
         _enable_fast_matmul()
+
+        # Enable CPU-specific optimizations if using CPU
+        if self.device.type == 'cpu':
+            _optimize_cpu_training()
 
     # ---------- Fit / Train (eager) ----------
     def fit(self, X, Z, y, random_state=0):
@@ -397,7 +425,7 @@ class neuralPLSI(_SummaryMixin):
         gamma = net.z_input.weight.detach().cpu().flatten().numpy()
         return beta, gamma, net  # net is eager; safe to call .g_function
 
-    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None, n_jobs=1):
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None, n_jobs='auto'):
         """
         Perform bootstrap inference for parameter uncertainty estimation.
 
@@ -408,8 +436,12 @@ class neuralPLSI(_SummaryMixin):
             ci: confidence level (default 0.95)
             cluster_ids: optional cluster IDs for clustered bootstrap
             g_grid: optional grid points for g function estimation
-            n_jobs: number of parallel jobs (default 1 for sequential, -1 for all cores).
-                   Note: parallel bootstrap with n_jobs>1 may not work well with GPU training.
+            n_jobs: number of parallel jobs (default 'auto').
+                   - 'auto': uses -1 (all cores) for CPU, 1 (sequential) for GPU
+                   - -1: use all CPU cores (parallel)
+                   - 1: sequential (no parallelization)
+                   - int > 1: specific number of parallel jobs
+                   Note: Parallel bootstrap recommended for CPU, may cause issues with GPU.
 
         Returns:
             dict with bootstrap results
@@ -419,6 +451,15 @@ class neuralPLSI(_SummaryMixin):
             self.fit(X, Z, y)
         N, p, q = len(X), X.shape[1], Z.shape[1]
 
+        # Auto-detect optimal n_jobs based on device
+        if n_jobs == 'auto':
+            if self.device.type == 'cpu':
+                n_jobs = -1  # Use all cores for CPU training
+                print(f"Auto-detected CPU device: using parallel bootstrap with all cores (n_jobs=-1)")
+            else:
+                n_jobs = 1   # Sequential for GPU to avoid conflicts
+                print(f"Auto-detected GPU device: using sequential bootstrap (n_jobs=1)")
+
         beta_samples = np.empty((n_samples, p))
         gamma_samples = np.empty((n_samples, q))
 
@@ -427,8 +468,6 @@ class neuralPLSI(_SummaryMixin):
             g_grid = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
             g_samples = np.empty((n_samples, g_grid.shape[0]))
 
-        # For neuralPLSI, parallel bootstrap with GPU can be problematic
-        # Use sequential by default (n_jobs=1) unless user explicitly requests parallel
         if n_jobs == 1:
             # Sequential bootstrap
             rng = np.random.default_rng(random_state)
@@ -444,13 +483,45 @@ class neuralPLSI(_SummaryMixin):
                         gx = net_b.g_function(torch.from_numpy(g_grid).to(self.device)).view(-1).cpu().numpy()
                     g_samples[b] = gx
         else:
-            # Parallel bootstrap - only recommended for CPU training
+            # Parallel bootstrap - optimized for CPU training
+            # Each worker creates its own model to avoid serialization issues
+            print(f"Running parallel bootstrap with n_jobs={n_jobs} (CPU-optimized)")
+
+            # Create a closure with all necessary parameters
+            family = self.family
+            device_type = self.device.type
+            batch_size = self.batch_size
+            max_epoch = self.max_epoch
+            learning_rate = self.learning_rate
+            weight_decay = self.weight_decay
+            momentum = self.momentum
+            hidden_units = self.hidden_units
+            n_hidden_layers = self.n_hidden_layers
+
             def refit_wrapper(Xb, Zb, yb, seed):
-                beta_b, gamma_b, net_b = self._refit_one(Xb, Zb, yb, seed)
+                """Worker function for parallel bootstrap - creates fresh model each time."""
+                # Each worker needs its own device (important for CPU parallelism)
+                device = torch.device(device_type)
+                p, q = Xb.shape[1], Zb.shape[1]
+
+                # Create and train new network
+                torch.manual_seed(seed)
+                net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers).to(device)
+                net_b = neuralPLSI._train(
+                    net_b, Xb, Zb, yb, family, device,
+                    batch_size=batch_size, max_epoch=max_epoch,
+                    learning_rate=learning_rate, weight_decay=weight_decay,
+                    momentum=momentum, random_state=seed
+                )
+
+                # Extract parameters
+                beta_b = net_b.x_input.weight.detach().cpu().flatten().numpy()
+                gamma_b = net_b.z_input.weight.detach().cpu().flatten().numpy()
+
+                # Compute g function if requested
                 if do_g:
                     net_b.eval()
                     with torch.no_grad():
-                        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                         gx = net_b.g_function(torch.from_numpy(g_grid).to(device)).view(-1).cpu().numpy()
                     return beta_b, gamma_b, gx
                 return beta_b, gamma_b, None

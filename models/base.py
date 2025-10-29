@@ -118,6 +118,10 @@ def run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, cluster
 
     Returns:
         list of results from refit_func calls
+
+    Note:
+        For CPU-based PyTorch models, each worker should manage its own thread pool.
+        Workers use 'loky' backend which creates separate processes.
     """
     if not _HAVE_JOBLIB:
         # Fall back to sequential processing
@@ -139,7 +143,9 @@ def run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, cluster
         Xb, Zb, yb = X[idx], Z[idx], y[idx]
         return refit_func(Xb, Zb, yb, random_state_base + 1337 + b)
 
-    results = Parallel(n_jobs=n_jobs, prefer="processes")(
+    # Use 'loky' backend for better CPU isolation (each process gets own resources)
+    # Use 'processes' for better performance with CPU-bound tasks
+    results = Parallel(n_jobs=n_jobs, backend='loky', verbose=0)(
         delayed(bootstrap_iteration)(b, random_state) for b in range(n_samples)
     )
     return results
