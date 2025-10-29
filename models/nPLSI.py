@@ -12,6 +12,30 @@ from sklearn.model_selection import train_test_split
 from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
 
 
+# --------- Module-level initialization ---------
+# Try to set optimal thread counts at module import time (before any PyTorch operations)
+# This is the safest time to configure threading
+def _init_pytorch_threads():
+    """Initialize PyTorch thread settings at module import time."""
+    import os
+    num_threads = os.cpu_count()
+    if num_threads:
+        try:
+            torch.set_num_threads(num_threads)
+        except:
+            pass
+        try:
+            torch.set_num_interop_threads(num_threads)
+        except:
+            pass
+
+# Try to initialize at import time
+try:
+    _init_pytorch_threads()
+except:
+    pass  # If it fails, we'll try again in _optimize_cpu_training()
+
+
 # --------- Helpers for speed ---------
 def _torch_version_geq(v: str) -> bool:
     try:
@@ -35,13 +59,30 @@ def _enable_fast_matmul():
         pass
 
 def _optimize_cpu_training():
-    """Optimize PyTorch for CPU training performance."""
+    """Optimize PyTorch for CPU training performance.
+
+    Note: Thread settings must be set before PyTorch does any parallel work.
+    This function is safe to call multiple times - it will only apply settings once.
+    """
     import os
-    # Use all available CPU cores for intra-op parallelism
+
+    # Try to set thread counts, but gracefully handle if PyTorch already started
     num_threads = os.cpu_count()
     if num_threads:
-        torch.set_num_threads(num_threads)
-        torch.set_num_interop_threads(num_threads)
+        try:
+            # Try to set intra-op threads (within operations)
+            torch.set_num_threads(num_threads)
+        except RuntimeError:
+            # Already set or parallel work started - that's OK
+            pass
+
+        try:
+            # Try to set inter-op threads (between operations)
+            # This is more restrictive and may fail if parallel work started
+            torch.set_num_interop_threads(num_threads)
+        except RuntimeError:
+            # Already set or parallel work started - that's OK, continue anyway
+            pass
 
     # Enable MKL optimizations if available
     try:
