@@ -136,14 +136,22 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                # Increase step_size for better convergence, use higher penalizer for stability
+                # Use pure L2 penalty for better stability
                 cph = CoxPHFitter(penalizer=alpha, l1_ratio=0.0)
                 try:
-                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    # Try with step_size if supported (lifelines >= 0.26)
+                    try:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    except TypeError:
+                        # Older lifelines version doesn't support step_size
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 except Exception:
-                    # If fitting fails, try with stronger penalization
+                    # If fitting fails, try with stronger penalization for numerical stability
                     cph = CoxPHFitter(penalizer=alpha * 10, l1_ratio=0.0)
-                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    try:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    except TypeError:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 return float(-cph.log_likelihood_)
             else:
                 raise ValueError("Unsupported family")
@@ -191,14 +199,22 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                # Use step_size for better convergence, pure L2 penalty
+                # Use pure L2 penalty for better numerical stability
                 cph = CoxPHFitter(penalizer=self.alpha, l1_ratio=0.0)
                 try:
-                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    # Try with step_size if supported (lifelines >= 0.26)
+                    try:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    except TypeError:
+                        # Older lifelines version doesn't support step_size
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 except Exception as e:
                     # If fitting fails, try with stronger penalization for numerical stability
                     cph = CoxPHFitter(penalizer=self.alpha * 10, l1_ratio=0.0)
-                    cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    try:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
+                    except TypeError:
+                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 loss = float(-cph.log_likelihood_)
                 params = cph.params_.values
                 self.gamma = params[:Z.shape[1]]

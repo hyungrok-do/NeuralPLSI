@@ -289,8 +289,14 @@ class neuralPLSI(_SummaryMixin):
         if family == 'continuous':
             loss_fn = nn.MSELoss()
         elif family == 'binary':
-            # Use label smoothing for better stability
-            loss_fn = nn.BCEWithLogitsLoss(label_smoothing=label_smoothing if label_smoothing > 0 else 0.0)
+            # Use label smoothing for better stability (if supported by PyTorch version)
+            try:
+                # PyTorch >= 1.10 supports label_smoothing
+                loss_fn = nn.BCEWithLogitsLoss(label_smoothing=label_smoothing if label_smoothing > 0 else 0.0)
+            except TypeError:
+                # Older PyTorch version - use standard BCEWithLogitsLoss
+                # We'll apply label smoothing manually in the training loop
+                loss_fn = nn.BCEWithLogitsLoss()
         elif family == 'cox':
             loss_fn = CoxPHNLLLoss()
         else:
@@ -310,10 +316,15 @@ class neuralPLSI(_SummaryMixin):
                 by = by.to(device)
 
                 opt_g.zero_grad(set_to_none=True); opt_z.zero_grad(set_to_none=True)
-                with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                # Use new autocast API if available (PyTorch >= 1.10), fallback to old API
+                autocast_ctx = torch.amp.autocast(device.type) if hasattr(torch, 'amp') and hasattr(torch.amp, 'autocast') else torch.cuda.amp.autocast(enabled=(device.type == 'cuda'))
+                with autocast_ctx:
                     out = net(bx, bz).view(-1)
                     if family == 'binary':
                         target = by.float().view_as(out)
+                        # Apply manual label smoothing for older PyTorch if needed
+                        if label_smoothing > 0:
+                            target = target * (1 - label_smoothing) + 0.5 * label_smoothing
                     elif family == 'cox':
                         target = by
                     else:
@@ -339,10 +350,15 @@ class neuralPLSI(_SummaryMixin):
                     bx = bx.to(device)
                     bz = bz.to(device)
                     by = by.to(device)
-                    with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                    # Use new autocast API if available (PyTorch >= 1.10), fallback to old API
+                    autocast_ctx = torch.amp.autocast(device.type) if hasattr(torch, 'amp') and hasattr(torch.amp, 'autocast') else torch.cuda.amp.autocast(enabled=(device.type == 'cuda'))
+                    with autocast_ctx:
                         out = net(bx, bz).view(-1)
                         if family == 'binary':
                             target = by.float().view_as(out)
+                            # Apply manual label smoothing for older PyTorch if needed
+                            if label_smoothing > 0:
+                                target = target * (1 - label_smoothing) + 0.5 * label_smoothing
                         elif family == 'cox':
                             target = by
                         else:
