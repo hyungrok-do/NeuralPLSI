@@ -1,6 +1,3 @@
-# ==========================================================
-# SplinePLSI (NumPy/Scikit/Lifelines) — unified API
-# ==========================================================
 import numpy as np
 import pandas as pd
 import scipy.optimize as opt
@@ -9,7 +6,6 @@ from lifelines import CoxPHFitter
 
 from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
 
-# Optional Numba for spline basis acceleration
 try:
     from numba import njit
     _HAVE_NUMBA = True
@@ -31,7 +27,6 @@ class SplinePLSI(_SummaryMixin):
         self.spline_coeffs = None
         self.knot_vector = None
 
-    # ---------- Static helpers (Numba-JIT'able) ----------
     @staticmethod
     def _make_knot_vector(eta_min, eta_max, num_knots, degree):
         knots = np.linspace(eta_min, eta_max, num_knots)
@@ -99,7 +94,6 @@ class SplinePLSI(_SummaryMixin):
         B = SplinePLSI._bspline_basis_matrix(eta, t, degree)
         return Z @ gamma + B @ spline_coeffs
 
-    # ---------- Internals ----------
     def _initialize_params(self, X):
         beta_init = np.random.randn(X.shape[1])
         if beta_init[0] < 0: beta_init = -beta_init
@@ -136,17 +130,13 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                # Use pure L2 penalty for better stability
                 cph = CoxPHFitter(penalizer=alpha, l1_ratio=0.0)
                 try:
-                    # Try with step_size if supported (lifelines >= 0.26)
                     try:
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
                     except TypeError:
-                        # Older lifelines version doesn't support step_size
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 except Exception:
-                    # If fitting fails, try with stronger penalization for numerical stability
                     cph = CoxPHFitter(penalizer=alpha * 10, l1_ratio=0.0)
                     try:
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
@@ -167,7 +157,6 @@ class SplinePLSI(_SummaryMixin):
         nrm = np.linalg.norm(beta) or 1.0
         return beta / nrm
 
-    # ---------- Public API ----------
     def fit(self, X, Z, y):
         X = np.asarray(X, dtype=np.float64); Z = np.asarray(Z, dtype=np.float64)
         self.beta = self._initialize_params(X)
@@ -199,17 +188,13 @@ class SplinePLSI(_SummaryMixin):
                 df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
                                            [f'b{i}' for i in range(B.shape[1])])
                 df['T'], df['E'] = y[:, 0], y[:, 1]
-                # Use pure L2 penalty for better numerical stability
                 cph = CoxPHFitter(penalizer=self.alpha, l1_ratio=0.0)
                 try:
-                    # Try with step_size if supported (lifelines >= 0.26)
                     try:
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
                     except TypeError:
-                        # Older lifelines version doesn't support step_size
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False)
                 except Exception as e:
-                    # If fitting fails, try with stronger penalization for numerical stability
                     cph = CoxPHFitter(penalizer=self.alpha * 10, l1_ratio=0.0)
                     try:
                         cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
@@ -256,29 +241,13 @@ class SplinePLSI(_SummaryMixin):
         B = self._bspline_basis_matrix(x, t, self.spline_degree)
         return B @ self.spline_coeffs
 
-    # ---------- Bootstrap ----------
     def _refit_clone(self, Xb, Zb, yb, seed):
         m = SplinePLSI(self.family, self.num_knots, self.spline_degree, self.alpha, self.max_iter, self.tol)
         np.random.seed(seed)
         m.fit(Xb, Zb, yb)
         return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy()
 
-    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, cluster_ids=None, g_grid=None, n_jobs=-1):
-        """
-        Perform bootstrap inference for parameter uncertainty estimation.
-
-        Args:
-            X, Z, y: data arrays
-            n_samples: number of bootstrap samples (default 200)
-            random_state: random seed
-            ci: confidence level (default 0.95)
-            cluster_ids: optional cluster IDs for clustered bootstrap
-            g_grid: optional grid points for g function estimation
-            n_jobs: number of parallel jobs (default -1 for all cores, 1 for sequential)
-
-        Returns:
-            dict with bootstrap results
-        """
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs=-1):
         X = np.asarray(X); Z = np.asarray(Z); y = np.asarray(y)
         if self.beta is None:
             self.fit(X, Z, y)
@@ -295,10 +264,9 @@ class SplinePLSI(_SummaryMixin):
             g_samples = np.empty((n_samples, g_grid.size))
 
         if n_jobs == 1:
-            # Sequential bootstrap
             rng = np.random.default_rng(random_state)
             for b in range(n_samples):
-                idx = draw_bootstrap_indices(N, rng, cluster_ids)
+                idx = draw_bootstrap_indices(N, rng)
                 Xb, Zb, yb = X[idx], Z[idx], y[idx]
                 b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, random_state + 1337 + b)
                 beta_samples[b] = b_beta; gamma_samples[b] = b_gamma; spline_samples[b] = b_spline
@@ -308,7 +276,6 @@ class SplinePLSI(_SummaryMixin):
                     B = self._bspline_basis_matrix(g_grid, t, self.spline_degree)
                     g_samples[b] = B @ b_spline
         else:
-            # Parallel bootstrap
             def refit_wrapper(Xb, Zb, yb, seed):
                 b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, seed)
                 if do_g:
@@ -318,7 +285,7 @@ class SplinePLSI(_SummaryMixin):
                     return b_beta, b_gamma, b_spline, g_vals
                 return b_beta, b_gamma, b_spline, None
 
-            results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, cluster_ids, n_jobs)
+            results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, n_jobs)
             for b, result in enumerate(results):
                 beta_samples[b], gamma_samples[b], spline_samples[b] = result[0], result[1], result[2]
                 if do_g:
@@ -369,27 +336,24 @@ class SplinePLSI(_SummaryMixin):
 
 if _HAVE_NUMBA:
     def _raw(func):
-        return getattr(func, "__func__", func)  # works for staticmethod or plain function
+        return getattr(func, "__func__", func)
 
     raw_mkv = _raw(SplinePLSI._make_knot_vector)
     raw_nb  = _raw(SplinePLSI._n_basis)
     raw_bsm = _raw(SplinePLSI._bspline_basis_matrix)
     raw_sig = _raw(SplinePLSI._sigmoid)
 
-    # First JIT the leaf/helpers
     _jit_mkv = njit(cache=True)(raw_mkv)
     _jit_nb  = njit(cache=True)(raw_nb)
     _jit_bsm = njit(cache=True, parallel=True)(raw_bsm)
     _jit_sig = njit(cache=True)(raw_sig)
 
-    # Now define a NEW jitted linear_predict that calls _jit_bsm directly
     @njit(cache=True, parallel=True)
     def _jit_lin(X, Z, beta, gamma, spline_coeffs, t, degree):
         eta = X @ beta
-        B = _jit_bsm(eta, t, degree)          # <- call the jitted function, not via class
+        B = _jit_bsm(eta, t, degree)
         return Z @ gamma + B @ spline_coeffs
 
-    # Re-attach as staticmethods
     SplinePLSI._make_knot_vector       = staticmethod(_jit_mkv)
     SplinePLSI._n_basis                = staticmethod(_jit_nb)
     SplinePLSI._bspline_basis_matrix   = staticmethod(_jit_bsm)
