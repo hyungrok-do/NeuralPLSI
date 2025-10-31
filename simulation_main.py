@@ -184,7 +184,6 @@ def main():
                 n_samples=args.n_bootstrap,
                 random_state=seed,
                 ci=0.95,
-                cluster_ids=None,
                 g_grid=g_grid
             )
             tb1 = perf_counter()

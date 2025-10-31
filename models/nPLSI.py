@@ -230,7 +230,11 @@ class neuralPLSI(_SummaryMixin):
         net.normalize_beta(opt_g)
         sch_z = SchedulerCallback(opt_z)
         sch_g = SchedulerCallback(opt_g)
-        scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+
+        if hasattr(torch.amp, 'GradScaler'):
+            scaler = torch.amp.GradScaler(device.type, enabled=(device.type == 'cuda'))
+        else:
+            scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
 
         for _ in range(max_epoch):
             net.train()
