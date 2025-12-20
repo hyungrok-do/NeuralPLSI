@@ -66,7 +66,7 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 
 - Wang, Y., Wu, Y., Jacobson, M.H. et al. A family of partial-linear single-index models for analyzing complex environmental exposures with continuous, categorical, time-to-event, and longitudinal health outcomes. *Environ Health* **19**, 96 (2020). https://doi.org/10.1186/s12940-020-00644-4
 
-## Cite
+## Cite As
 
 ```
 @article{
