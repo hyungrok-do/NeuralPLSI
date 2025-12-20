@@ -3,6 +3,7 @@
 Neural Partial-Linear Single Index (NeuralPLSI) is a method for modeling outcomes that depend on a linear combination of exposures (index) transformed by a flexible nonlinear function, adjusting for covariates.
 
 Repository: [https://github.com/hyungrok-do/neuralplsi](https://github.com/hyungrok-do/neuralplsi)
+Arxiv: [https://arxiv.org/abs/2512.11593](https://arxiv.org/abs/2512.11593)
 
 ## Overview
 
