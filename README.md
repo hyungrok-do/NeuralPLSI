@@ -69,7 +69,8 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 ## Cite
 
 ```
-@article{do2025neural,
+@article{
+  do2025neural,
   title={Neural Network-based Partial-Linear Single-Index Models for Environmental Mixtures Analysis},
   author={Do, Hyungrok and Wang, Yuyan and Liu, Mengling and Lee, Myeonggyun},
   journal={arXiv preprint arXiv:2512.11593},
