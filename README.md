@@ -65,3 +65,14 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 ## References
 
 - Wang, Y., Wu, Y., Jacobson, M.H. et al. A family of partial-linear single-index models for analyzing complex environmental exposures with continuous, categorical, time-to-event, and longitudinal health outcomes. *Environ Health* **19**, 96 (2020). https://doi.org/10.1186/s12940-020-00644-4
+
+## Cite
+
+```
+@article{do2025neural,
+  title={Neural Network-based Partial-Linear Single-Index Models for Environmental Mixtures Analysis},
+  author={Do, Hyungrok and Wang, Yuyan and Liu, Mengling and Lee, Myeonggyun},
+  journal={arXiv preprint arXiv:2512.11593},
+  year={2025}
+}
+```
