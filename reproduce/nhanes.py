@@ -14,6 +14,10 @@ except ImportError:
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
+import time
+
+os.makedirs('output', exist_ok=True)
+
 csv_path = r"NHANES/12940_2020_644_MOESM2_ESM.csv"
 nhanes = pd.read_csv(csv_path)
 
@@ -92,73 +96,145 @@ model.fit(x, z, y)
 
 gxb = model.predict_gxb(x)
 gxb_fn = model.g_function(gxb)
-deconfounded = y - model.gamma @ z.T
+with np.errstate(all='ignore'):
+    deconfounded = y - model.gamma @ z.T
 
 g_grid = np.linspace(gxb.min(), gxb.max(), 1000)
 g_fn_pred = model.g_function(g_grid)
 
-beta_est = model.beta.copy()
-gamma_est = model.gamma.copy()
-intercept_est = model.intercept_val.copy()
+# Hessian Inference
+print("Running Hessian Inference...")
+t_start_hess = time.time()
+inf_res = model.inference_hessian(x, z, y)
+g_bands = model.inference_hessian_g(x, z, y, mode="g_of_t", g_grid=g_grid, include_beta=True)
+t_hess = time.time() - t_start_hess
+print(f"Hessian Inference Time: {t_hess:.2f}s")
 
+beta_est = inf_res['beta_hat']
+gamma_est = inf_res['gamma_hat']
+beta_se = inf_res['beta_se']
+gamma_se = inf_res['gamma_se']
+beta_lb, beta_ub = inf_res['beta_lb'], inf_res['beta_ub']
+gamma_lb, gamma_ub = inf_res['gamma_lb'], inf_res['gamma_ub']
+
+
+intercept_est = inf_res['intercept_hat']
+intercept_se = inf_res['intercept_se']
+intercept_lb = inf_res['intercept_lb']
+intercept_ub = inf_res['intercept_ub']
+# I'll set SE to NaN/0 for intercept for now to avoid crash.
+
+g_mean_hess = g_bands['g_mean']
+g_lb_hess = g_bands['g_lb']
+g_ub_hess = g_bands['g_ub']
+
+# Bootstrap Inference
+print("Running Bootstrap Inference...")
 beta_stack = []
 gamma_stack = []
 intercept_stack = []
 g_stack = []
 
-n_bootstrap = 500
+n_bootstrap = 100
+t_start_boot = time.time()
 for i in tqdm(range(n_bootstrap)):
     np.random.seed(i)
     sample_indices = np.random.choice(np.arange(len(x)), size=len(x), replace=True)
     z_sample = z[sample_indices]
     x_sample = x[sample_indices]
     y_sample = y[sample_indices]
-    model = NeuralPLSI(family='continuous', add_intercept=True)
-    model.fit(x_sample, z_sample, y_sample)
+    model_b = NeuralPLSI(family='continuous', add_intercept=True)
+    model_b.fit(x_sample, z_sample, y_sample)
 
-    beta_stack.append(model.beta)
-    gamma_stack.append(model.gamma)
-    intercept_stack.append(model.intercept_val)
-    g_stack.append(model.g_function(g_grid))
+    beta_stack.append(model_b.beta)
+    gamma_stack.append(model_b.gamma)
+    intercept_stack.append(model_b.intercept_val)
+    g_stack.append(model_b.g_function(g_grid))
+
+t_boot = time.time() - t_start_boot
+print(f"Bootstrap Inference Time: {t_boot:.2f}s")
 
 beta_stack = np.array(beta_stack)
 gamma_stack = np.array(gamma_stack)
 intercept_stack = np.array(intercept_stack)
 g_stack = np.array(g_stack)
-g_mean = np.mean(g_stack, axis=0)
-g_ub = np.percentile(g_stack, 97.5, axis=0)
-g_lb = np.percentile(g_stack, 2.5, axis=0)
 
-beta_ub = np.percentile(beta_stack, 97.5, axis=0)
-beta_lb = np.percentile(beta_stack, 2.5, axis=0)
-gamma_ub = np.percentile(gamma_stack, 97.5, axis=0)
-gamma_lb = np.percentile(gamma_stack, 2.5, axis=0)
-intercept_ub = np.percentile(intercept_stack, 97.5, axis=0)
-intercept_lb = np.percentile(intercept_stack, 2.5, axis=0)
+g_mean_boot = np.mean(g_stack, axis=0)
+g_ub_boot = np.percentile(g_stack, 97.5, axis=0)
+g_lb_boot = np.percentile(g_stack, 2.5, axis=0)
 
-beta_se = np.std(beta_stack, axis=0, ddof=1)
-gamma_se = np.std(gamma_stack, axis=0, ddof=1)
-intercept_se = np.std(intercept_stack, axis=0, ddof=1)
+beta_est_boot = np.mean(beta_stack, axis=0)
+beta_ub_boot = np.percentile(beta_stack, 97.5, axis=0)
+beta_lb_boot = np.percentile(beta_stack, 2.5, axis=0)
+beta_err_boot = np.column_stack([beta_est_boot - beta_lb_boot, beta_ub_boot - beta_est_boot]).T
 
+gamma_est_boot = np.mean(gamma_stack, axis=0)
+gamma_ub_boot = np.percentile(gamma_stack, 97.5, axis=0)
+gamma_lb_boot = np.percentile(gamma_stack, 2.5, axis=0)
+gamma_err_boot = np.column_stack([gamma_est_boot - gamma_lb_boot, gamma_ub_boot - gamma_est_boot]).T
+
+intercept_est_boot = np.mean(intercept_stack, axis=0)
+intercept_ub_boot = np.percentile(intercept_stack, 97.5, axis=0)
+intercept_lb_boot = np.percentile(intercept_stack, 2.5, axis=0)
+intercept_err_boot = np.column_stack([intercept_est_boot - intercept_lb_boot, intercept_ub_boot - intercept_est_boot]).T
+
+# Combine Coefficients for Plotting
+covariate_names = ["age", "sex", "Non-Hispanic Black", "Mexican American", "Other Race", "Other Hispanic"]
+coef_names = np.concatenate([exposures_pick, covariate_names, ['Intercept']])
+hessian_est = np.concatenate([beta_est, gamma_est, intercept_est])
+hessian_err = np.column_stack([
+    np.concatenate([beta_est - beta_lb, gamma_est - gamma_lb, intercept_est - intercept_lb]),
+    np.concatenate([beta_ub - beta_est, gamma_ub - gamma_est, intercept_ub - intercept_est])
+]).T
+
+boot_est = np.concatenate([beta_est_boot, gamma_est_boot, intercept_est_boot])
+boot_err = np.column_stack([
+    np.concatenate([beta_est_boot - beta_lb_boot, gamma_est_boot - gamma_lb_boot, intercept_est_boot - intercept_lb_boot]),
+    np.concatenate([beta_ub_boot - beta_est_boot, gamma_ub_boot - gamma_est_boot, intercept_ub_boot - intercept_est_boot])
+]).T
+
+# DataFrame Saving (Saving Hessian results primarily, or maybe both?)
+# Let's save Hessian results as requested by user context implies Hessian focus, 
+# but comparison in plot.
 res = {
-    'coefs': np.concatenate([beta_est, gamma_est, intercept_est]),
+    'coefs': hessian_est,
     'se': np.concatenate([beta_se, gamma_se, intercept_se]),
     'ub': np.concatenate([beta_ub, gamma_ub, intercept_ub]),
     'lb': np.concatenate([beta_lb, gamma_lb, intercept_lb])
 }
 
-covariate_names = ["age", "sex", "Non-Hispanic Black", "Mexican American", "Other Race", "Other Hispanic"]
+
 
 pd.DataFrame(res, index=np.concatenate([exposures_pick, covariate_names, ['Intercept']])).to_csv('output/nhanes_nplsi_results.csv')
 
-plt.figure(figsize=(10, 6))
-plt.plot(g_grid, g_fn_pred, color='dimgrey')
-plt.fill_between(g_grid, g_lb, g_ub, color='lightblue', alpha=0.4, label='95% CI')
+plt.figure(figsize=(18, 8))
+
+# Plot 1: g(x)
+plt.subplot(1, 2, 1)
+plt.plot(g_grid, g_fn_pred, color='black', label='Main Fit', linewidth=1.5)
+plt.fill_between(g_grid, g_lb_hess, g_ub_hess, color='blue', alpha=0.3, label='Hessian 95% CI')
+plt.fill_between(g_grid, g_lb_boot, g_ub_boot, color='orange', alpha=0.3, label='Bootstrap 95% CI')
 plt.axhline(0, color='grey', linestyle='--', linewidth=0.8)
 plt.axvline(0, color='grey', linestyle='--', linewidth=0.8)
-plt.xlabel('index')
+plt.xlabel('Linear Predictor Index')
 plt.ylabel('g(index)')
+plt.title(f'Non-linear function g(x) Estimate\nHessian ({t_hess:.1f}s) vs Bootstrap ({t_boot:.1f}s)')
 plt.legend()
+
+# Plot 2: Coefficients
+plt.subplot(1, 2, 2)
+x_pos = np.arange(len(coef_names))
+width = 0.35
+
+plt.bar(x_pos - width/2, hessian_est, width, label='Hessian', yerr=hessian_err, capsize=5, color='skyblue', alpha=0.8)
+plt.bar(x_pos + width/2, boot_est, width, label='Bootstrap', yerr=boot_err, capsize=5, color='salmon', alpha=0.8)
+
+plt.axhline(0, color='grey', linestyle='--', linewidth=0.8)
+plt.xticks(x_pos, coef_names, rotation=90)
+plt.ylabel('Coefficient Value')
+plt.title('Coefficient Estimates (Beta, Gamma, Intercept)')
+plt.legend()
+
 plt.tight_layout()
 plt.savefig('output/nhanes.png', dpi=300)
 plt.close()

@@ -118,6 +118,9 @@ def main():
     parser.add_argument('--g_grid_n', type=int, default=1000,
                         help='Number of points in g(x) diagnostic grid (also used for spline g bootstrap).')
     
+    parser.add_argument('--activation', type=str, default='Tanh',
+                        help='Activation function for NeuralPLSI (ignored for SplinePLSI).')
+    
     args = parser.parse_args()
 
     # Determine models to run
@@ -135,9 +138,9 @@ def main():
         res_by_model[mname] = {
             'n': [], 'g_fn': [], 'x_dist': [], 'outcome': [], 'model': [], 'seed': [],
             'performance': [], 'g_pred': [],
-            'beta_estimate': [], 'beta_bootstrap': [],
-            'gamma_estimate': [], 'gamma_bootstrap': [],
-            'time': [], 'time_bootstrap': []
+            'beta_estimate': [], 'gamma_estimate': [],
+            'inference_summary': [], 'g_inference': [],
+            'time': [], 'time_inference': []
         }
         out_path_by_model[mname] = _output_path_for_model(args.out, mname, n, g_fn, outcome, x_dist)
 
@@ -161,7 +164,10 @@ def main():
             res = res_by_model[model_name]
 
             np.random.seed(seed)
-            model = Model(family=outcome)
+            if model_name == 'NeuralPLSI':
+                model = Model(family=outcome, activation=args.activation)
+            else:
+                model = Model(family=outcome)
 
             # Fit
             t0 = perf_counter()
@@ -186,19 +192,70 @@ def main():
             gamma_hat = model.gamma.tolist()
             g_pred = model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid)
 
-            # Bootstrap
-            tb0 = perf_counter()
-            boot = model.inference_bootstrap(
-                X_tr, Z_tr, y_tr,
-                n_samples=args.n_bootstrap,
-                random_state=seed,
-                ci=0.95,
-                g_grid=g_grid
-            )
-            tb1 = perf_counter()
+            # Inference
+            t_inf0 = perf_counter()
+            
+            if hasattr(model, 'inference_hessian'):
+                # Hessian Inference (NeuralPLSI)
+                inf_res = model.inference_hessian(X_tr, Z_tr, y_tr, batch_size=None)
+                # Convert numpy to list
+                for k in inf_res:
+                    if isinstance(inf_res[k], np.ndarray):
+                        inf_res[k] = inf_res[k].tolist()
+                
+                # g bands
+                g_res = model.inference_hessian_g(X_tr, Z_tr, y_tr, g_grid=g_grid, include_beta=True)
+                for k in g_res:
+                    if isinstance(g_res[k], np.ndarray):
+                        g_res[k] = g_res[k].tolist()  
+            
+                res_summary = inf_res
+                g_summary = g_res
 
-            beta_samples = boot.get('beta_samples')
-            gamma_samples = boot.get('gamma_samples')
+            else:
+                # Bootstrap Inference (SplinePLSI)
+                boot = model.inference_bootstrap(
+                    X_tr, Z_tr, y_tr,
+                    n_samples=args.n_bootstrap,
+                    random_state=seed,
+                    ci=0.95,
+                    g_grid=g_grid
+                )
+                
+                # Summarize bootstrap samples
+                beta_samples = np.array(boot.get('beta_samples', []))
+                gamma_samples = np.array(boot.get('gamma_samples', []))
+                
+                # Calculate simple stats
+                res_summary = {}
+                if beta_samples.size > 0:
+                    res_summary['beta_hat'] = beta_hat # Point estimate
+                    res_summary['beta_se'] = np.std(beta_samples, axis=0).tolist()
+                    res_summary['beta_lb'] = np.percentile(beta_samples, 2.5, axis=0).tolist()
+                    res_summary['beta_ub'] = np.percentile(beta_samples, 97.5, axis=0).tolist()
+                
+                if gamma_samples.size > 0:
+                    res_summary['gamma_hat'] = gamma_hat
+                    res_summary['gamma_se'] = np.std(gamma_samples, axis=0).tolist()
+                    res_summary['gamma_lb'] = np.percentile(gamma_samples, 2.5, axis=0).tolist()
+                    res_summary['gamma_ub'] = np.percentile(gamma_samples, 97.5, axis=0).tolist()
+
+                # For g, we might have g_lb/g_ub in boot output if implemented, 
+                # but SplinePLSI inference format depends on base or specific impl.
+                # Assuming base implementation keys.
+                g_summary = {
+                    'g_mean': boot.get('g_mean', []),
+                    'g_se': boot.get('g_se', []),
+                    'g_lb': boot.get('g_lb', []),
+                    'g_ub': boot.get('g_ub', [])
+                }
+                # Convert any numpy
+                for d in [res_summary, g_summary]:
+                    for k in d:
+                        if isinstance(d[k], np.ndarray):
+                            d[k] = d[k].tolist()
+
+            t_inf1 = perf_counter()
 
             # Append results
             res['n'].append(n)
@@ -211,13 +268,13 @@ def main():
             res['g_pred'].append(g_pred)
             res['beta_estimate'].append(beta_hat)
             res['gamma_estimate'].append(gamma_hat)
-            res['beta_bootstrap'].append(beta_samples.tolist() if beta_samples is not None else [])
-            res['gamma_bootstrap'].append(gamma_samples.tolist() if gamma_samples is not None else [])
+            res['inference_summary'].append(res_summary)
+            res['g_inference'].append(g_summary)
             res['time'].append(float(t1 - t0))
-            res['time_bootstrap'].append(float(tb1 - tb0))
+            res['time_inference'].append(float(t_inf1 - t_inf0))
 
             print(f"[rep {rep+1}/{args.n_replicates}] {model_name:12s} "
-                  f"performance={perf:.4f} | fit={res['time'][-1]:.3f}s | bootstrap={res['time_bootstrap'][-1]:.3f}s")
+                  f"performance={perf:.4f} | fit={res['time'][-1]:.3f}s | infer={res['time_inference'][-1]:.3f}s")
 
             # Checkpoint
             if (rep + 1) % args.save_every == 0:

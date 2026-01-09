@@ -5,7 +5,7 @@ n_values=(500 2000)
 g_values=(sigmoid sfun linear)
 outcomes=(continuous binary cox)
 models=(NeuralPLSI PLSI)
-exposure_dist=(normal)
+exposure_dist=(normal uniform t)
 
 # Loop through all combinations
 for model in "${models[@]}"; do

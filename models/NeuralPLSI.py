@@ -1,9 +1,11 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
+from .inference import hessian_inference_beta_gamma, hessian_g_bands
 from .utils import SchedulerCallback
 import functools
 
@@ -47,17 +49,19 @@ class CoxCCLoss(nn.Module):
         return -(r - log_cumsum_h).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
-    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False):
+    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='Tanh'):
         super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, n_classes, bias=False)
         
+        act_cls = getattr(nn, activation)
+
         layers = []
         layers.append(nn.Linear(1, hidden_units))
-        layers.append(nn.SELU())
+        layers.append(act_cls())
         for _ in range(n_hidden_layers - 1):
             layers.append(nn.Linear(hidden_units, hidden_units))
-            layers.append(nn.SELU())
+            layers.append(act_cls())
         layers.append(nn.Linear(hidden_units, n_classes))
         self.g_network = nn.Sequential(*layers)
         
@@ -68,7 +72,9 @@ class _nPLSInet(nn.Module):
             self.intercept = nn.Parameter(torch.zeros(n_classes))
 
     def forward(self, x, z):
-        xb = self.x_input(x)
+        w = self.x_input.weight
+        w_norm = w / (w.norm() + 1e-8)
+        xb = F.linear(x, w_norm, self.x_input.bias)
         if self.flip_sign: xb = -xb
         out = self.g_network(xb) + self.z_input(z)
         if self.add_intercept:
@@ -80,27 +86,20 @@ class _nPLSInet(nn.Module):
         return self.g_network(x)
 
     def gxb(self, x):
-        xb = self.x_input(x)
+        w = self.x_input.weight
+        w_norm = w / (w.norm() + 1e-8)
+        xb = F.linear(x, w_norm, self.x_input.bias)
         if self.flip_sign: xb = -xb
         return self.g_network(xb)
 
-    def normalize_beta(self, optimizer=None):
-        w = self.x_input.weight.data[0]
-        if w[0] < 0:
-            self.flip_sign = not self.flip_sign
-            with torch.no_grad():
-                self.x_input.weight.data[0] = -w
+    def resolve_sign_ambiguity(self):
+        with torch.no_grad():
+            w = self.x_input.weight.data[0]
+            if w[0] < 0:
+                self.flip_sign = not self.flip_sign
+                self.x_input.weight.data[0].mul_(-1.)
                 if self.x_input.bias is not None:
-                    self.x_input.bias.data = -self.x_input.bias.data
-            if optimizer is not None:
-                for group in optimizer.param_groups:
-                    for p in group['params']:
-                        if (p is self.x_input.weight) or (p is self.x_input.bias):
-                            st = optimizer.state.get(p, {})
-                            if 'exp_avg' in st and st['exp_avg'] is not None: st['exp_avg'].mul_(-1.)
-                            if 'momentum_buffer' in st and st['momentum_buffer'] is not None: st['momentum_buffer'].mul_(-1.)
-        denom = self.x_input.weight.data[0].square().sum().sqrt() + 1e-12
-        self.x_input.weight.data[0] = self.x_input.weight.data[0] / denom
+                    self.x_input.bias.data.mul_(-1.)
 
 
 def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False):
@@ -117,7 +116,8 @@ def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, l
         grad_clip=grad_clip, random_state=seed
     )
 
-    beta_b = net_b.x_input.weight.detach().cpu().flatten().numpy()
+    w = net_b.x_input.weight.detach().cpu().flatten()
+    beta_b = (w / (w.norm() + 1e-8)).numpy()
     gamma_b = net_b.z_input.weight.detach().cpu().flatten().numpy()
 
     intercept_b = None
@@ -145,7 +145,7 @@ class NeuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
-                 num_workers=0, add_intercept=False):
+                 num_workers=0, add_intercept=False, activation='Tanh'):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.max_epoch = max_epoch
@@ -157,6 +157,7 @@ class NeuralPLSI(_SummaryMixin):
         self.grad_clip = grad_clip
         self.num_workers = num_workers
         self.add_intercept = add_intercept
+        self.activation = activation
         self.net = None
         self._net_infer = None
 
@@ -175,7 +176,8 @@ class NeuralPLSI(_SummaryMixin):
         n_classes = 1 if self.family == 'binary' else 1
         self.net = _nPLSInet(p, q, hidden_units=self.hidden_units, 
                             n_hidden_layers=self.n_hidden_layers,
-                            n_classes=n_classes, add_intercept=self.add_intercept).to(self.device)
+                            n_classes=n_classes, add_intercept=self.add_intercept, 
+                            activation=self.activation).to(self.device)
 
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,
@@ -216,7 +218,8 @@ class NeuralPLSI(_SummaryMixin):
             raise ValueError("family must be 'continuous', 'binary', or 'cox'.")
 
         mse0 = nn.MSELoss()
-        net.normalize_beta(opt_g)
+        mse0 = nn.MSELoss()
+
         sch_z = SchedulerCallback(opt_z)
         sch_g = SchedulerCallback(opt_g)
         scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
@@ -251,7 +254,8 @@ class NeuralPLSI(_SummaryMixin):
                     torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
 
                 scaler.step(opt_g); scaler.step(opt_z); scaler.update()
-                net.normalize_beta(opt_g)
+                scaler.step(opt_g); scaler.step(opt_z); scaler.update()
+
 
             net.eval(); val_loss = 0.0
             with torch.no_grad():
@@ -277,6 +281,8 @@ class NeuralPLSI(_SummaryMixin):
                         
             if sch_g(val_loss) and sch_z(val_loss):
                 break
+        
+        net.resolve_sign_ambiguity()
         return net
 
     def _infer_net(self):
@@ -286,7 +292,8 @@ class NeuralPLSI(_SummaryMixin):
 
     @property
     def beta(self):
-        return self.net.x_input.weight.detach().cpu().flatten().numpy()
+        w = self.net.x_input.weight.detach().cpu().flatten()
+        return (w / (w.norm() + 1e-8)).numpy()
 
     @property
     def gamma(self):
@@ -480,3 +487,24 @@ class NeuralPLSI(_SummaryMixin):
             self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
             out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
         return out
+
+    def inference_hessian(self, X, Z, y, batch_size=None, damping=1e-3, max_cg_it=200, tol=1e-5, z_alpha=1.959963984540054):
+        """
+        Perform Hessian-based inference for beta and gamma.
+        Delegates to hessian_inference_beta_gamma in models.inference.
+        """
+        return hessian_inference_beta_gamma(self, X, Z, y, batch_size=batch_size, 
+                                            damping=damping, max_cg_it=max_cg_it, tol=tol, z_alpha=z_alpha)
+
+    def inference_hessian_g(self, X, Z, y, mode="g_of_t", g_grid=None, X_eval=None, 
+                            batch_size=None, include_beta=False, 
+                            damping=1e-3, max_cg_it=200, tol=1e-5, ci=0.95, 
+                            simultaneous=False, n_draws=1000, random_state=0):
+        """
+        Calculate confidence bands for g(t) or g(x.beta) using Hessian sandwich.
+        Delegates to hessian_g_bands in models.inference.
+        """
+        return hessian_g_bands(self, X, Z, y, mode=mode, g_grid=g_grid, X_eval=X_eval,
+                               batch_size=batch_size, include_beta=include_beta,
+                               damping=damping, max_cg_it=max_cg_it, tol=tol, ci=ci,
+                               simultaneous=simultaneous, n_draws=n_draws, random_state=random_state)
