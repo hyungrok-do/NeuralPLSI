@@ -1,2 +1,5 @@
 output/*
-reproduce/*.s__pycache__/
+reproduce/*.s
+__pycache__/
+*.py[cod]
+*$py.class
