@@ -79,10 +79,10 @@ def main():
     parser.add_argument('--n_instances', type=int, default=500,
                         help='Number of observations per replicate (train/test split will use n for test).')
     
-    parser.add_argument('--n_replicates', type=int, default=50,
+    parser.add_argument('--n_replicates', type=int, default=1000,
                         help='Number of simulation replicates.')
     
-    parser.add_argument('--n_bootstrap', type=int, default=500,
+    parser.add_argument('--n_bootstrap', type=int, default=100,
                         help='Bootstrap refits per replicate (per model).')
     
     parser.add_argument('--g_fn', type=str, default='sigmoid',
