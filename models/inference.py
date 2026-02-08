@@ -66,20 +66,24 @@ class HessianEngine:
                 parts.append(v[idxs[i]:idxs[i+1]].view(shapes[i]))
             return tuple(parts)
 
-        # 1. Compute G = Mean_i [grad_i * grad_i^T]
+        # 1. Compute G = (1/n) * sum_i [grad_i @ grad_i^T]
+        #    = (1/n) * J^T @ J  where J is the (n, d) Jacobian
         G = torch.zeros((d, d), device=self.device)
         m = 0
+
         for bx, bz, by in self.dl:
             bx = bx.to(self.device); bz = bz.to(self.device); by = by.to(self.device)
             losses = self._per_sample_losses(bx, bz, by, net)
+            B = losses.numel()
+
+            grads_list = []
             for li in losses:
                 net.zero_grad(set_to_none=True)
-                # retain_graph=True because we might differentiate again or loop
-                # loop over samples is slow but memory efficient
-                grads = torch.autograd.grad(li, param_list, retain_graph=True, create_graph=False)
-                v = _flatten(grads)
-                G += torch.outer(v, v)
-            m += losses.numel()
+                g = torch.autograd.grad(li, param_list, retain_graph=True, create_graph=False)
+                grads_list.append(_flatten(g))
+            J = torch.stack(grads_list)  # (B, d)
+            G += J.T @ J
+            m += B
         G = (G / m).detach()
 
         # 2. HVP function

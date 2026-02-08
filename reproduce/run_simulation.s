@@ -2,8 +2,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --time=0-12:00:00
-#SBATCH --partition=cpu_short
+#SBATCH --time=2-00:00:00
+#SBATCH --partition=cpu_medium
 #SBATCH --mem=32GB
 #SBATCH --job-name=NPLSI
 #SBATCH --output=logs/simulation_%03a.log
@@ -33,4 +33,4 @@ echo "Running simulation with n=$n, g_fn=$g_fn, outcome=$outcome, model=$model, 
 
 singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
     $SCRATCH/containers/nvidia-cuda12.9.sif \
-    /ext3/miniconda3/bin/python reproduce/main_simulation.py --n_instances $n --g_fn $g_fn --outcome $outcome --model $model --exposure_dist $exposure_dist
+    /ext3/miniconda3/bin/python reproduce/main_simulation.py --n_instances $n --g_fn $g_fn --outcome $outcome --models $model --exposure_dist $exposure_dist

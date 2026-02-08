@@ -10,42 +10,35 @@ from .utils import SchedulerCallback
 import functools
 
 class CoxCCLoss(nn.Module):
+    """Negative Cox partial log-likelihood (Breslow approximation).
+
+    Sorts by descending duration and computes log-cumsum-exp for
+    numerical stability.  Pass ``presorted=True`` to skip the argsort
+    when data is already ordered (e.g. a fixed validation set).
     """
-    Cox Case-Control Loss (approximate Cox Partial Likelihood).
-    
-    This implementation assumes that for each subject i, the risk set includes all subjects j 
-    where duration_j >= duration_i. It uses the standard log-sum-exp trick for numerical stability.
-    """
-    def forward(self, risk_scores, targets, num_controls=None):
-        """
-        Args:
-            risk_scores: (batch_size, ) or (batch_size, 1) - predicted log-hazards (logits)
-            targets: (batch_size, 2) -> [time, event]
-            num_controls: Unused in this exact implementation, kept for compatibility.
-            
-        Returns:
-            Scalar loss value.
-        """
+    def __init__(self, presorted=False):
+        super().__init__()
+        self.presorted = presorted
+
+    def forward(self, risk_scores, targets):
         durations, events = targets[:, 0], targets[:, 1]
         if risk_scores.dim() > 1:
             risk_scores = risk_scores.squeeze(1)
-        
-        # Sort by duration descending
-        idx = torch.argsort(durations, descending=True)
-        r = risk_scores[idx]
-        e = events[idx]
-        
-        # Calculate log-cumsum-exp of risk scores
-        # log(sum(exp(r_j))) for j <= i (since sorted descending, j <= i means time_j >= time_i)
-        gamma = r.max()
-        log_cumsum_h = (r - gamma).exp().cumsum(0).log().add(gamma)
-        
-        # Loss is -sum( (r_i - log_sum_risk_i) * event_i )
-        # We normalize by number of events for stability
+
+        if not self.presorted:
+            idx = torch.argsort(durations, descending=True)
+            r = risk_scores[idx]
+            e = events[idx]
+        else:
+            r = risk_scores
+            e = events
+
         n_events = e.sum()
         if n_events == 0:
-            return torch.tensor(0.0, device=risk_scores.device, requires_grad=True)
-            
+            return risk_scores.sum() * 0.0   # grad-safe zero
+
+        gamma = r.max()
+        log_cumsum_h = (r - gamma).exp().cumsum(0).log().add(gamma)
         return -(r - log_cumsum_h).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
@@ -102,13 +95,12 @@ class _nPLSInet(nn.Module):
                     self.x_input.bias.data.mul_(-1.)
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh'):
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
-    n_classes = 1 if family == 'binary' else 1
 
     torch.manual_seed(seed)
-    net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, n_classes=n_classes, add_intercept=add_intercept).to(device)
+    net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
@@ -171,12 +163,12 @@ class NeuralPLSI(_SummaryMixin):
             y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
             random_state: Seed for reproducibility
         """
-        torch.manual_seed(0)
+        torch.manual_seed(random_state)
         p, q = X.shape[1], Z.shape[1]
-        n_classes = 1 if self.family == 'binary' else 1
+
         self.net = _nPLSInet(p, q, hidden_units=self.hidden_units, 
                             n_hidden_layers=self.n_hidden_layers,
-                            n_classes=n_classes, add_intercept=self.add_intercept, 
+                            add_intercept=self.add_intercept, 
                             activation=self.activation).to(self.device)
 
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
@@ -194,10 +186,6 @@ class NeuralPLSI(_SummaryMixin):
         y = np.asarray(y, dtype=np.float32)
 
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
-        val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
-        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_ds, batch_size=min(batch_size, len(val_x)), shuffle=False, num_workers=0)
 
         opt_g = torch.optim.AdamW(
             [{'params': net.x_input.parameters(), 'weight_decay': 0.},
@@ -206,7 +194,7 @@ class NeuralPLSI(_SummaryMixin):
         z_params = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
         if net.add_intercept:
             z_params.append({'params': [net.intercept], 'weight_decay': 0.})
-        opt_z = torch.optim.AdamW(z_params, lr=learning_rate)
+        opt_z = torch.optim.AdamW(z_params, lr=learning_rate * 10)
 
         if family == 'continuous':
             loss_fn = nn.MSELoss()
@@ -217,12 +205,28 @@ class NeuralPLSI(_SummaryMixin):
         else:
             raise ValueError("family must be 'continuous', 'binary', or 'cox'.")
 
-        mse0 = nn.MSELoss()
+        # Validation loss: presorted for cox to skip argsort every epoch
+        if family == 'cox':
+            sort_idx = torch.argsort(torch.from_numpy(val_y[:, 0]), descending=True)
+            val_x = val_x[sort_idx.numpy()]
+            val_z = val_z[sort_idx.numpy()]
+            val_y = val_y[sort_idx.numpy()]
+            val_loss_fn = CoxCCLoss(presorted=True)
+        else:
+            val_loss_fn = loss_fn
+
+        tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
+        val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
+        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_ds, batch_size=len(val_x), shuffle=False, num_workers=0)
+
         mse0 = nn.MSELoss()
 
         sch_z = SchedulerCallback(opt_z)
         sch_g = SchedulerCallback(opt_g)
-        scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
+
+        zero_input = torch.zeros((1, 1), device=device)
+        zero_target = torch.zeros((1, net.n_classes), device=device)
 
         for _ in range(max_epoch):
             net.train()
@@ -232,53 +236,36 @@ class NeuralPLSI(_SummaryMixin):
                 by = by.to(device)
 
                 opt_g.zero_grad(set_to_none=True); opt_z.zero_grad(set_to_none=True)
-                autocast_ctx = torch.amp.autocast(device.type) if hasattr(torch, 'amp') and hasattr(torch.amp, 'autocast') else torch.cuda.amp.autocast(enabled=(device.type == 'cuda'))
-                with autocast_ctx:
-                    out = net(bx, bz)
-                    if family == 'binary':
-                        target = by.float().view_as(out)
-                        loss = loss_fn(out, target)
-                    elif family == 'cox':
-                        target = by
-                        loss = loss_fn(out.view(-1), target)
-                    else:
-                        target = by.view_as(out.view(-1))
-                        loss = loss_fn(out.view(-1), target)
-                    zero = torch.zeros((1, net.n_classes), device=device)
-                    loss = loss + mse0(net.g_network(torch.zeros((1, 1), device=device)), zero)
-                scaler.scale(loss).backward()
 
+                out = net(bx, bz)
+                if family == 'binary':
+                    loss = loss_fn(out, by.float().view_as(out))
+                elif family == 'cox':
+                    loss = loss_fn(out.view(-1), by)
+                else:
+                    loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
+                loss = loss + mse0(net.g_network(zero_input), zero_target)
+                loss.backward()
                 if grad_clip > 0:
-                    scaler.unscale_(opt_g)
-                    scaler.unscale_(opt_z)
                     torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
-
-                scaler.step(opt_g); scaler.step(opt_z); scaler.update()
-                scaler.step(opt_g); scaler.step(opt_z); scaler.update()
-
+                opt_g.step(); opt_z.step()
 
             net.eval(); val_loss = 0.0
-            with torch.no_grad():
+            with torch.inference_mode():
                 for bx, bz, by in val_loader:
                     bx = bx.to(device)
                     bz = bz.to(device)
                     by = by.to(device)
-                    autocast_ctx = torch.amp.autocast(device.type) if hasattr(torch, 'amp') and hasattr(torch.amp, 'autocast') else torch.cuda.amp.autocast(enabled=(device.type == 'cuda'))
-                    with autocast_ctx:
-                        out = net(bx, bz)
-                        if family == 'binary':
-                            target = by.float().view_as(out)
-                            l = loss_fn(out, target)
-                        elif family == 'cox':
-                            target = by
-                            l = loss_fn(out.view(-1), target)
-                        else:
-                            target = by.view_as(out.view(-1))
-                            l = loss_fn(out.view(-1), target)
-                        zero = torch.zeros((1, net.n_classes), device=device)
-                        l = l + mse0(net.g_network(torch.zeros((1, 1), device=device)), zero)
-                        val_loss += float(l.item())
-                        
+                    out = net(bx, bz)
+                    if family == 'binary':
+                        l = val_loss_fn(out, by.float().view_as(out))
+                    elif family == 'cox':
+                        l = val_loss_fn(out.view(-1), by)
+                    else:
+                        l = val_loss_fn(out.view(-1), by.view_as(out.view(-1)))
+                    l = l + mse0(net.g_network(zero_input), zero_target)
+                    val_loss += float(l.item())
+
             if sch_g(val_loss) and sch_z(val_loss):
                 break
         
@@ -345,55 +332,37 @@ class NeuralPLSI(_SummaryMixin):
                 outs.append(result.view(-1).cpu())
         return torch.cat(outs, 0).numpy()
 
-    def predict(self, X, Z, batch_size=128):
-        """Predict raw output (linear predictor)."""
+    def _batched_forward(self, X, Z, transform=None, batch_size=128):
+        """Shared batched inference. transform is applied to each batch output."""
         net = self._infer_net()
-        net.eval()
         ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         outs = []
         with torch.no_grad():
             for bx, bz in dl:
-                bx = bx.to(self.device)
-                bz = bz.to(self.device)
-                result = net(bx, bz)
-                outs.append(result.view(-1).cpu())
+                out = net(bx.to(self.device), bz.to(self.device)).view(-1)
+                if transform is not None:
+                    out = transform(out)
+                outs.append(out.cpu())
         return torch.cat(outs, 0).numpy()
+
+    def predict(self, X, Z, batch_size=128):
+        """Predict raw output (linear predictor)."""
+        return self._batched_forward(X, Z, batch_size=batch_size)
 
     def predict_proba(self, X, Z, batch_size=128):
         """Predict probabilities (for binary outcome)."""
-        net = self._infer_net()
-        net.eval()
-        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
-        outs = []
-        with torch.no_grad():
-            for bx, bz in dl:
-                bx = bx.to(self.device)
-                bz = bz.to(self.device)
-                result = net(bx, bz)
-                outs.append(result.sigmoid().view(-1).cpu())
-        return torch.cat(outs, 0).numpy()
+        return self._batched_forward(X, Z, transform=torch.sigmoid, batch_size=batch_size)
 
     def predict_partial_hazard(self, X, Z, batch_size=128):
         """Predict partial hazard exp(g(Xb) + Zg) (for Cox outcome)."""
-        net = self._infer_net()
-        net.eval()
-        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
-        outs = []
-        with torch.no_grad():
-            for bx, bz in dl:
-                bx = bx.to(self.device)
-                bz = bz.to(self.device)
-                outs.append(net(bx, bz).view(-1).exp().cpu())
-        return torch.cat(outs, 0).numpy()
+        return self._batched_forward(X, Z, transform=torch.exp, batch_size=batch_size)
 
     def _refit_one(self, Xb, Zb, yb, seed):
         torch.manual_seed(seed)
         p, q = Xb.shape[1], Zb.shape[1]
-        n_classes = 1 if self.family == 'binary' else 1
-        net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers, n_classes=n_classes, add_intercept=self.add_intercept).to(self.device)
+
+        net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers, add_intercept=self.add_intercept, activation=self.activation).to(self.device)
         net = self._train(net, Xb, Zb, yb, self.family, self.device,
                           batch_size=self.batch_size, max_epoch=self.max_epoch,
                           learning_rate=self.learning_rate, weight_decay=self.weight_decay,
@@ -444,9 +413,9 @@ class NeuralPLSI(_SummaryMixin):
                                        n_hidden_layers=self.n_hidden_layers,
                                        do_g=do_g,
                                        g_grid=g_grid,
-                                       add_intercept=self.add_intercept)
+                                       add_intercept=self.add_intercept,
+                                       activation=self.activation)
 
-        results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):
             beta_res, gamma_res, intercept_res, g_res = result

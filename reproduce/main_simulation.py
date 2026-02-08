@@ -1,293 +1,218 @@
 #!/usr/bin/env python3
+"""
+Simulation study comparing three inference methods for the Partial Linear
+Single-Index Model:
+
+  (1) SplinePLSI  + bootstrap
+  (2) NeuralPLSI  + Hessian
+  (3) NeuralPLSI  + bootstrap
+
+For each replicate the script records:
+  - point estimates  (beta, gamma, g-function)
+  - standard errors  and 95 % confidence intervals
+  - computation time  for fitting and for each inference method
+  - predictive performance  (MSE / AUC / C-index)
+"""
+
 import argparse
 import json
 import os
+import sys
 from time import perf_counter
 
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from lifelines.utils import concordance_index
-import sys
 
-try:
-    from models import SplinePLSI, NeuralPLSI
-    from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
-except ImportError:
-    import sys
-    # Add root directory to path to allow imports
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.append(root_dir)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-    # Local modules
-    from models import SplinePLSI, NeuralPLSI
-    from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
+from models import SplinePLSI, NeuralPLSI
+from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 
-MODELS = {
-    'PLSI': SplinePLSI,
-    'NeuralPLSI': NeuralPLSI,
-}
+def to_json(obj):
+    """Recursively convert numpy types to JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: to_json(v) for k, v in obj.items()}
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer)):
+        return float(obj)
+    if isinstance(obj, list):
+        return [to_json(v) for v in obj]
+    return obj
 
 
-def _parse_models(arg_models):
-    """Return canonical list of models to run."""
-    if arg_models is None:
-        return ['NeuralPLSI']
-    return _parse_models_list(arg_models)
+def evaluate(model, X_te, Z_te, y_te, outcome):
+    """Compute predictive performance on the test set."""
+    if outcome == 'continuous':
+        preds = model.predict(X_te, Z_te)
+        return float(np.mean((preds - y_te) ** 2))
+    elif outcome == 'binary':
+        preds = model.predict_proba(X_te, Z_te)
+        return float(roc_auc_score(y_te, preds))
+    elif outcome == 'cox':
+        preds = model.predict_partial_hazard(X_te, Z_te)
+        return float(concordance_index(y_te[:, 0], -preds, y_te[:, 1]))
+    raise ValueError(f"Unknown outcome: {outcome}")
 
 
-def _parse_models_list(arg_models):
-    if len(arg_models) == 1 and arg_models[0].lower() in {'all', 'both'}:
+def parse_models(arg):
+    """Parse model names from CLI into canonical keys."""
+    alias = {'plsi': 'PLSI', 'splineplsi': 'PLSI',
+             'neuralplsi': 'NeuralPLSI', 'nplsi': 'NeuralPLSI'}
+    if len(arg) == 1 and arg[0].lower() in ('all', 'both'):
         return ['PLSI', 'NeuralPLSI']
     out = []
-    for m in arg_models:
-        ml = m.strip().lower()
-        if ml in ('plsi', 'splineplsi'):
-            key = 'PLSI'
-        elif ml in ('neuralplsi', 'nplsi'):
-            key = 'NeuralPLSI'
-        else:
-            raise ValueError(f"Unknown model name: {m}. Use PLSI, NeuralPLSI, or all.")
+    for m in arg:
+        key = alias.get(m.strip().lower())
+        if key is None:
+            raise ValueError(f"Unknown model: {m}. Use PLSI, NeuralPLSI, or all.")
         if key not in out:
             out.append(key)
     return out
 
 
-def _output_path_for_model(base_out, model_name, n, g_fn, outcome, x_dist):
-    """
-    Resolve per-model JSON output path.
-    Includes x_dist in filename for clarity.
-    """
-    default_name = f"simulation+{model_name}+{n}+{g_fn}+{outcome}+{x_dist}.json"
-    if base_out is None:
+def output_path(base, model, n, g_fn, outcome, x_dist):
+    """Resolve the JSON output path for a model run."""
+    name = f"simulation+{model}+{n}+{g_fn}+{outcome}+{x_dist}.json"
+    if base is None:
         os.makedirs("output", exist_ok=True)
-        return os.path.join("output", default_name)
+        return os.path.join("output", name)
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, name)
 
-    if base_out.lower().endswith(".json"):
-        root, ext = os.path.splitext(base_out)
-        return f"{root}+{model_name}+{x_dist}{ext}"
-    else:
-        os.makedirs(base_out, exist_ok=True)
-        return os.path.join(base_out, default_name)
+
+MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI}
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Repeated simulations for PLSI / NeuralPLSI with efficient bootstrap (per-model output files)."
-    )
-    parser.add_argument('--n_instances', type=int, default=500,
-                        help='Number of observations per replicate (train/test split will use n for test).')
-    
-    parser.add_argument('--n_replicates', type=int, default=1000,
-                        help='Number of simulation replicates.')
-    
-    parser.add_argument('--n_bootstrap', type=int, default=100,
-                        help='Bootstrap refits per replicate (per model).')
-    
-    parser.add_argument('--g_fn', type=str, default='sigmoid',
-                            choices=['linear', 'sfun', 'sigmoid'],
-                        help='Nonlinear g(x) used in simulation.')
-    
-    parser.add_argument('--outcome', type=str, default='continuous',
-                        choices=['continuous', 'binary', 'cox'],
-                        help='Outcome family.')
-    
-    parser.add_argument('--exposure_dist', type=str, default='normal',
-                        choices=['normal', 'uniform', 't'],
-                        help="Distribution of exposures X : normal, uniform, or student-t (heavy-tailed).")
-    
-    parser.add_argument('--models', nargs='+', default=['all'],
-                        help="Space-separated list of models to run, e.g., --models PLSI NeuralPLSI, or --models all.")
+    ap = argparse.ArgumentParser(description="Simulation study: PLSI vs NeuralPLSI inference comparison.")
+    ap.add_argument('--n_instances',    type=int,   default=500)
+    ap.add_argument('--n_replicates',   type=int,   default=1000)
+    ap.add_argument('--n_bootstrap',    type=int,   default=100)
+    ap.add_argument('--g_fn',           type=str,   default='sigmoid', choices=['linear', 'sfun', 'sigmoid'])
+    ap.add_argument('--outcome',        type=str,   default='continuous', choices=['continuous', 'binary', 'cox'])
+    ap.add_argument('--exposure_dist',  type=str,   default='normal', choices=['normal', 'uniform', 't'])
+    ap.add_argument('--models',         nargs='+',  default=['all'])
+    ap.add_argument('--seed0',          type=int,   default=0)
+    ap.add_argument('--save_every',     type=int,   default=1)
+    ap.add_argument('--out',            type=str,   default=None)
+    ap.add_argument('--g_grid_min',     type=float, default=-3.0)
+    ap.add_argument('--g_grid_max',     type=float, default=3.0)
+    ap.add_argument('--g_grid_n',       type=int,   default=1000)
+    ap.add_argument('--activation',     type=str,   default='Tanh')
+    args = ap.parse_args()
 
-    parser.add_argument('--seed0', type=int, default=0,
-                        help='Base random seed for replicates.')
-    
-    parser.add_argument('--save_every', type=int, default=1,
-                        help='Write results to disk every K replicates.')
-    
-    parser.add_argument('--out', type=str, default=None,
-                        help='Output path or directory. If multiple models, per-model files are created.')
-    
-    parser.add_argument('--g_grid_min', type=float, default=-3.0,
-                        help='Lower bound for g(x) diagnostic grid.')
-    
-    parser.add_argument('--g_grid_max', type=float, default=3.0,
-                        help='Upper bound for g(x) diagnostic grid.')
-    
-    parser.add_argument('--g_grid_n', type=int, default=1000,
-                        help='Number of points in g(x) diagnostic grid (also used for spline g bootstrap).')
-    
-    parser.add_argument('--activation', type=str, default='Tanh',
-                        help='Activation function for NeuralPLSI (ignored for SplinePLSI).')
-    
-    args = parser.parse_args()
+    model_list = parse_models(args.models)
+    n          = args.n_instances
+    g_fn       = args.g_fn
+    outcome    = args.outcome
+    x_dist     = args.exposure_dist
+    g_grid     = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
 
-    # Determine models to run
-    model_list = _parse_models(args.models)
+    results     = {m: [] for m in model_list}
+    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist) for m in model_list}
 
-    n = args.n_instances
-    g_fn = args.g_fn
-    outcome = args.outcome
-    x_dist = args.exposure_dist
+    header = (f"Simulation: n={n}, g_fn={g_fn}, outcome={outcome}, "
+              f"x_dist={x_dist}, models={model_list}")
+    print(header)
+    print("=" * len(header))
 
-    # Build per-model result holders and output paths
-    res_by_model = {}
-    out_path_by_model = {}
-    for mname in model_list:
-        res_by_model[mname] = {
-            'n': [], 'g_fn': [], 'x_dist': [], 'outcome': [], 'model': [], 'seed': [],
-            'performance': [], 'g_pred': [],
-            'beta_estimate': [], 'gamma_estimate': [],
-            'inference_summary': [], 'g_inference': [],
-            'time': [], 'time_inference': []
-        }
-        out_path_by_model[mname] = _output_path_for_model(args.out, mname, n, g_fn, outcome, x_dist)
-
-    # g diagnostic grid
-    g_grid = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n, dtype=float)
-
-    # Main simulation loop
     for rep in range(args.n_replicates):
         seed = args.seed0 + rep
 
-        # Simulate once per replicate (shared for all models)
-        X, Z, y, xb, gxb, true_g_fn = simulate_data(
-            n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist
-        )
-        X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(
-            X, Z, y, test_size=n, random_state=seed
-        )
+        X, Z, y, _, _, _ = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist)
+        X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
-        for model_name in model_list:
-            Model = MODELS[model_name]
-            res = res_by_model[model_name]
-
+        for mname in model_list:
             np.random.seed(seed)
-            if model_name == 'NeuralPLSI':
-                model = Model(family=outcome, activation=args.activation)
-            else:
-                model = Model(family=outcome)
 
-            # Fit
+            if mname == 'NeuralPLSI':
+                model = NeuralPLSI(family=outcome, activation=args.activation)
+            else:
+                model = SplinePLSI(family=outcome)
+
+            # --- Fit ---
             t0 = perf_counter()
             model.fit(X_tr, Z_tr, y_tr)
-            t1 = perf_counter()
+            time_fit = perf_counter() - t0
 
-            # Evaluate
-            if outcome == 'continuous':
-                preds = model.predict(X_te, Z_te)
-                perf = float(np.mean((preds - y_te) ** 2))
-            elif outcome == 'binary':
-                preds = model.predict_proba(X_te, Z_te)
-                perf = float(roc_auc_score(y_te, preds))
-            elif outcome == 'cox':
-                preds = model.predict_partial_hazard(X_te, Z_te)
-                perf = float(concordance_index(y_te[:, 0], -preds, y_te[:, 1]))
-            else:
-                raise ValueError("Unexpected outcome")
+            # --- Point estimates ---
+            perf  = evaluate(model, X_te, Z_te, y_te, outcome)
+            g_est = model.g_function(g_grid).tolist()
 
-            # Point estimates
-            beta_hat = model.beta.tolist()
-            gamma_hat = model.gamma.tolist()
-            g_pred = model.g_function(g_grid).tolist() if hasattr(model, 'g_function') else [None] * len(g_grid)
+            entry = {
+                'seed':           seed,
+                'n':              n,
+                'g_fn':           g_fn,
+                'x_dist':         x_dist,
+                'outcome':        outcome,
+                'model':          mname,
+                'performance':    perf,
+                'beta_estimate':  model.beta.tolist(),
+                'gamma_estimate': model.gamma.tolist(),
+                'g_pred':         g_est,
+                'time_fit':       round(time_fit, 4),
+            }
 
-            # Inference
-            t_inf0 = perf_counter()
-            
-            if hasattr(model, 'inference_hessian'):
-                # Hessian Inference (NeuralPLSI)
-                inf_res = model.inference_hessian(X_tr, Z_tr, y_tr, batch_size=None)
-                # Convert numpy to list
-                for k in inf_res:
-                    if isinstance(inf_res[k], np.ndarray):
-                        inf_res[k] = inf_res[k].tolist()
-                
-                # g bands
-                g_res = model.inference_hessian_g(X_tr, Z_tr, y_tr, g_grid=g_grid, include_beta=True)
-                for k in g_res:
-                    if isinstance(g_res[k], np.ndarray):
-                        g_res[k] = g_res[k].tolist()  
-            
-                res_summary = inf_res
-                g_summary = g_res
+            # --- Hessian inference (NeuralPLSI only) ---
+            if mname == 'NeuralPLSI':
+                t0 = perf_counter()
+                hess  = model.inference_hessian(X_tr, Z_tr, y_tr)
+                hess_g = model.inference_hessian_g(X_tr, Z_tr, y_tr, g_grid=g_grid, include_beta=True)
+                time_hess = perf_counter() - t0
 
-            else:
-                # Bootstrap Inference (SplinePLSI)
-                boot = model.inference_bootstrap(
-                    X_tr, Z_tr, y_tr,
-                    n_samples=args.n_bootstrap,
-                    random_state=seed,
-                    ci=0.95,
-                    g_grid=g_grid
-                )
-                
-                # Summarize bootstrap samples
-                beta_samples = np.array(boot.get('beta_samples', []))
-                gamma_samples = np.array(boot.get('gamma_samples', []))
-                
-                # Calculate simple stats
-                res_summary = {}
-                if beta_samples.size > 0:
-                    res_summary['beta_hat'] = beta_hat # Point estimate
-                    res_summary['beta_se'] = np.std(beta_samples, axis=0).tolist()
-                    res_summary['beta_lb'] = np.percentile(beta_samples, 2.5, axis=0).tolist()
-                    res_summary['beta_ub'] = np.percentile(beta_samples, 97.5, axis=0).tolist()
-                
-                if gamma_samples.size > 0:
-                    res_summary['gamma_hat'] = gamma_hat
-                    res_summary['gamma_se'] = np.std(gamma_samples, axis=0).tolist()
-                    res_summary['gamma_lb'] = np.percentile(gamma_samples, 2.5, axis=0).tolist()
-                    res_summary['gamma_ub'] = np.percentile(gamma_samples, 97.5, axis=0).tolist()
+                entry['hessian_summary'] = to_json(hess)
+                entry['hessian_g']       = to_json(hess_g)
+                entry['time_hessian']    = round(time_hess, 4)
 
-                # For g, we might have g_lb/g_ub in boot output if implemented, 
-                # but SplinePLSI inference format depends on base or specific impl.
-                # Assuming base implementation keys.
-                g_summary = {
-                    'g_mean': boot.get('g_mean', []),
-                    'g_se': boot.get('g_se', []),
-                    'g_lb': boot.get('g_lb', []),
-                    'g_ub': boot.get('g_ub', [])
-                }
-                # Convert any numpy
-                for d in [res_summary, g_summary]:
-                    for k in d:
-                        if isinstance(d[k], np.ndarray):
-                            d[k] = d[k].tolist()
+            # --- Bootstrap inference (both models) ---
+            t0 = perf_counter()
+            boot = model.inference_bootstrap(
+                X_tr, Z_tr, y_tr,
+                n_samples=args.n_bootstrap,
+                random_state=seed,
+                ci=0.95,
+                g_grid=g_grid,
+            )
+            time_boot = perf_counter() - t0
 
-            t_inf1 = perf_counter()
+            entry['bootstrap_summary'] = to_json({
+                k: boot[k] for k in ('beta_hat', 'beta_se', 'beta_lb', 'beta_ub',
+                                      'gamma_hat', 'gamma_se', 'gamma_lb', 'gamma_ub')
+                if k in boot
+            })
+            entry['bootstrap_g'] = to_json({
+                k: boot[k] for k in ('g_mean', 'g_se', 'g_lb', 'g_ub')
+                if k in boot
+            })
+            entry['time_bootstrap'] = round(time_boot, 4)
 
-            # Append results
-            res['n'].append(n)
-            res['g_fn'].append(g_fn)
-            res['x_dist'].append(x_dist)
-            res['outcome'].append(outcome)
-            res['model'].append(model_name)
-            res['seed'].append(seed)
-            res['performance'].append(perf)
-            res['g_pred'].append(g_pred)
-            res['beta_estimate'].append(beta_hat)
-            res['gamma_estimate'].append(gamma_hat)
-            res['inference_summary'].append(res_summary)
-            res['g_inference'].append(g_summary)
-            res['time'].append(float(t1 - t0))
-            res['time_inference'].append(float(t_inf1 - t_inf0))
+            results[mname].append(entry)
 
-            print(f"[rep {rep+1}/{args.n_replicates}] {model_name:12s} "
-                  f"performance={perf:.4f} | fit={res['time'][-1]:.3f}s | infer={res['time_inference'][-1]:.3f}s")
+            # --- Log ---
+            parts = [f"[{rep+1:4d}/{args.n_replicates}] {mname:12s}",
+                     f"perf={perf:.4f}",
+                     f"fit={time_fit:.2f}s"]
+            if 'time_hessian' in entry:
+                parts.append(f"hess={entry['time_hessian']:.2f}s")
+            parts.append(f"boot={time_boot:.2f}s")
+            print(" | ".join(parts))
 
-            # Checkpoint
+            # --- Checkpoint ---
             if (rep + 1) % args.save_every == 0:
-                out_path = out_path_by_model[model_name]
-                with open(out_path, 'w') as f:
-                    json.dump(res, f, indent=2)
+                with open(out_paths[mname], 'w') as f:
+                    json.dump(results[mname], f)
 
-    # Final write
-    for model_name, res in res_by_model.items():
-        out_path = out_path_by_model[model_name]
-        with open(out_path, 'w') as f:
-            json.dump(res, f, indent=2)
-        print(f"Saved results to {out_path}")
+    # Final save
+    for mname in model_list:
+        with open(out_paths[mname], 'w') as f:
+            json.dump(results[mname], f)
+        print(f"Saved {len(results[mname])} entries → {out_paths[mname]}")
 
 
 if __name__ == "__main__":

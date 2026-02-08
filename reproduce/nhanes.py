@@ -3,18 +3,14 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import sys
 import os
-
-try:
-    from models import NeuralPLSI
-except ImportError:
-    # Add root directory to path to allow imports
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.append(root_dir)
-    from models import NeuralPLSI
 import matplotlib.pyplot as plt
-from tqdm import tqdm
-
 import time
+
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+from models import NeuralPLSI
 
 os.makedirs('output', exist_ok=True)
 
@@ -73,8 +69,6 @@ covariates = ["age", "sex", "race1", "race2", "race3", "race4"]
 y_name = "normed_triglyceride"
 y = df[y_name].values
 
-weights = None
-
 exposures_pick = [
     "normed_a7.a.Tocopherol",
     "normed_a6.g.tocopherol",
@@ -95,10 +89,6 @@ model = NeuralPLSI(family='continuous', add_intercept=True)
 model.fit(x, z, y)
 
 gxb = model.predict_gxb(x)
-gxb_fn = model.g_function(gxb)
-with np.errstate(all='ignore'):
-    deconfounded = y - model.gamma @ z.T
-
 g_grid = np.linspace(gxb.min(), gxb.max(), 1000)
 g_fn_pred = model.g_function(g_grid)
 
@@ -117,66 +107,39 @@ gamma_se = inf_res['gamma_se']
 beta_lb, beta_ub = inf_res['beta_lb'], inf_res['beta_ub']
 gamma_lb, gamma_ub = inf_res['gamma_lb'], inf_res['gamma_ub']
 
-
 intercept_est = inf_res['intercept_hat']
 intercept_se = inf_res['intercept_se']
 intercept_lb = inf_res['intercept_lb']
 intercept_ub = inf_res['intercept_ub']
-# I'll set SE to NaN/0 for intercept for now to avoid crash.
 
 g_mean_hess = g_bands['g_mean']
 g_lb_hess = g_bands['g_lb']
 g_ub_hess = g_bands['g_ub']
 
 # Bootstrap Inference
-print("Running Bootstrap Inference...")
-beta_stack = []
-gamma_stack = []
-intercept_stack = []
-g_stack = []
-
 n_bootstrap = 100
+print(f"Running Bootstrap Inference (n={n_bootstrap})...")
 t_start_boot = time.time()
-for i in tqdm(range(n_bootstrap)):
-    np.random.seed(i)
-    sample_indices = np.random.choice(np.arange(len(x)), size=len(x), replace=True)
-    z_sample = z[sample_indices]
-    x_sample = x[sample_indices]
-    y_sample = y[sample_indices]
-    model_b = NeuralPLSI(family='continuous', add_intercept=True)
-    model_b.fit(x_sample, z_sample, y_sample)
-
-    beta_stack.append(model_b.beta)
-    gamma_stack.append(model_b.gamma)
-    intercept_stack.append(model_b.intercept_val)
-    g_stack.append(model_b.g_function(g_grid))
-
+boot_res = model.inference_bootstrap(x, z, y, n_samples=n_bootstrap, g_grid=g_grid, n_jobs=1)
 t_boot = time.time() - t_start_boot
 print(f"Bootstrap Inference Time: {t_boot:.2f}s")
 
-beta_stack = np.array(beta_stack)
-gamma_stack = np.array(gamma_stack)
-intercept_stack = np.array(intercept_stack)
-g_stack = np.array(g_stack)
-
-g_mean_boot = np.mean(g_stack, axis=0)
-g_ub_boot = np.percentile(g_stack, 97.5, axis=0)
-g_lb_boot = np.percentile(g_stack, 2.5, axis=0)
-
-beta_est_boot = np.mean(beta_stack, axis=0)
-beta_ub_boot = np.percentile(beta_stack, 97.5, axis=0)
-beta_lb_boot = np.percentile(beta_stack, 2.5, axis=0)
+beta_est_boot = boot_res['beta_hat']
+beta_lb_boot, beta_ub_boot = boot_res['beta_lb'], boot_res['beta_ub']
 beta_err_boot = np.column_stack([beta_est_boot - beta_lb_boot, beta_ub_boot - beta_est_boot]).T
 
-gamma_est_boot = np.mean(gamma_stack, axis=0)
-gamma_ub_boot = np.percentile(gamma_stack, 97.5, axis=0)
-gamma_lb_boot = np.percentile(gamma_stack, 2.5, axis=0)
+gamma_est_boot = boot_res['gamma_hat']
+gamma_lb_boot, gamma_ub_boot = boot_res['gamma_lb'], boot_res['gamma_ub']
 gamma_err_boot = np.column_stack([gamma_est_boot - gamma_lb_boot, gamma_ub_boot - gamma_est_boot]).T
 
-intercept_est_boot = np.mean(intercept_stack, axis=0)
-intercept_ub_boot = np.percentile(intercept_stack, 97.5, axis=0)
-intercept_lb_boot = np.percentile(intercept_stack, 2.5, axis=0)
+intercept_est_boot = boot_res.get('intercept_hat', np.array([0.0]))
+intercept_lb_boot = boot_res.get('intercept_lb', np.array([0.0]))
+intercept_ub_boot = boot_res.get('intercept_ub', np.array([0.0]))
 intercept_err_boot = np.column_stack([intercept_est_boot - intercept_lb_boot, intercept_ub_boot - intercept_est_boot]).T
+
+g_mean_boot = boot_res['g_mean']
+g_lb_boot = boot_res['g_lb']
+g_ub_boot = boot_res['g_ub']
 
 # Combine Coefficients for Plotting
 covariate_names = ["age", "sex", "Non-Hispanic Black", "Mexican American", "Other Race", "Other Hispanic"]
@@ -193,17 +156,13 @@ boot_err = np.column_stack([
     np.concatenate([beta_ub_boot - beta_est_boot, gamma_ub_boot - gamma_est_boot, intercept_ub_boot - intercept_est_boot])
 ]).T
 
-# DataFrame Saving (Saving Hessian results primarily, or maybe both?)
-# Let's save Hessian results as requested by user context implies Hessian focus, 
-# but comparison in plot.
+# Save Results
 res = {
     'coefs': hessian_est,
     'se': np.concatenate([beta_se, gamma_se, intercept_se]),
     'ub': np.concatenate([beta_ub, gamma_ub, intercept_ub]),
     'lb': np.concatenate([beta_lb, gamma_lb, intercept_lb])
 }
-
-
 
 pd.DataFrame(res, index=np.concatenate([exposures_pick, covariate_names, ['Intercept']])).to_csv('output/nhanes_nplsi_results.csv')
 

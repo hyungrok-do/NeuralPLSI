@@ -55,7 +55,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
         baseline_lambda = 1.0
         true_lambda = baseline_lambda * np.exp(lin_pred)
         T = expon.rvs(scale=1 / true_lambda)
-        C = expon.rvs(scale=true_lambda / (1 - censoring_rate), size=n)
+        C = expon.rvs(scale=np.median(1 / true_lambda) / censoring_rate, size=n)
         time = np.minimum(T, C)
         event = (T <= C).astype(int)
         y = np.column_stack([time, event])

@@ -1,9 +1,6 @@
 import numpy as np
-import pandas as pd
 import scipy.optimize as opt
 from sklearn.linear_model import Ridge, LogisticRegression
-from lifelines import CoxPHFitter
-from lifelines.exceptions import ConvergenceError
 from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
 
 try:
@@ -11,6 +8,133 @@ try:
     _HAVE_NUMBA = True
 except ImportError:
     _HAVE_NUMBA = False
+
+
+
+
+
+def _fast_ridge_loss(Xd, y, alpha):
+    """Solve ridge regression and return RSS (closed-form)."""
+    d = Xd.shape[1]
+    A = Xd.T @ Xd + alpha * np.eye(d)
+    w = np.linalg.solve(A, Xd.T @ y)
+    resid = y - Xd @ w
+    return float(resid @ resid)
+
+
+def _irls_binary_core(Xd, y, alpha, max_iter=25):
+    """IRLS logistic regression returning neg log-lik + L2 penalty."""
+    n, d = Xd.shape
+    w = np.zeros(d)
+    for _ in range(max_iter):
+        eta = Xd @ w
+        for i in range(n):
+            if eta[i] > 30.0: eta[i] = 30.0
+            elif eta[i] < -30.0: eta[i] = -30.0
+        mu = np.empty(n)
+        for i in range(n):
+            mu[i] = 1.0 / (1.0 + np.exp(-eta[i]))
+        s = mu * (1.0 - mu) + 1e-12
+        z = eta + (y - mu) / s
+        XtSX = np.zeros((d, d))
+        for i in range(n):
+            for j in range(d):
+                for k in range(d):
+                    XtSX[j, k] += s[i] * Xd[i, j] * Xd[i, k]
+        for j in range(d):
+            XtSX[j, j] += alpha
+        rhs = np.zeros(d)
+        for i in range(n):
+            for j in range(d):
+                rhs[j] += s[i] * z[i] * Xd[i, j]
+        w_new = np.linalg.solve(XtSX, rhs)
+        diff = 0.0
+        for j in range(d):
+            diff += (w_new[j] - w[j]) ** 2
+        w = w_new
+        if diff < 1e-12:
+            break
+    eta = Xd @ w
+    nll = 0.0
+    for i in range(n):
+        e = eta[i]
+        if e > 30.0: e = 30.0
+        elif e < -30.0: e = -30.0
+        p = 1.0 / (1.0 + np.exp(-e))
+        nll -= y[i] * np.log(p + 1e-9) + (1.0 - y[i]) * np.log(1.0 - p + 1e-9)
+    penalty = 0.0
+    for j in range(d):
+        penalty += w[j] * w[j]
+    return nll + 0.5 * alpha * penalty
+
+
+def _cox_core(Xd_s, E_s, alpha, d):
+    """Newton-Raphson Cox solver returning neg partial log-lik."""
+    n = Xd_s.shape[0]
+    w = np.zeros(d)
+    for _ in range(50):
+        risk = Xd_s @ w
+        for i in range(n):
+            if risk[i] > 30.0: risk[i] = 30.0
+            elif risk[i] < -30.0: risk[i] = -30.0
+        exp_risk = np.exp(risk)
+        cum_exp = np.cumsum(exp_risk)
+        ratio = exp_risk / cum_exp
+        grad = Xd_s.T @ (E_s * (1.0 - ratio)) - alpha * w
+        gnorm = 0.0
+        for j in range(d):
+            gnorm += grad[j] * grad[j]
+        if gnorm < 1e-16:
+            break
+        diag_h = E_s * ratio * (1.0 - ratio)
+        H = -(Xd_s.T * diag_h) @ Xd_s
+        for j in range(d):
+            H[j, j] -= alpha
+        try:
+            step = np.linalg.solve(H, grad)
+            w = w - step
+        except Exception:
+            w = w + 0.01 * grad
+    risk = Xd_s @ w
+    for i in range(n):
+        if risk[i] > 30.0: risk[i] = 30.0
+        elif risk[i] < -30.0: risk[i] = -30.0
+    exp_risk = np.exp(risk)
+    cum_exp = np.cumsum(exp_risk)
+    log_cum = np.log(cum_exp + 1e-30)
+    nll = 0.0
+    for i in range(n):
+        nll -= E_s[i] * (risk[i] - log_cum[i])
+    penalty = 0.0
+    for j in range(d):
+        penalty += w[j] * w[j]
+    return w, nll + 0.5 * alpha * penalty
+
+
+if _HAVE_NUMBA:
+    _irls_binary_core = njit(cache=True)(_irls_binary_core)
+    _cox_core = njit(cache=True)(_cox_core)
+
+
+def _fast_binary_loss(Xd, y, alpha):
+    return float(_irls_binary_core(Xd, y, alpha))
+
+
+def _fast_cox_loss(Xd, T, E, alpha, sorted_data=False):
+    if not sorted_data:
+        order = np.argsort(-T)
+        Xd, E = Xd[order], E[order]
+    _, val = _cox_core(Xd, E, alpha, Xd.shape[1])
+    return float(val)
+
+
+def _fast_cox_fit(Xd, T, E, alpha, sorted_data=False):
+    if not sorted_data:
+        order = np.argsort(-T)
+        Xd, E = Xd[order], E[order]
+    w, val = _cox_core(Xd, E, alpha, Xd.shape[1])
+    return w, float(val)
+
 
 class SplinePLSI(_SummaryMixin):
     """
@@ -116,60 +240,49 @@ class SplinePLSI(_SummaryMixin):
     def _objective_factory(self, X, Z, y):
         family = self.family; alpha = self.alpha
         spline_degree = self.spline_degree; num_knots = self.num_knots
+        _BIG = 1e12
 
         def objective(beta):
             beta = np.asarray(beta, dtype=np.float64)
+            nrm = np.linalg.norm(beta)
+            if nrm > 0:
+                beta = beta / nrm
             eta = X @ beta
+            if not np.all(np.isfinite(eta)):
+                return _BIG
             t = SplinePLSI._make_knot_vector(eta.min(), eta.max(), num_knots, spline_degree)
             B = SplinePLSI._bspline_basis_matrix(eta, t, spline_degree)
             Xd = np.hstack((Z, B))
 
-            if family == 'continuous':
-                model = Ridge(alpha=alpha, fit_intercept=False).fit(Xd, y)
-                pred = model.predict(Xd)
-                return float(np.sum((y - pred) ** 2))
-            elif family == 'binary':
-                model = LogisticRegression(penalty='l2', C=1.0/alpha, fit_intercept=False,
-                                           solver='lbfgs', max_iter=200).fit(Xd, y)
-                p = model.predict_proba(Xd)[:, 1]
-                eps = 1e-9
-                return float(-np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps)))
-            elif family == 'cox':
-                df = pd.DataFrame(Xd, columns=[f'z{i}' for i in range(Z.shape[1])] +
-                                           [f'b{i}' for i in range(B.shape[1])])
-                df['T'], df['E'] = y[:, 0], y[:, 1]
-                cph = CoxPHFitter(penalizer=alpha, l1_ratio=0.0)
-                try:
-                    try:
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
-                    except (TypeError, ConvergenceError):
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                except (Exception, ConvergenceError):
-                    cph = CoxPHFitter(penalizer=alpha * 10, l1_ratio=0.0)
-                    try:
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
-                    except (TypeError, ConvergenceError):
-                        try:
-                            cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                        except (Exception, ConvergenceError):
-                            cph = CoxPHFitter(penalizer=1.0, l1_ratio=0.0)
-                            cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                return float(-cph.log_likelihood_)
-            else:
-                raise ValueError("Unsupported family")
+            try:
+                if family == 'continuous':
+                    val = _fast_ridge_loss(Xd, y, alpha)
+                elif family == 'binary':
+                    val = _fast_binary_loss(Xd, y, max(alpha, 1e-4))
+                elif family == 'cox':
+                    cox_pen = max(alpha, 0.01)
+                    # Xd is already sorted because X, Z, y are sorted in fit()
+                    val = _fast_cox_loss(Xd, None, y[:, 1], cox_pen, sorted_data=True)
+                else:
+                    raise ValueError("Unsupported family")
+            except Exception:
+                return _BIG
+            return val if np.isfinite(val) else _BIG
         return objective
 
     def _optimize_beta(self, X, Z, y, beta_init):
         objective = self._objective_factory(X, Z, y)
         constraints = [{'type': 'eq', 'fun': lambda b: np.linalg.norm(b) - 1}]
         result = opt.minimize(objective, beta_init, method='SLSQP', constraints=constraints,
-                              options={'maxiter': self.max_iter})
+                              options={'maxiter': min(self.max_iter, 20), 'ftol': 1e-6})
         beta = result.x
+        if not np.all(np.isfinite(beta)):
+            beta = beta_init.copy()
         if beta[0] < 0: beta = -beta
         nrm = np.linalg.norm(beta) or 1.0
         return beta / nrm
 
-    def fit(self, X, Z, y):
+    def fit(self, X, Z, y, beta_init=None):
         """
         Fit the SplinePLSI model.
         
@@ -177,15 +290,24 @@ class SplinePLSI(_SummaryMixin):
             X: Exposure matrix (n_samples, p)
             Z: Covariate matrix (n_samples, q)
             y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
+            beta_init: Optional warm-start for beta (e.g. from a previous fit)
         """
         X = np.asarray(X, dtype=np.float64)
         Z = np.asarray(Z, dtype=np.float64)
+
+        if self.family == 'cox':
+            # Pre-sort by duration descending to speed up Cox objective and fit
+            order = np.argsort(-y[:, 0])
+            X, Z, y = X[order], Z[order], y[order]
         
-        self.beta = self._initialize_params(X)
+        self.beta = beta_init.copy() if beta_init is not None else self._initialize_params(X)
         prev_loss = np.inf
 
+        n_increases = 0
         for _ in range(self.max_iter):
             eta = X @ self.beta
+            if not np.all(np.isfinite(eta)):
+                break
             B, t = self._construct_spline_basis(eta)
             Xd = np.hstack((Z, B))
 
@@ -194,59 +316,56 @@ class SplinePLSI(_SummaryMixin):
                 resid = y - model.predict(Xd)
                 loss = float(np.sum(resid ** 2))
                 coef = np.ravel(model.coef_)
-                self.gamma = coef[:Z.shape[1]]
-                self.spline_coeffs = coef[Z.shape[1]:]
+                gamma_new = coef[:Z.shape[1]]
+                spline_new = coef[Z.shape[1]:]
 
             elif self.family == 'binary':
-                model = LogisticRegression(penalty='l2', C=1.0/self.alpha, fit_intercept=False,
+                C_val = min(1.0 / max(self.alpha, 1e-12), 100.0)
+                model = LogisticRegression(penalty='l2', C=C_val, fit_intercept=False,
                                            solver='lbfgs', max_iter=500).fit(Xd, y)
                 p = model.predict_proba(Xd)[:, 1]
                 eps = 1e-9
                 loss = float(-np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps)))
                 coef = model.coef_[0]
-                self.gamma = coef[:Z.shape[1]]
-                self.spline_coeffs = coef[Z.shape[1]:]
+                gamma_new = coef[:Z.shape[1]]
+                spline_new = coef[Z.shape[1]:]
 
             elif self.family == 'cox':
-                z_cols = [f'z{i}' for i in range(Z.shape[1])]
-                b_cols = [f'b{i}' for i in range(B.shape[1])]
-                
-                df = pd.DataFrame(Xd, columns=z_cols + b_cols)
-                df['T'], df['E'] = y[:, 0], y[:, 1]
-                
-                cph = CoxPHFitter(penalizer=self.alpha, l1_ratio=0.0)
-                try:
-                    try:
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
-                    except (TypeError, ConvergenceError):
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                except (Exception, ConvergenceError):
-                    cph = CoxPHFitter(penalizer=self.alpha * 10, l1_ratio=0.0)
-                    try:
-                        cph.fit(df, duration_col='T', event_col='E', show_progress=False, step_size=0.5)
-                    except (TypeError, ConvergenceError):
-                        try:
-                            cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                        except (Exception, ConvergenceError):
-                             cph = CoxPHFitter(penalizer=1.0, l1_ratio=0.0)
-                             cph.fit(df, duration_col='T', event_col='E', show_progress=False)
-                
-                loss = float(-cph.log_likelihood_)
-                self.gamma = cph.params_[z_cols].values
-                self.spline_coeffs = cph.params_[b_cols].values
+                # Xd, y are already sorted
+                cox_pen = max(self.alpha, 0.01)
+                w, loss = _fast_cox_fit(Xd, None, y[:, 1], cox_pen, sorted_data=True)
+                gamma_new = w[:Z.shape[1]]
+                spline_new = w[Z.shape[1]:]
                 
             else:
                 raise ValueError("Unsupported family")
 
+            if not np.isfinite(loss):
+                break
+
+            self.gamma = gamma_new
+            self.spline_coeffs = spline_new
             self.knot_vector = t
             
             # Check convergence
             if abs(prev_loss - loss) < self.tol:
                 break
+
+            if loss > prev_loss:
+                n_increases += 1
+                if n_increases >= 3:
+                    break
+            else:
+                n_increases = 0
+
             prev_loss = loss
             
             # Update beta
+            prev_beta = self.beta.copy()
             self.beta = self._optimize_beta(X, Z, y, self.beta)
+            if not np.all(np.isfinite(self.beta)):
+                self.beta = prev_beta
+                break
 
     def _ensure_fitted(self):
         if self.beta is None or self.gamma is None or self.spline_coeffs is None:
@@ -280,11 +399,11 @@ class SplinePLSI(_SummaryMixin):
         B = self._bspline_basis_matrix(x, t, self.spline_degree)
         return B @ self.spline_coeffs
 
-    def _refit_clone(self, Xb, Zb, yb, seed):
+    def _refit_clone(self, Xb, Zb, yb, seed, beta_init=None):
         m = SplinePLSI(self.family, self.num_knots, self.spline_degree, self.alpha, self.max_iter, self.tol)
         np.random.seed(seed)
-        m.fit(Xb, Zb, yb)
-        return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy()
+        m.fit(Xb, Zb, yb, beta_init=beta_init)
+        return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy(), m.knot_vector.copy()
 
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs=-1):
         """
@@ -305,24 +424,26 @@ class SplinePLSI(_SummaryMixin):
             g_grid = np.asarray(g_grid, dtype=float).reshape(-1)
             g_samples = np.empty((n_samples, g_grid.size))
 
+        warm_beta = None
+
         if n_jobs == 1:
             rng = np.random.default_rng(random_state)
             for b in range(n_samples):
                 idx = draw_bootstrap_indices(N, rng)
                 Xb, Zb, yb = X[idx], Z[idx], y[idx]
-                b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, random_state + 1337 + b)
+                b_beta, b_gamma, b_spline, b_knots = self._refit_clone(
+                    Xb, Zb, yb, random_state + 1337 + b, beta_init=warm_beta)
                 beta_samples[b] = b_beta; gamma_samples[b] = b_gamma; spline_samples[b] = b_spline
 
                 if do_g:
-                    t = self._make_knot_vector(g_grid.min(), g_grid.max(), self.num_knots, self.spline_degree)
-                    B = self._bspline_basis_matrix(g_grid, t, self.spline_degree)
+                    B = self._bspline_basis_matrix(g_grid, b_knots, self.spline_degree)
                     g_samples[b] = B @ b_spline
         else:
             def refit_wrapper(Xb, Zb, yb, seed):
-                b_beta, b_gamma, b_spline = self._refit_clone(Xb, Zb, yb, seed)
+                b_beta, b_gamma, b_spline, b_knots = self._refit_clone(
+                    Xb, Zb, yb, seed, beta_init=warm_beta)
                 if do_g:
-                    t = SplinePLSI._make_knot_vector(g_grid.min(), g_grid.max(), self.num_knots, self.spline_degree)
-                    B = SplinePLSI._bspline_basis_matrix(g_grid, t, self.spline_degree)
+                    B = SplinePLSI._bspline_basis_matrix(g_grid, b_knots, self.spline_degree)
                     g_vals = B @ b_spline
                     return b_beta, b_gamma, b_spline, g_vals
                 return b_beta, b_gamma, b_spline, None
