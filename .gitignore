@@ -1,5 +1,5 @@
 output/*
-reproduce/*.s
+logs/*
 __pycache__/
 *.py[cod]
 *$py.class

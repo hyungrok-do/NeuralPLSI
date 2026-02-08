@@ -96,6 +96,7 @@ class _nPLSInet(nn.Module):
 
 
 def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh'):
+    torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
 
@@ -387,6 +388,11 @@ class NeuralPLSI(_SummaryMixin):
             else:
                 n_jobs = 1
                 print(f"Auto-detected GPU device: using sequential bootstrap (n_jobs=1)")
+
+        if n_jobs != 1:
+            import os
+            os.environ['OMP_NUM_THREADS'] = '1'
+            os.environ['MKL_NUM_THREADS'] = '1'
 
         beta_samples = np.empty((n_samples, p))
         gamma_samples = np.empty((n_samples, q))
