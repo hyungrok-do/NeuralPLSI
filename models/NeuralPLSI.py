@@ -275,6 +275,8 @@ class NeuralPLSI(_SummaryMixin):
 
     def _infer_net(self):
         if self._net_infer is None:
+            if self.net is None:
+                raise ValueError("Model has not been fitted yet.")
             self._net_infer = self.net.eval()
         return self._net_infer.eval()
 
