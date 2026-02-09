@@ -3,6 +3,12 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 
+try:
+    from torch.func import functional_call, jacrev
+    HAS_TORCH_FUNC = True
+except ImportError:
+    HAS_TORCH_FUNC = False
+
 class HessianEngine:
     """
     Helper class to compute Sandwich Covariance Matrix (H^-1 G H^-1) / n
@@ -24,15 +30,15 @@ class HessianEngine:
         ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(Z), torch.from_numpy(y))
         self.dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         
-    def _per_sample_losses(self, bx, bz, by, net):
-        out = net(bx, bz).view(-1)
-        if self.model.family == 'continuous':
+    @staticmethod
+    def _compute_loss_vector(out, by, family):
+        if family == 'continuous':
             return (out - by.view(-1))**2
-        elif self.model.family == 'binary':
+        elif family == 'binary':
             return torch.nn.functional.binary_cross_entropy_with_logits(
                 out, by.float().view(-1), reduction='none'
             )
-        elif self.model.family == 'cox':
+        elif family == 'cox':
             durations, events = by[:, 0], by[:, 1]
             idx = torch.argsort(durations, descending=True)
             r = out[idx]; e = events[idx]
@@ -43,6 +49,10 @@ class HessianEngine:
             return contrib
         else:
             raise ValueError("family must be 'continuous', 'binary', or 'cox'.")
+
+    def _per_sample_losses(self, bx, bz, by, net):
+        out = net(bx, bz).view(-1)
+        return self._compute_loss_vector(out, by, self.model.family)
 
     def compute_covariance(self, param_list, damping=1e-3, max_cg_it=200, tol=1e-5):
         """
@@ -71,17 +81,53 @@ class HessianEngine:
         G = torch.zeros((d, d), device=self.device)
         m = 0
 
+        use_vmap = False
+        if HAS_TORCH_FUNC:
+            use_vmap = True
+            params_dict = dict(net.named_parameters())
+            buffers_dict = dict(net.named_buffers())
+
+            param_names = []
+            for p in param_list:
+                found = False
+                for name, p_net in params_dict.items():
+                    if p is p_net:
+                        param_names.append(name)
+                        found = True
+                        break
+                if not found:
+                    use_vmap = False
+                    break
+
+            if use_vmap:
+                def func_model(params_d, buffers_d, bx, bz, by):
+                     out = functional_call(net, (params_d, buffers_d), (bx, bz)).view(-1)
+                     return self._compute_loss_vector(out, by, self.model.family)
+
         for bx, bz, by in self.dl:
             bx = bx.to(self.device); bz = bz.to(self.device); by = by.to(self.device)
-            losses = self._per_sample_losses(bx, bz, by, net)
-            B = losses.numel()
 
-            grads_list = []
-            for li in losses:
-                net.zero_grad(set_to_none=True)
-                g = torch.autograd.grad(li, param_list, retain_graph=True, create_graph=False)
-                grads_list.append(_flatten(g))
-            J = torch.stack(grads_list)  # (B, d)
+            if use_vmap:
+                grads_dict = jacrev(func_model, argnums=0)(params_dict, buffers_dict, bx, bz, by)
+
+                grads_list_vec = []
+                for name in param_names:
+                    g = grads_dict[name]
+                    grads_list_vec.append(g.flatten(start_dim=1))
+
+                J = torch.cat(grads_list_vec, dim=1).detach() # (B, d)
+                B = bx.shape[0]
+            else:
+                losses = self._per_sample_losses(bx, bz, by, net)
+                B = losses.numel()
+
+                grads_list = []
+                for li in losses:
+                    net.zero_grad(set_to_none=True)
+                    g = torch.autograd.grad(li, param_list, retain_graph=True, create_graph=False)
+                    grads_list.append(_flatten(g))
+                J = torch.stack(grads_list)  # (B, d)
+
             G += J.T @ J
             m += B
         G = (G / m).detach()
