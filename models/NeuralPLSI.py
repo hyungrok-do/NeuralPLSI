@@ -359,19 +359,6 @@ class NeuralPLSI(_SummaryMixin):
         """Predict partial hazard exp(g(Xb) + Zg) (for Cox outcome)."""
         return self._batched_forward(X, Z, transform=torch.exp, batch_size=batch_size)
 
-    def _refit_one(self, Xb, Zb, yb, seed):
-        torch.manual_seed(seed)
-        p, q = Xb.shape[1], Zb.shape[1]
-
-        net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers, add_intercept=self.add_intercept, activation=self.activation).to(self.device)
-        net = self._train(net, Xb, Zb, yb, self.family, self.device,
-                          batch_size=self.batch_size, max_epoch=self.max_epoch,
-                          learning_rate=self.learning_rate, weight_decay=self.weight_decay,
-                          grad_clip=self.grad_clip, random_state=seed)
-        beta = net.x_input.weight.detach().cpu().flatten().numpy()
-        gamma = net.z_input.weight.detach().cpu().flatten().numpy()
-        return beta, gamma, net
-
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs='auto'):
         """
         Perform bootstrap inference to estimate SE and CI for beta, gamma, and g(x).
