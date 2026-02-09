@@ -268,7 +268,8 @@ def hessian_g_bands(self, X, Z, y, mode="g_of_t", g_grid=None, X_eval=None, batc
         return torch.cat([p.reshape(-1) for p in tup])
 
     if mode == "g_of_t":
-        assert g_grid is not None
+        if g_grid is None:
+            raise ValueError("g_grid must be provided when mode is 'g_of_t'")
         t = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
         t_t = torch.from_numpy(t).to(self.device)
         
@@ -285,7 +286,8 @@ def hessian_g_bands(self, X, Z, y, mode="g_of_t", g_grid=None, X_eval=None, batc
         label_x = t.reshape(-1)
         
     elif mode == "g_of_xbeta":
-        assert X_eval is not None
+        if X_eval is None:
+            raise ValueError("X_eval must be provided when mode is 'g_of_xbeta'")
         Xe = np.asarray(X_eval, dtype=np.float32)
         Xe_t = torch.from_numpy(Xe).to(self.device)
         
