@@ -35,8 +35,7 @@ ws=${warmstart_values[$ws_idx]}
 echo "Running simulation with n=$n, g_fn=$g_fn, outcome=$outcome, model=$model, warmstart=$ws"
 
 SCRATCH=/gpfs/scratch/doh03
-SCRIPT_DIR=$(dirname "$(realpath "$0")")
-cd "$SCRIPT_DIR/.."
+cd $SCRATCH/NeuralPLSI
 
 singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
     $SCRATCH/containers/nvidia-cuda12.9.sif \
