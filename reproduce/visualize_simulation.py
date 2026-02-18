@@ -28,8 +28,10 @@ plt.rcParams['savefig.dpi'] = 150
 # ============================================================================
 # Data Loading
 # ============================================================================
-out_dir = Path("output")
-files = sorted([f for f in out_dir.glob("simulation+*.json") if f.is_file()])
+data_dir = Path("output")
+out_dir = Path("logs")
+out_dir.mkdir(exist_ok=True)
+files = sorted([f for f in data_dir.glob("simulation+*.json") if f.is_file()])
 
 if not files:
     raise FileNotFoundError("No simulation+*.json files found in output/")
@@ -37,15 +39,44 @@ if not files:
 print(f"Found {len(files)} result files")
 
 def load_results():
-    """Load all simulation result files."""
+    """Load all simulation result files.
+    
+    Each JSON file is a list of replicate dicts.  We aggregate them into
+    a single dict per file with lists for the repeated fields so that
+    the downstream functions (compute_summaries, plot_g_panels, etc.)
+    work unchanged.
+    """
+    LIST_KEYS = [
+        "seed", "performance", "beta_estimate", "gamma_estimate",
+        "g_pred", "time_fit", "time_hessian", "time_bootstrap",
+        "hessian_summary", "hessian_g", "bootstrap_summary", "bootstrap_g",
+    ]
+
     records = []
     for f in files:
         try:
             with open(f, "r") as fh:
-                rec = json.load(fh)
+                raw = json.load(fh)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"  Skipping {f.name}: {e}")
             continue
+
+        if isinstance(raw, list):
+            if len(raw) == 0:
+                print(f"  Skipping {f.name}: empty list")
+                continue
+            first = raw[0]
+            rec = {}
+            rec["model"] = [first.get("model", "?")]
+            rec["n"] = [first.get("n", "?")]
+            rec["g_fn"] = [first.get("g_fn", "?")]
+            rec["outcome"] = [first.get("outcome", "?")]
+            rec["x_dist"] = [first.get("x_dist", "normal")]
+            for k in LIST_KEYS:
+                rec[k] = [r.get(k) for r in raw]
+        else:
+            rec = raw
+
         rec["_file"] = str(f)
         rec["_model"] = rec.get("model", ["Unknown"])[0]
         rec["_n"] = str(rec.get("n", ["?"])[0])
@@ -57,6 +88,7 @@ def load_results():
             parts = Path(f).stem.split("+")
             rec["_outcome"] = parts[4] if len(parts) >= 5 else "?"
         records.append(rec)
+        print(f"  Loaded {f.name}: {len(raw) if isinstance(raw, list) else '?'} replicates")
     return records
 
 records = load_results()
@@ -189,7 +221,7 @@ def save_summary_tables(df):
         return
     
     df.to_csv(out_dir / "summary_table.csv", index=False)
-    print(f"Saved: output/summary_table.csv")
+    print(f"Saved: logs/summary_table.csv")
     
     agg_df = df.groupby(["model", "g_fn", "outcome", "x_dist", "inference_type"]).agg({
         "bias": lambda x: np.mean(np.abs(x)),
@@ -200,7 +232,7 @@ def save_summary_tables(df):
     }).reset_index()
     agg_df.columns = ["Model", "g_fn", "Outcome", "X_dist", "Inference", "MAB", "Emp_SD", "SE", "Coverage", "N_reps"]
     agg_df.to_csv(out_dir / "summary_aggregated.csv", index=False)
-    print(f"Saved: output/summary_aggregated.csv")
+    print(f"Saved: logs/summary_aggregated.csv")
     
     latex_df = agg_df.copy()
     latex_df["MAB"] = latex_df["MAB"].apply(lambda x: f"{x:.4f}")
@@ -208,7 +240,7 @@ def save_summary_tables(df):
     latex_df["SE"] = latex_df["SE"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "-")
     latex_df["Coverage"] = latex_df["Coverage"].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "-")
     latex_df.to_latex(out_dir / "summary_table.tex", index=False, escape=False)
-    print(f"Saved: output/summary_table.tex")
+    print(f"Saved: logs/summary_table.tex")
 
 save_summary_tables(summary_df)
 
@@ -258,7 +290,7 @@ def save_per_setting_tables(df):
         # Save LaTeX (formatted)
         fmt_df.to_latex(tables_dir / f"{fname_base}.tex", escape=False)
     
-    print(f"Saved: {len(df.groupby(groupby_cols))} per-setting tables to output/tables/")
+    print(f"Saved: {len(df.groupby(groupby_cols))} per-setting tables to logs/tables/")
 
 save_per_setting_tables(summary_df)
 
@@ -449,12 +481,12 @@ def plot_inference_time(records):
         # New format
         if "time_hessian" in rec:
             for t in rec.get("time_hessian", []):
-                if t > 0:
+                if t is not None and t > 0:
                     time_data.append({"model": model, "outcome": outcome, "g_fn": g_fn, 
                                      "x_dist": x_dist, "inference_type": "Hessian", "time": t})
         if "time_bootstrap" in rec:
             for t in rec.get("time_bootstrap", []):
-                if t > 0:
+                if t is not None and t > 0:
                     time_data.append({"model": model, "outcome": outcome, "g_fn": g_fn, 
                                      "x_dist": x_dist, "inference_type": "Bootstrap", "time": t})
         # Old format fallback
@@ -609,7 +641,7 @@ def create_inference_comparison_table(df):
     if comparison_rows:
         comp_df = pd.DataFrame(comparison_rows)
         comp_df.to_csv(out_dir / "inference_comparison.csv", index=False)
-        print("Saved: output/inference_comparison.csv")
+        print("Saved: logs/inference_comparison.csv")
         
         summary = comp_df.groupby(["g_fn", "outcome", "x_dist"]).agg({
             "Hessian_SE": "mean", "Bootstrap_SE": "mean",
@@ -617,7 +649,7 @@ def create_inference_comparison_table(df):
             "Emp_SD": "mean"
         }).reset_index()
         summary.to_csv(out_dir / "inference_comparison_summary.csv", index=False)
-        print("Saved: output/inference_comparison_summary.csv")
+        print("Saved: logs/inference_comparison_summary.csv")
 
 create_inference_comparison_table(summary_df)
 

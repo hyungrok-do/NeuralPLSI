@@ -4,8 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
-from .inference import hessian_inference_beta_gamma, hessian_g_bands
 from .utils import SchedulerCallback
 import functools
 
@@ -95,13 +95,56 @@ class _nPLSInet(nn.Module):
                     self.x_input.bias.data.mul_(-1.)
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh'):
+def _glm_warmstart_beta(X, Z, y, family):
+    """Compute initial beta direction from GLM fit.
+    
+    Uses LogisticRegression for binary, LinearRegression for continuous,
+    and CoxPHFitter for Cox outcomes.
+    """
+    p = X.shape[1]
+    try:
+        XZ = np.hstack([X, Z])
+        if family == 'binary':
+            glm = LogisticRegression(max_iter=1000, penalty=None, solver='lbfgs')
+            glm.fit(XZ, y.ravel())
+            beta_init = glm.coef_[0][:p]
+        elif family == 'continuous':
+            glm = LinearRegression()
+            glm.fit(XZ, y.ravel())
+            beta_init = glm.coef_[:p]
+        elif family == 'cox':
+            import pandas as pd
+            from lifelines import CoxPHFitter
+            cols_x = [f'x{i}' for i in range(p)]
+            cols_z = [f'z{i}' for i in range(XZ.shape[1] - p)]
+            df = pd.DataFrame(XZ, columns=cols_x + cols_z)
+            df['T'] = y[:, 0]
+            df['E'] = y[:, 1]
+            cph = CoxPHFitter(penalizer=0.01)
+            cph.fit(df, duration_col='T', event_col='E')
+            beta_init = cph.params_[cols_x].values
+        else:
+            return None
+        norm = np.linalg.norm(beta_init)
+        if norm < 1e-8:
+            return None
+        return (beta_init / norm).astype(np.float32)
+    except Exception:
+        return None
+
+
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
 
     torch.manual_seed(seed)
     net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
+    if warmstart:
+        beta_init = _glm_warmstart_beta(Xb, Zb, yb, family)
+        if beta_init is not None:
+            with torch.no_grad():
+                net_b.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
@@ -138,7 +181,8 @@ class NeuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
-                 num_workers=0, add_intercept=False, activation='Tanh'):
+                 num_workers=0, add_intercept=False, activation='Tanh',
+                 warmstart=True):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.max_epoch = max_epoch
@@ -151,6 +195,7 @@ class NeuralPLSI(_SummaryMixin):
         self.num_workers = num_workers
         self.add_intercept = add_intercept
         self.activation = activation
+        self.warmstart = warmstart
         self.net = None
         self._net_infer = None
 
@@ -172,6 +217,12 @@ class NeuralPLSI(_SummaryMixin):
                             add_intercept=self.add_intercept, 
                             activation=self.activation).to(self.device)
 
+        if self.warmstart:
+            beta_init = _glm_warmstart_beta(X, Z, y, self.family)
+            if beta_init is not None:
+                with torch.no_grad():
+                    self.net.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
+
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,
                                learning_rate=self.learning_rate, weight_decay=self.weight_decay,
@@ -188,10 +239,11 @@ class NeuralPLSI(_SummaryMixin):
 
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
 
-        opt_g = torch.optim.AdamW(
-            [{'params': net.x_input.parameters(), 'weight_decay': 0.},
-             {'params': net.g_network.parameters(), 'weight_decay': weight_decay}], lr=learning_rate
-        )
+        g_param_groups = [
+            {'params': net.x_input.parameters(), 'weight_decay': 0.},
+            {'params': net.g_network.parameters(), 'weight_decay': weight_decay},
+        ]
+        opt_g = torch.optim.AdamW(g_param_groups, lr=learning_rate)
         z_params = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
         if net.add_intercept:
             z_params.append({'params': [net.intercept], 'weight_decay': 0.})
@@ -420,7 +472,8 @@ class NeuralPLSI(_SummaryMixin):
                                        do_g=do_g,
                                        g_grid=g_grid,
                                        add_intercept=self.add_intercept,
-                                       activation=self.activation)
+                                       activation=self.activation,
+                                       warmstart=self.warmstart)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):
@@ -463,23 +516,3 @@ class NeuralPLSI(_SummaryMixin):
             out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
         return out
 
-    def inference_hessian(self, X, Z, y, batch_size=None, damping=1e-3, max_cg_it=200, tol=1e-5, z_alpha=1.959963984540054):
-        """
-        Perform Hessian-based inference for beta and gamma.
-        Delegates to hessian_inference_beta_gamma in models.inference.
-        """
-        return hessian_inference_beta_gamma(self, X, Z, y, batch_size=batch_size, 
-                                            damping=damping, max_cg_it=max_cg_it, tol=tol, z_alpha=z_alpha)
-
-    def inference_hessian_g(self, X, Z, y, mode="g_of_t", g_grid=None, X_eval=None, 
-                            batch_size=None, include_beta=False, 
-                            damping=1e-3, max_cg_it=200, tol=1e-5, ci=0.95, 
-                            simultaneous=False, n_draws=1000, random_state=0):
-        """
-        Calculate confidence bands for g(t) or g(x.beta) using Hessian sandwich.
-        Delegates to hessian_g_bands in models.inference.
-        """
-        return hessian_g_bands(self, X, Z, y, mode=mode, g_grid=g_grid, X_eval=X_eval,
-                               batch_size=batch_size, include_beta=include_beta,
-                               damping=damping, max_cg_it=max_cg_it, tol=tol, ci=ci,
-                               simultaneous=simultaneous, n_draws=n_draws, random_state=random_state)

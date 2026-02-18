@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-Simulation study comparing three inference methods for the Partial Linear
-Single-Index Model:
-
-  (1) SplinePLSI  + bootstrap
-  (2) NeuralPLSI  + Hessian
-  (3) NeuralPLSI  + bootstrap
+Simulation study comparing SplinePLSI and NeuralPLSI with bootstrap inference.
 
 For each replicate the script records:
   - point estimates  (beta, gamma, g-function)
   - standard errors  and 95 % confidence intervals
-  - computation time  for fitting and for each inference method
+  - computation time  for fitting and bootstrap inference
   - predictive performance  (MSE / AUC / C-index)
 """
 
@@ -76,9 +71,10 @@ def parse_models(arg):
     return out
 
 
-def output_path(base, model, n, g_fn, outcome, x_dist):
+def output_path(base, model, n, g_fn, outcome, x_dist, warmstart):
     """Resolve the JSON output path for a model run."""
-    name = f"simulation+{model}+{n}+{g_fn}+{outcome}+{x_dist}.json"
+    ws_tag = 'ws1' if warmstart else 'ws0'
+    name = f"simulation+{model}+{n}+{g_fn}+{outcome}+{x_dist}+{ws_tag}.json"
     if base is None:
         os.makedirs("output", exist_ok=True)
         return os.path.join("output", name)
@@ -98,6 +94,8 @@ def main():
     ap.add_argument('--outcome',        type=str,   default='continuous', choices=['continuous', 'binary', 'cox'])
     ap.add_argument('--exposure_dist',  type=str,   default='normal', choices=['normal', 'uniform', 't'])
     ap.add_argument('--models',         nargs='+',  default=['all'])
+    ap.add_argument('--warmstart',      type=int,   default=1, choices=[0, 1],
+                    help='GLM warm-start for NeuralPLSI (1=on, 0=off)')
     ap.add_argument('--seed0',          type=int,   default=0)
     ap.add_argument('--save_every',     type=int,   default=1)
     ap.add_argument('--out',            type=str,   default=None)
@@ -112,13 +110,14 @@ def main():
     g_fn       = args.g_fn
     outcome    = args.outcome
     x_dist     = args.exposure_dist
+    warmstart  = bool(args.warmstart)
     g_grid     = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
 
     results     = {m: [] for m in model_list}
-    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist) for m in model_list}
+    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist, warmstart) for m in model_list}
 
     header = (f"Simulation: n={n}, g_fn={g_fn}, outcome={outcome}, "
-              f"x_dist={x_dist}, models={model_list}")
+              f"x_dist={x_dist}, warmstart={warmstart}, models={model_list}")
     print(header)
     print("=" * len(header))
 
@@ -132,7 +131,7 @@ def main():
             np.random.seed(seed)
 
             if mname == 'NeuralPLSI':
-                model = NeuralPLSI(family=outcome, activation=args.activation)
+                model = NeuralPLSI(family=outcome, activation=args.activation, warmstart=warmstart)
             else:
                 model = SplinePLSI(family=outcome)
 
@@ -158,17 +157,6 @@ def main():
                 'g_pred':         g_est,
                 'time_fit':       round(time_fit, 4),
             }
-
-            # --- Hessian inference (NeuralPLSI only) ---
-            if mname == 'NeuralPLSI':
-                t0 = perf_counter()
-                hess  = model.inference_hessian(X_tr, Z_tr, y_tr)
-                hess_g = model.inference_hessian_g(X_tr, Z_tr, y_tr, g_grid=g_grid, include_beta=True)
-                time_hess = perf_counter() - t0
-
-                entry['hessian_summary'] = to_json(hess)
-                entry['hessian_g']       = to_json(hess_g)
-                entry['time_hessian']    = round(time_hess, 4)
 
             # --- Bootstrap inference (both models) ---
             t0 = perf_counter()
@@ -197,10 +185,8 @@ def main():
             # --- Log ---
             parts = [f"[{rep+1:4d}/{args.n_replicates}] {mname:12s}",
                      f"perf={perf:.4f}",
-                     f"fit={time_fit:.2f}s"]
-            if 'time_hessian' in entry:
-                parts.append(f"hess={entry['time_hessian']:.2f}s")
-            parts.append(f"boot={time_boot:.2f}s")
+                     f"fit={time_fit:.2f}s",
+                     f"boot={time_boot:.2f}s"]
             print(" | ".join(parts))
 
             # --- Checkpoint ---

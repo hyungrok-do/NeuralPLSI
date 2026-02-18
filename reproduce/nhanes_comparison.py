@@ -102,8 +102,8 @@ clean_covariate_names = ["Age", "Sex (Female)", "Non-Hispanic Black", "Mexican A
 coef_names = np.concatenate([clean_exposure_names, clean_covariate_names, ['Intercept']])
 
 
-# --- 2. Fit NeuralPLSI + Hessian ---
-print("\n--- Fitting NeuralPLSI (Hessian Inference) ---")
+# --- 2. Fit NeuralPLSI + Bootstrap ---
+print("\n--- Fitting NeuralPLSI (Bootstrap Inference) ---")
 np.random.seed(42)
 m_neural = NeuralPLSI(family='continuous', add_intercept=True)
 t0 = time.time()
@@ -111,30 +111,28 @@ m_neural.fit(x, z, y)
 fit_time_neural = time.time() - t0
 print(f"NeuralPLSI Fit Time: {fit_time_neural:.2f}s")
 
-# Hessian Inference
-t0 = time.time()
-inf_res = m_neural.inference_hessian(x, z, y)
+# Bootstrap Inference
 g_grid = np.linspace(-3, 3, 200)
-g_bands = m_neural.inference_hessian_g(x, z, y, mode="g_of_t", g_grid=g_grid, include_beta=True)
-hess_time = time.time() - t0
-print(f"NeuralPLSI Hessian Time: {hess_time:.2f}s")
+n_boot_neural = 200
+t0 = time.time()
+boot_res_n = m_neural.inference_bootstrap(x, z, y, n_samples=n_boot_neural, g_grid=g_grid, n_jobs=-1)
+boot_time_neural = time.time() - t0
+print(f"NeuralPLSI Bootstrap Time: {boot_time_neural:.2f}s")
 
 # Extract Neural Results
 beta_n = m_neural.beta
 gamma_n = m_neural.gamma
 icept_n = m_neural.intercept_val
 
-beta_se_n = inf_res['beta_se']
-gamma_se_n = inf_res['gamma_se']
-icept_se_n = inf_res['intercept_se']
+beta_se_n = (boot_res_n['beta_ub'] - boot_res_n['beta_lb']) / (2 * 1.96)
+gamma_se_n = (boot_res_n['gamma_ub'] - boot_res_n['gamma_lb']) / (2 * 1.96)
 
-beta_ci_n = np.column_stack([inf_res['beta_lb'], inf_res['beta_ub']])
-gamma_ci_n = np.column_stack([inf_res['gamma_lb'], inf_res['gamma_ub']])
-icept_ci_n = np.column_stack([inf_res['intercept_lb'], inf_res['intercept_ub']])
+beta_ci_n = np.column_stack([boot_res_n['beta_lb'], boot_res_n['beta_ub']])
+gamma_ci_n = np.column_stack([boot_res_n['gamma_lb'], boot_res_n['gamma_ub']])
 
-g_mean_n = g_bands['g_mean']
-g_lb_n = g_bands['g_lb']
-g_ub_n = g_bands['g_ub']
+g_mean_n = boot_res_n['g_mean']
+g_lb_n = boot_res_n['g_lb']
+g_ub_n = boot_res_n['g_ub']
 
 
 # --- 3. Fit SplinePLSI + Bootstrap ---
@@ -225,7 +223,7 @@ gs = fig.add_gridspec(1, 2, width_ratios=[1, 1.2])
 ax1 = fig.add_subplot(gs[0])
 
 # Neural
-ax1.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI (Hessian)', linewidth=2)
+ax1.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI (Bootstrap)', linewidth=2)
 ax1.fill_between(g_grid, g_lb_n, g_ub_n, color='#d62728', alpha=0.2)
 
 # Spline
