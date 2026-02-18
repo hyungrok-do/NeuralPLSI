@@ -25,6 +25,8 @@ g_fn=${g_values[$g_idx]}
 echo "Running ablation: outcome=$outcome, g_fn=$g_fn"
 
 SCRATCH=/gpfs/scratch/doh03
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+cd "$SCRIPT_DIR/.."
 
 singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
     $SCRATCH/containers/nvidia-cuda12.9.sif \
