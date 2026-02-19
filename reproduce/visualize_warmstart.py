@@ -306,7 +306,7 @@ def plot_warmstart_delta(df):
 plot_warmstart_delta(df_all)
 
 # ---------------------------------------------------------------------------
-# 6. g-Function Recovery Panels
+# 6. g-Function Recovery Panels (3-method comparison)
 # ---------------------------------------------------------------------------
 def true_g(x, g_fn):
     _, _, _, _, _, g_true = simulate_data(5, outcome="continuous", g_type=g_fn, seed=0)
@@ -314,54 +314,63 @@ def true_g(x, g_fn):
 
 
 def plot_g_panels(data_dir=DATA_DIR):
-    """Plot g-function recovery: 3 g_fn × 3 outcome, overlay NeuralPLSI + PLSI."""
+    """Plot g-function recovery: 3 g_fn × 3 outcome, overlay PLSI / NeuralPLSI / NeuralPLSI (WS)."""
     g_fns = ["linear", "sfun", "sigmoid"]
     outcomes = ["continuous", "binary", "cox"]
-    n_vals = [200, 1000]
     grid = np.linspace(-3, 3, 1000)
 
+    # Collect available n values from files
+    all_files = sorted(data_dir.glob("simulation+*+ws*.json"))
+    n_vals = sorted({int(f.stem.split("+")[2]) for f in all_files})
+
     for n_val in n_vals:
-        for ws in [0, 1]:
-            fig, axes = plt.subplots(3, 3, figsize=(15, 13))
-            ws_label = "WS" if ws else "No-WS"
-            fig.suptitle(f"g-Function Recovery  —  n={n_val}, {ws_label}",
-                         fontsize=14, fontweight="bold")
+        fig, axes = plt.subplots(3, 3, figsize=(15, 13))
+        fig.suptitle(f"g-Function Recovery  —  n={n_val}",
+                     fontsize=14, fontweight="bold")
 
-            for i, gfn in enumerate(g_fns):
-                g_truth = true_g(grid, gfn)
-                for j, oc in enumerate(outcomes):
-                    ax = axes[i, j]
-                    ax.plot(grid, g_truth, "k-", lw=2, label="True g", zorder=10)
+        # Method definitions: (model, ws, label, color)
+        methods = [
+            ("PLSI",       0, "PLSI",            METHOD_PALETTE["PLSI"]),
+            ("NeuralPLSI", 0, "NeuralPLSI",      METHOD_PALETTE["NeuralPLSI"]),
+            ("NeuralPLSI", 1, "NeuralPLSI (WS)", METHOD_PALETTE["NeuralPLSI (WS)"]),
+        ]
 
-                    for model, color, alpha in [
-                        ("NeuralPLSI", "#1f77b4", 0.04),
-                        ("PLSI", "#ff7f0e", 0.04),
-                    ]:
-                        fname = data_dir / f"simulation+{model}+{n_val}+{gfn}+{oc}+normal+ws{ws}.json"
-                        if not fname.exists():
-                            continue
-                        try:
-                            with open(fname) as fh:
-                                reps = json.load(fh)
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-                        gs = np.array([r["g_pred"] for r in reps])
-                        for k in range(min(50, len(gs))):
-                            ax.plot(grid, gs[k], color=color, alpha=alpha, lw=0.4)
-                        g_mean = gs.mean(axis=0)
-                        ax.plot(grid, g_mean, color=color, lw=1.5,
-                                label=f"{model} (mean)")
+        for i, gfn in enumerate(g_fns):
+            g_truth = true_g(grid, gfn)
+            for j, oc in enumerate(outcomes):
+                ax = axes[i, j]
+                ax.plot(grid, g_truth, "k--", lw=2, label="True g", zorder=10)
 
-                    ax.set_title(f"g={gfn}, y={oc}", fontsize=10)
-                    ax.set_xlim(-3, 3)
-                    if i == 0 and j == 0:
-                        ax.legend(fontsize=7, loc="best")
+                for model, ws, label, color in methods:
+                    fname = data_dir / f"simulation+{model}+{n_val}+{gfn}+{oc}+normal+ws{ws}.json"
+                    if not fname.exists():
+                        continue
+                    try:
+                        with open(fname) as fh:
+                            reps = json.load(fh)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    gs = np.array([r["g_pred"] for r in reps if len(r.get("g_pred", [])) > 0])
+                    if len(gs) == 0:
+                        continue
 
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
-            out = OUT_DIR / f"g_recovery_n{n_val}_ws{ws}.png"
-            fig.savefig(out)
-            plt.close(fig)
-            print(f"Saved {out}")
+                    g_mean = gs.mean(axis=0)
+                    g_sd = gs.std(axis=0)
+                    ax.fill_between(grid, g_mean - 2*g_sd, g_mean + 2*g_sd,
+                                    color=color, alpha=0.12)
+                    ax.plot(grid, g_mean, color=color, lw=1.8, label=label)
+
+                ax.set_title(f"g={gfn}, y={oc}", fontsize=10)
+                ax.set_xlim(-3, 3)
+                ax.set_ylim(-4.5, 4.5)
+                if i == 0 and j == 0:
+                    ax.legend(fontsize=7, loc="best")
+
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        out = OUT_DIR / f"g_recovery_n{n_val}.png"
+        fig.savefig(out)
+        plt.close(fig)
+        print(f"Saved {out}")
 
 
 plot_g_panels()
