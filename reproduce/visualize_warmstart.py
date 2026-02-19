@@ -560,11 +560,11 @@ def plot_per_param_bias(df):
 plot_per_param_bias(df_bias)
 
 # ---------------------------------------------------------------------------
-# 10. Aggregated Bias Bar Charts (Mean Bias ± SE per parameter)
-#     Three methods: PLSI, NeuralPLSI, NeuralPLSI (WS)
+# 10. Per-Parameter Bias Forest Plots (Mean Bias with 95% CI)
+#     Parameters on y-axis, bias on x-axis, "X" markers + capped CI lines
 # ---------------------------------------------------------------------------
-def plot_bias_bars_per_param(df):
-    """Bar chart of mean signed bias per parameter: 3 methods side-by-side."""
+def plot_bias_forest(df):
+    """Forest plot of mean signed bias per parameter: 3 methods, vertical layout."""
     n_vals = sorted(df["n"].unique())
     g_fns = ["linear", "sfun", "sigmoid"]
     outcomes = ["continuous", "binary", "cox"]
@@ -576,8 +576,8 @@ def plot_bias_bars_per_param(df):
         if sub.empty:
             continue
 
-        fig, axes = plt.subplots(3, 3, figsize=(18, 14))
-        fig.suptitle(f"Mean Bias ± SE per Parameter  —  n={n_val}",
+        fig, axes = plt.subplots(3, 3, figsize=(18, 16))
+        fig.suptitle(f"Per-Parameter Bias (Mean ± 95% CI)  —  n={n_val}",
                      fontsize=14, fontweight="bold")
 
         for i, gfn in enumerate(g_fns):
@@ -592,40 +592,51 @@ def plot_bias_bars_per_param(df):
                     ["mean", "std", "count"]
                 ).reset_index()
                 agg["se"] = agg["std"] / np.sqrt(agg["count"])
+                agg["ci95"] = 1.96 * agg["se"]
                 agg["param"] = pd.Categorical(agg["param"],
                                               categories=params_order, ordered=True)
                 agg = agg.sort_values("param")
 
                 n_methods = len(METHOD_ORDER)
-                width = 0.8 / n_methods
+                y_base = np.arange(len(params_order))
+                offset_step = 0.25
+                
                 for m_idx, method in enumerate(METHOD_ORDER):
                     m_data = agg[agg["method"] == method]
                     if m_data.empty:
                         continue
-                    x = np.arange(len(m_data))
-                    offset = (m_idx - (n_methods - 1) / 2) * width
-                    ax.bar(x + offset, m_data["mean"], width,
-                           yerr=m_data["se"], label=method,
-                           color=METHOD_PALETTE[method],
-                           alpha=0.85, capsize=2, error_kw={"lw": 0.8})
+                    # Map params to y-positions
+                    y_pos = np.array([params_order.index(p) for p in m_data["param"]])
+                    offset = (m_idx - (n_methods - 1) / 2) * offset_step
+                    
+                    ax.errorbar(
+                        m_data["mean"].values, y_pos + offset,
+                        xerr=m_data["ci95"].values,
+                        fmt="x", markersize=7, markeredgewidth=2,
+                        color=METHOD_PALETTE[method],
+                        ecolor=METHOD_PALETTE[method],
+                        elinewidth=1.5, capsize=4, capthick=1.5,
+                        label=method, alpha=0.9,
+                    )
 
-                ax.axhline(0, color="red", ls="--", lw=0.8, alpha=0.7)
-                ax.set_ylim(BIAS_YLIM)
+                ax.axvline(0, color="red", ls="--", lw=0.8, alpha=0.7)
+                ax.set_yticks(y_base)
+                ax.set_yticklabels(params_order, fontsize=9)
+                ax.invert_yaxis()
+                ax.set_xlim(BIAS_YLIM)
                 ax.set_title(f"g={gfn}, y={oc}", fontsize=10)
-                ax.set_xticks(np.arange(len(params_order)))
-                ax.set_xticklabels(params_order, fontsize=7, rotation=45)
-                ax.set_ylabel("Mean Bias" if j == 0 else "")
+                ax.set_xlabel("Mean Bias" if i == 2 else "")
                 if i == 0 and j == 2:
-                    ax.legend(fontsize=7)
+                    ax.legend(fontsize=7, loc="lower right")
 
         plt.tight_layout(rect=[0, 0, 1, 0.96])
-        out = OUT_DIR / f"bias_bars_n{n_val}.png"
+        out = OUT_DIR / f"bias_forest_n{n_val}.png"
         fig.savefig(out)
         plt.close(fig)
         print(f"Saved {out}")
 
 
-plot_bias_bars_per_param(df_bias)
+plot_bias_forest(df_bias)
 
 # ---------------------------------------------------------------------------
 # 11. Bias Heatmap: Mean Absolute Bias per parameter × setting
