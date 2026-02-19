@@ -143,14 +143,19 @@ def _glm_init_beta_and_g(X, Z, y, family):
         return None
 
 
-def _apply_glm_init(net, X, Z, y, family):
-    """Initialize net's beta and first g-layer from GLM solution."""
+def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
+    """Initialize net's beta and first g-layer from GLM solution.
+    
+    If skip_beta=True, only the g-layer is initialized (beta is left as-is,
+    e.g. because warmstart already set it).
+    """
     result = _glm_init_beta_and_g(X, Z, y, family)
     if result is None:
         return
     beta_dir, scale = result
     with torch.no_grad():
-        net.x_input.weight.copy_(torch.from_numpy(beta_dir).unsqueeze(0))
+        if not skip_beta:
+            net.x_input.weight.copy_(torch.from_numpy(beta_dir).unsqueeze(0))
         first_layer = net.g_network[0]
         nn.init.zeros_(first_layer.weight)
         nn.init.zeros_(first_layer.bias)
@@ -164,13 +169,13 @@ def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, l
 
     torch.manual_seed(seed)
     net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
-    if initial:
-        _apply_glm_init(net_b, Xb, Zb, yb, family)
-    elif warmstart:
+    if warmstart:
         beta_init = _glm_warmstart_beta(Xb, Zb, yb, family)
         if beta_init is not None:
             with torch.no_grad():
                 net_b.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
+    if initial:
+        _apply_glm_init(net_b, Xb, Zb, yb, family, skip_beta=warmstart)
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
@@ -244,13 +249,13 @@ class NeuralPLSI(_SummaryMixin):
                             add_intercept=self.add_intercept, 
                             activation=self.activation).to(self.device)
 
-        if self.initial:
-            _apply_glm_init(self.net, X, Z, y, self.family)
-        elif self.warmstart:
+        if self.warmstart:
             beta_init = _glm_warmstart_beta(X, Z, y, self.family)
             if beta_init is not None:
                 with torch.no_grad():
                     self.net.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
+        if self.initial:
+            _apply_glm_init(self.net, X, Z, y, self.family, skip_beta=self.warmstart)
 
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,

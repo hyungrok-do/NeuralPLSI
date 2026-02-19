@@ -58,10 +58,18 @@ def main():
     ap.add_argument('--outcome', type=str, default=None)
     ap.add_argument('--g_fn', type=str, default=None)
     ap.add_argument('--out', type=str, default=None)
+    ap.add_argument('--ws', type=int, default=None, help='If set, only run this warmstart value (0 or 1)')
+    ap.add_argument('--init', type=int, default=None, help='If set, only run this initial value (0 or 1)')
     args = ap.parse_args()
 
     outcomes = [args.outcome] if args.outcome else ['continuous', 'binary', 'cox']
     g_types  = [args.g_fn] if args.g_fn else ['linear', 'sigmoid', 'sfun']
+
+    # Build combo list (default: full 4-way grid)
+    if args.ws is not None and args.init is not None:
+        combos = [(bool(args.ws), bool(args.init))]
+    else:
+        combos = [(ws, init) for ws in [False, True] for init in [False, True]]
 
     header = f"{'model':<12} {'outcome':<12} {'g_type':<10} {'ws':<4} {'init':<5} {'MAB(β)':<10} {'MAB(γ)':<10} {'L2(g)':<10} {'time(s)':<8}"
     print(header)
@@ -70,9 +78,8 @@ def main():
     rows = []
     for outcome in outcomes:
         for g_type in g_types:
-            # --- NeuralPLSI: 4-way ablation ---
-            for ws in [False, True]:
-                for init in [False, True]:
+            # --- NeuralPLSI ablation ---
+            for ws, init in combos:
                     betas, gammas, l2s, times = [], [], [], []
                     for rep in range(args.n_reps):
                         seed = rep * 100
@@ -101,35 +108,38 @@ def main():
                         'gamma_bias': (np.mean(gammas, axis=0) - TRUE_GAMMA).tolist(),
                     })
 
-            # --- PLSI: ws=0 only ---
-            betas, gammas, times = [], [], []
-            for rep in range(args.n_reps):
-                seed = rep * 100
-                try:
-                    b, g, t = run_plsi(outcome, g_type, seed, args.n)
-                    betas.append(b); gammas.append(g); times.append(t)
-                except Exception as e:
-                    print(f"  SKIP PLSI/{outcome}/{g_type}/rep={rep}: {e}")
-            if len(betas) > 0:
-                betas = np.array(betas); gammas = np.array(gammas)
-                mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
-                mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
-                mean_t    = np.mean(times)
-                print(f"{'PLSI':<12} {outcome:<12} {g_type:<10} {'N':<4} {'N':<5} {mab_beta:<10.4f} {mab_gamma:<10.4f} {'—':<10} {mean_t:<8.2f}")
-                rows.append({
-                    'model': 'PLSI', 'outcome': outcome, 'g_type': g_type,
-                    'warmstart': False, 'initial': False,
-                    'mab_beta': round(mab_beta, 5), 'mab_gamma': round(mab_gamma, 5),
-                    'time_s': round(mean_t, 3), 'n_reps': len(betas),
-                    'beta_bias': (np.mean(betas, axis=0) - TRUE_BETA).tolist(),
-                    'gamma_bias': (np.mean(gammas, axis=0) - TRUE_GAMMA).tolist(),
-                })
+            # --- PLSI: ws=0 only (skip if running a specific combo) ---
+            if args.ws is None and args.init is None:
+                betas, gammas, times = [], [], []
+                for rep in range(args.n_reps):
+                    seed = rep * 100
+                    try:
+                        b, g, t = run_plsi(outcome, g_type, seed, args.n)
+                        betas.append(b); gammas.append(g); times.append(t)
+                    except Exception as e:
+                        print(f"  SKIP PLSI/{outcome}/{g_type}/rep={rep}: {e}")
+                if len(betas) > 0:
+                    betas = np.array(betas); gammas = np.array(gammas)
+                    mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
+                    mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
+                    mean_t    = np.mean(times)
+                    print(f"{'PLSI':<12} {outcome:<12} {g_type:<10} {'N':<4} {'N':<5} {mab_beta:<10.4f} {mab_gamma:<10.4f} {'—':<10} {mean_t:<8.2f}")
+                    rows.append({
+                        'model': 'PLSI', 'outcome': outcome, 'g_type': g_type,
+                        'warmstart': False, 'initial': False,
+                        'mab_beta': round(mab_beta, 5), 'mab_gamma': round(mab_gamma, 5),
+                        'time_s': round(mean_t, 3), 'n_reps': len(betas),
+                        'beta_bias': (np.mean(betas, axis=0) - TRUE_BETA).tolist(),
+                        'gamma_bias': (np.mean(gammas, axis=0) - TRUE_GAMMA).tolist(),
+                    })
 
     out_dir = args.out or os.path.join(ROOT, "reproduce", "output")
     os.makedirs(out_dir, exist_ok=True)
     suffix = ""
     if args.outcome: suffix += f"_{args.outcome}"
     if args.g_fn: suffix += f"_{args.g_fn}"
+    if args.ws is not None and args.init is not None:
+        suffix += f"_ws{args.ws}_init{args.init}"
     out_path = os.path.join(out_dir, f"ablation_init{suffix}.json")
     with open(out_path, "w") as f:
         json.dump(rows, f, indent=2)
