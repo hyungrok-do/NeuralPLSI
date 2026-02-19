@@ -162,20 +162,15 @@ def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
         first_layer.weight[0, 0] = scale
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, initial=False):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, warmstart_state=None):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
 
     torch.manual_seed(seed)
     net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
-    if warmstart:
-        beta_init = _glm_warmstart_beta(Xb, Zb, yb, family)
-        if beta_init is not None:
-            with torch.no_grad():
-                net_b.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
-    if initial:
-        _apply_glm_init(net_b, Xb, Zb, yb, family, skip_beta=warmstart)
+    if warmstart and warmstart_state is not None:
+        net_b.load_state_dict(warmstart_state)
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
@@ -493,6 +488,11 @@ class NeuralPLSI(_SummaryMixin):
 
         print(f"Running bootstrap with n_jobs={n_jobs}")
 
+        # Extract fitted model state dict for warmstart bootstrap
+        warmstart_state = None
+        if self.warmstart:
+            warmstart_state = {k: v.cpu().clone() for k, v in self.net.state_dict().items()}
+
         refit_func = functools.partial(_refit_nplsi,
                                        family=self.family,
                                        device_type=self.device.type,
@@ -507,7 +507,8 @@ class NeuralPLSI(_SummaryMixin):
                                        g_grid=g_grid,
                                        add_intercept=self.add_intercept,
                                        activation=self.activation,
-                                       warmstart=self.warmstart)
+                                       warmstart=self.warmstart,
+                                       warmstart_state=warmstart_state)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):
