@@ -68,23 +68,59 @@ def _irls_binary_core(Xd, y, alpha, max_iter=25):
     return nll + 0.5 * alpha * penalty
 
 
+def _cox_nll(Xd_s, E_s, w, alpha, d):
+    """Compute penalized negative partial log-likelihood (log-cumsum-exp stable)."""
+    n = Xd_s.shape[0]
+    risk = Xd_s @ w
+    for i in range(n):
+        if risk[i] > 30.0: risk[i] = 30.0
+        elif risk[i] < -30.0: risk[i] = -30.0
+    max_risk = risk[0]
+    for i in range(1, n):
+        if risk[i] > max_risk:
+            max_risk = risk[i]
+    shifted = np.empty(n)
+    for i in range(n):
+        shifted[i] = risk[i] - max_risk
+    exp_shifted = np.exp(shifted)
+    cum_exp = np.cumsum(exp_shifted)
+    log_cum = np.empty(n)
+    for i in range(n):
+        log_cum[i] = np.log(cum_exp[i] + 1e-30) + max_risk
+    nll = 0.0
+    for i in range(n):
+        nll -= E_s[i] * (risk[i] - log_cum[i])
+    penalty = 0.0
+    for j in range(d):
+        penalty += w[j] * w[j]
+    return nll + 0.5 * alpha * penalty
+
+
 def _cox_core(Xd_s, E_s, alpha, d):
-    """Newton-Raphson Cox solver returning neg partial log-lik."""
+    """Newton-Raphson Cox solver with log-cumsum-exp and step damping."""
     n = Xd_s.shape[0]
     w = np.zeros(d)
+    cur_loss = _cox_nll(Xd_s, E_s, w, alpha, d)
     for _ in range(50):
         risk = Xd_s @ w
         for i in range(n):
             if risk[i] > 30.0: risk[i] = 30.0
             elif risk[i] < -30.0: risk[i] = -30.0
-        exp_risk = np.exp(risk)
-        cum_exp = np.cumsum(exp_risk)
-        ratio = exp_risk / cum_exp
+        max_risk = risk[0]
+        for i in range(1, n):
+            if risk[i] > max_risk:
+                max_risk = risk[i]
+        shifted = np.empty(n)
+        for i in range(n):
+            shifted[i] = risk[i] - max_risk
+        exp_shifted = np.exp(shifted)
+        cum_exp = np.cumsum(exp_shifted)
+        ratio = exp_shifted / cum_exp
         grad = Xd_s.T @ (E_s * (1.0 - ratio)) - alpha * w
         gnorm = 0.0
         for j in range(d):
             gnorm += grad[j] * grad[j]
-        if gnorm < 1e-16:
+        if gnorm < 1e-12:
             break
         diag_h = E_s * ratio * (1.0 - ratio)
         H = -(Xd_s.T * diag_h) @ Xd_s
@@ -92,27 +128,27 @@ def _cox_core(Xd_s, E_s, alpha, d):
             H[j, j] -= alpha
         try:
             step = np.linalg.solve(H, grad)
-            w = w - step
         except Exception:
-            w = w + 0.01 * grad
-    risk = Xd_s @ w
-    for i in range(n):
-        if risk[i] > 30.0: risk[i] = 30.0
-        elif risk[i] < -30.0: risk[i] = -30.0
-    exp_risk = np.exp(risk)
-    cum_exp = np.cumsum(exp_risk)
-    log_cum = np.log(cum_exp + 1e-30)
-    nll = 0.0
-    for i in range(n):
-        nll -= E_s[i] * (risk[i] - log_cum[i])
-    penalty = 0.0
-    for j in range(d):
-        penalty += w[j] * w[j]
-    return w, nll + 0.5 * alpha * penalty
+            step = -0.01 * grad
+        lr = 1.0
+        for _ in range(8):
+            w_new = w - lr * step
+            new_loss = _cox_nll(Xd_s, E_s, w_new, alpha, d)
+            if new_loss < cur_loss + 1e-8:
+                break
+            lr *= 0.5
+        w = w - lr * step
+        new_loss = _cox_nll(Xd_s, E_s, w, alpha, d)
+        if abs(cur_loss - new_loss) < 1e-8:
+            cur_loss = new_loss
+            break
+        cur_loss = new_loss
+    return w, _cox_nll(Xd_s, E_s, w, alpha, d)
 
 
 if _HAVE_NUMBA:
     _irls_binary_core = njit(cache=True)(_irls_binary_core)
+    _cox_nll = njit(cache=True)(_cox_nll)
     _cox_core = njit(cache=True)(_cox_core)
 
 
@@ -260,7 +296,7 @@ class SplinePLSI(_SummaryMixin):
                 elif family == 'binary':
                     val = _fast_binary_loss(Xd, y, max(alpha, 1e-4))
                 elif family == 'cox':
-                    cox_pen = max(alpha, 0.01)
+                    cox_pen = max(alpha, 0.1)
                     # Xd is already sorted because X, Z, y are sorted in fit()
                     val = _fast_cox_loss(Xd, None, y[:, 1], cox_pen, sorted_data=True)
                 else:
@@ -332,7 +368,7 @@ class SplinePLSI(_SummaryMixin):
 
             elif self.family == 'cox':
                 # Xd, y are already sorted
-                cox_pen = max(self.alpha, 0.01)
+                cox_pen = max(self.alpha, 0.1)
                 w, loss = _fast_cox_fit(Xd, None, y[:, 1], cox_pen, sorted_data=True)
                 gamma_new = w[:Z.shape[1]]
                 spline_new = w[Z.shape[1]:]

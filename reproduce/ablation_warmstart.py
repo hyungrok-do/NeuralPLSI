@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ablation study: GLM warm-start vs random init across all 9 outcome × g-function combos.
+Ablation study: 4-way NeuralPLSI (initial × warmstart) + PLSI (ws=0 only).
 
 Reports per-combination:
   - MAB(β)  : mean absolute bias of β
@@ -20,97 +20,117 @@ if ROOT not in sys.path:
 warnings.filterwarnings("ignore")
 
 from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
-from models import NeuralPLSI
+from models import NeuralPLSI, SplinePLSI
 
-# ---------- config ----------
 G_GRID = np.linspace(-3, 3, 500)
 
 
 def l2_norm_g(g_true_fn, g_est_vals, grid):
-    """Integrated L2 norm of (g_true - g_est) on a discrete grid."""
     g_true_vals = g_true_fn(grid)
     diff = g_true_vals - g_est_vals
     dx = grid[1] - grid[0]
     return np.sqrt(np.sum(diff**2) * dx)
 
 
-def run_one(outcome, g_type, seed, warmstart, n):
-    """Fit a single replicate. Returns (beta, gamma, g_est, g_true_fn, time)."""
+def run_nplsi(outcome, g_type, seed, warmstart, initial, n):
     X, Z, y, xb, gxb, g_fn = simulate_data(n, outcome=outcome, g_type=g_type, seed=seed)
-
-    model = NeuralPLSI(family=outcome, max_epoch=200, warmstart=warmstart)
-
+    model = NeuralPLSI(family=outcome, max_epoch=200, warmstart=warmstart, initial=initial)
     t0 = perf_counter()
     model.fit(X, Z, y, random_state=seed)
     elapsed = perf_counter() - t0
-
     g_est = model.g_function(G_GRID)
-
     return model.beta, model.gamma, g_est, g_fn, elapsed
+
+
+def run_plsi(outcome, g_type, seed, n):
+    X, Z, y, xb, gxb, g_fn = simulate_data(n, outcome=outcome, g_type=g_type, seed=seed)
+    model = SplinePLSI(family=outcome)
+    t0 = perf_counter()
+    model.fit(X, Z, y)
+    elapsed = perf_counter() - t0
+    return model.beta, model.gamma, elapsed
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n', type=int, default=500)
     ap.add_argument('--n_reps', type=int, default=20)
-    ap.add_argument('--outcome', type=str, default=None, help='If set, run only this outcome')
-    ap.add_argument('--g_fn', type=str, default=None, help='If set, run only this g_fn')
+    ap.add_argument('--outcome', type=str, default=None)
+    ap.add_argument('--g_fn', type=str, default=None)
     ap.add_argument('--out', type=str, default=None)
     args = ap.parse_args()
 
     outcomes = [args.outcome] if args.outcome else ['continuous', 'binary', 'cox']
     g_types  = [args.g_fn] if args.g_fn else ['linear', 'sigmoid', 'sfun']
 
-    header = f"{'outcome':<12} {'g_type':<10} {'warmstart':<10} {'MAB(β)':<10} {'MAB(γ)':<10} {'L2(g)':<10} {'time(s)':<8}"
+    header = f"{'model':<12} {'outcome':<12} {'g_type':<10} {'ws':<4} {'init':<5} {'MAB(β)':<10} {'MAB(γ)':<10} {'L2(g)':<10} {'time(s)':<8}"
     print(header)
     print("=" * len(header))
 
     rows = []
     for outcome in outcomes:
         for g_type in g_types:
+            # --- NeuralPLSI: 4-way ablation ---
             for ws in [False, True]:
-                betas, gammas, l2s, times = [], [], [], []
-                for rep in range(args.n_reps):
-                    seed = rep * 100
-                    try:
-                        b, g, g_est, g_fn, t = run_one(outcome, g_type, seed, ws, args.n)
-                        betas.append(b)
-                        gammas.append(g)
-                        l2s.append(l2_norm_g(g_fn, g_est, G_GRID))
-                        times.append(t)
-                    except Exception as e:
-                        print(f"  SKIP {outcome}/{g_type}/ws={ws}/rep={rep}: {e}")
+                for init in [False, True]:
+                    betas, gammas, l2s, times = [], [], [], []
+                    for rep in range(args.n_reps):
+                        seed = rep * 100
+                        try:
+                            b, g, g_est, g_fn, t = run_nplsi(outcome, g_type, seed, ws, init, args.n)
+                            betas.append(b); gammas.append(g)
+                            l2s.append(l2_norm_g(g_fn, g_est, G_GRID))
+                            times.append(t)
+                        except Exception as e:
+                            print(f"  SKIP NeuralPLSI/{outcome}/{g_type}/ws={ws}/init={init}/rep={rep}: {e}")
+                    if len(betas) == 0:
+                        continue
+                    betas = np.array(betas); gammas = np.array(gammas)
+                    mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
+                    mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
+                    mean_l2   = np.mean(l2s); mean_t = np.mean(times)
+                    ws_tag = "Y" if ws else "N"; init_tag = "Y" if init else "N"
+                    print(f"{'NeuralPLSI':<12} {outcome:<12} {g_type:<10} {ws_tag:<4} {init_tag:<5} {mab_beta:<10.4f} {mab_gamma:<10.4f} {mean_l2:<10.4f} {mean_t:<8.2f}")
+                    rows.append({
+                        'model': 'NeuralPLSI', 'outcome': outcome, 'g_type': g_type,
+                        'warmstart': ws, 'initial': init,
+                        'mab_beta': round(mab_beta, 5), 'mab_gamma': round(mab_gamma, 5),
+                        'l2_g': round(mean_l2, 5), 'time_s': round(mean_t, 3),
+                        'n_reps': len(betas),
+                        'beta_bias': (np.mean(betas, axis=0) - TRUE_BETA).tolist(),
+                        'gamma_bias': (np.mean(gammas, axis=0) - TRUE_GAMMA).tolist(),
+                    })
 
-                if len(betas) == 0:
-                    continue
-
-                betas = np.array(betas)
-                gammas = np.array(gammas)
+            # --- PLSI: ws=0 only ---
+            betas, gammas, times = [], [], []
+            for rep in range(args.n_reps):
+                seed = rep * 100
+                try:
+                    b, g, t = run_plsi(outcome, g_type, seed, args.n)
+                    betas.append(b); gammas.append(g); times.append(t)
+                except Exception as e:
+                    print(f"  SKIP PLSI/{outcome}/{g_type}/rep={rep}: {e}")
+            if len(betas) > 0:
+                betas = np.array(betas); gammas = np.array(gammas)
                 mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
                 mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
-                mean_l2   = np.mean(l2s)
                 mean_t    = np.mean(times)
-
-                tag = "YES" if ws else "NO"
-                print(f"{outcome:<12} {g_type:<10} {tag:<10} {mab_beta:<10.4f} {mab_gamma:<10.4f} {mean_l2:<10.4f} {mean_t:<8.2f}")
+                print(f"{'PLSI':<12} {outcome:<12} {g_type:<10} {'N':<4} {'N':<5} {mab_beta:<10.4f} {mab_gamma:<10.4f} {'—':<10} {mean_t:<8.2f}")
                 rows.append({
-                    'outcome': outcome, 'g_type': g_type, 'warmstart': ws,
+                    'model': 'PLSI', 'outcome': outcome, 'g_type': g_type,
+                    'warmstart': False, 'initial': False,
                     'mab_beta': round(mab_beta, 5), 'mab_gamma': round(mab_gamma, 5),
-                    'l2_g': round(mean_l2, 5), 'time_s': round(mean_t, 3),
-                    'n_reps': len(betas),
+                    'time_s': round(mean_t, 3), 'n_reps': len(betas),
                     'beta_bias': (np.mean(betas, axis=0) - TRUE_BETA).tolist(),
                     'gamma_bias': (np.mean(gammas, axis=0) - TRUE_GAMMA).tolist(),
                 })
 
-    # Save results
     out_dir = args.out or os.path.join(ROOT, "reproduce", "output")
     os.makedirs(out_dir, exist_ok=True)
     suffix = ""
-    if args.outcome:
-        suffix += f"_{args.outcome}"
-    if args.g_fn:
-        suffix += f"_{args.g_fn}"
-    out_path = os.path.join(out_dir, f"ablation_warmstart{suffix}.json")
+    if args.outcome: suffix += f"_{args.outcome}"
+    if args.g_fn: suffix += f"_{args.g_fn}"
+    out_path = os.path.join(out_dir, f"ablation_init{suffix}.json")
     with open(out_path, "w") as f:
         json.dump(rows, f, indent=2)
     print(f"\nResults saved to {out_path}")

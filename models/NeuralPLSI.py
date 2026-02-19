@@ -96,10 +96,20 @@ class _nPLSInet(nn.Module):
 
 
 def _glm_warmstart_beta(X, Z, y, family):
-    """Compute initial beta direction from GLM fit.
+    """Compute initial beta direction from GLM fit (direction only)."""
+    result = _glm_init_beta_and_g(X, Z, y, family)
+    if result is None:
+        return None
+    return result[0]
+
+
+def _glm_init_beta_and_g(X, Z, y, family):
+    """Compute both beta direction and effect scale from GLM fit.
     
-    Uses LogisticRegression for binary, LinearRegression for continuous,
-    and CoxPHFitter for Cox outcomes.
+    Returns (beta_direction, scale) where:
+    - beta_direction: normalized beta (float32)
+    - scale: magnitude of beta (for initializing g's first layer)
+    Returns None if GLM fails.
     """
     p = X.shape[1]
     try:
@@ -128,19 +138,35 @@ def _glm_warmstart_beta(X, Z, y, family):
         norm = np.linalg.norm(beta_init)
         if norm < 1e-8:
             return None
-        return (beta_init / norm).astype(np.float32)
+        return (beta_init / norm).astype(np.float32), float(norm)
     except Exception:
         return None
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True):
+def _apply_glm_init(net, X, Z, y, family):
+    """Initialize net's beta and first g-layer from GLM solution."""
+    result = _glm_init_beta_and_g(X, Z, y, family)
+    if result is None:
+        return
+    beta_dir, scale = result
+    with torch.no_grad():
+        net.x_input.weight.copy_(torch.from_numpy(beta_dir).unsqueeze(0))
+        first_layer = net.g_network[0]
+        nn.init.zeros_(first_layer.weight)
+        nn.init.zeros_(first_layer.bias)
+        first_layer.weight[0, 0] = scale
+
+
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, initial=False):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
 
     torch.manual_seed(seed)
     net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
-    if warmstart:
+    if initial:
+        _apply_glm_init(net_b, Xb, Zb, yb, family)
+    elif warmstart:
         beta_init = _glm_warmstart_beta(Xb, Zb, yb, family)
         if beta_init is not None:
             with torch.no_grad():
@@ -182,7 +208,7 @@ class NeuralPLSI(_SummaryMixin):
                  learning_rate=1e-3, weight_decay=1e-4,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='Tanh',
-                 warmstart=True):
+                 warmstart=True, initial=False):
         self.family = family
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.max_epoch = max_epoch
@@ -196,6 +222,7 @@ class NeuralPLSI(_SummaryMixin):
         self.add_intercept = add_intercept
         self.activation = activation
         self.warmstart = warmstart
+        self.initial = initial
         self.net = None
         self._net_infer = None
 
@@ -217,7 +244,9 @@ class NeuralPLSI(_SummaryMixin):
                             add_intercept=self.add_intercept, 
                             activation=self.activation).to(self.device)
 
-        if self.warmstart:
+        if self.initial:
+            _apply_glm_init(self.net, X, Z, y, self.family)
+        elif self.warmstart:
             beta_init = _glm_warmstart_beta(X, Z, y, self.family)
             if beta_init is not None:
                 with torch.no_grad():
@@ -473,7 +502,8 @@ class NeuralPLSI(_SummaryMixin):
                                        g_grid=g_grid,
                                        add_intercept=self.add_intercept,
                                        activation=self.activation,
-                                       warmstart=self.warmstart)
+                                       warmstart=self.warmstart,
+                                       initial=self.initial)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):

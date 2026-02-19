@@ -22,7 +22,7 @@ g_idx=$(( SLURM_ARRAY_TASK_ID / 3 ))
 outcome=${outcomes[$outcome_idx]}
 g_fn=${g_values[$g_idx]}
 
-echo "Running ablation: outcome=$outcome, g_fn=$g_fn"
+echo "Running ablation: outcome=$outcome, g_fn=$g_fn (4-way NeuralPLSI + PLSI ws=0)"
 
 SCRATCH=/gpfs/scratch/doh03
 cd $SCRATCH/NeuralPLSI
