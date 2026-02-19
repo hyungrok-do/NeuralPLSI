@@ -244,13 +244,8 @@ class NeuralPLSI(_SummaryMixin):
                             add_intercept=self.add_intercept, 
                             activation=self.activation).to(self.device)
 
-        if self.warmstart:
-            beta_init = _glm_warmstart_beta(X, Z, y, self.family)
-            if beta_init is not None:
-                with torch.no_grad():
-                    self.net.x_input.weight.copy_(torch.from_numpy(beta_init).unsqueeze(0))
         if self.initial:
-            _apply_glm_init(self.net, X, Z, y, self.family, skip_beta=self.warmstart)
+            _apply_glm_init(self.net, X, Z, y, self.family)
 
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,
