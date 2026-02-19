@@ -338,11 +338,12 @@ def plot_avg_summary():
 
 
 # ============================================================================
-# 6. PER-ELEMENT BIAS: all 9 scenarios in a 3×3 grid
+# 6. PER-ELEMENT BIAS FOREST PLOT: all 9 scenarios in a 3×3 grid
+#    Parameters on y-axis, bias on x-axis, "X" markers at point estimate
 # ============================================================================
 
 def plot_per_element_bias_grid():
-    """3×3 grid of per-element bias bar charts (outcomes × g-functions)."""
+    """3×3 grid of per-element bias forest plots (outcomes × g-functions)."""
     fig, axes = plt.subplots(3, 3, figsize=(20, 14), sharey='row')
     fig.suptitle('Per-Element Bias — All Scenarios',
                  fontsize=15, fontweight='bold', y=0.99)
@@ -365,8 +366,8 @@ def plot_per_element_bias_grid():
             param_labels = [f'β{i+1}' for i in range(p)] + [f'γ{i+1}' for i in range(q)]
             n_params = len(param_labels)
             n_methods = len(METHODS)
-            bar_width = 0.8 / n_methods
-            x = np.arange(n_params)
+            y_base = np.arange(n_params)
+            offset_step = 0.15
 
             for i, method in enumerate(METHODS):
                 if method not in table[key]:
@@ -374,25 +375,32 @@ def plot_per_element_bias_grid():
                 r = table[key][method]
                 beta_b = r.get('beta_bias', [])
                 gamma_b = r.get('gamma_bias', [])
-                biases = list(beta_b) + list(gamma_b)
+                biases = np.array(list(beta_b) + list(gamma_b))
                 if len(biases) != n_params:
                     continue
-                offset = (i - n_methods / 2 + 0.5) * bar_width
-                ax.bar(x + offset, biases, bar_width * 0.9,
-                       color=METHOD_COLORS[method],
-                       label=method if (row_idx == 0 and col_idx == 0) else "",
-                       edgecolor='white', linewidth=0.3, alpha=0.8)
+                offset = (i - (n_methods - 1) / 2) * offset_step
+                ax.errorbar(
+                    biases, y_base + offset,
+                    xerr=None,
+                    fmt='x', markersize=7, markeredgewidth=2,
+                    color=METHOD_COLORS[method],
+                    label=method if (row_idx == 0 and col_idx == 0) else "",
+                    alpha=0.9,
+                )
 
-            ax.axhline(0, color='black', linewidth=0.8, linestyle='-')
-            ax.set_xticks(x)
-            ax.set_xticklabels(param_labels, fontsize=8)
-            ax.grid(axis='y', alpha=0.3, linestyle='--')
+            ax.axvline(0, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+            ax.set_yticks(y_base)
+            ax.set_yticklabels(param_labels, fontsize=9)
+            ax.invert_yaxis()
+            ax.grid(axis='x', alpha=0.3, linestyle='--')
 
             # Row/column labels
             ax.set_title(f'{outcome.capitalize()} / {g_type.capitalize()}',
                         fontsize=10, fontweight='bold')
             if col_idx == 0:
-                ax.set_ylabel('Bias', fontsize=10)
+                ax.set_ylabel('Parameter', fontsize=10)
+            if row_idx == 2:
+                ax.set_xlabel('Bias', fontsize=10)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncol=5,
@@ -401,6 +409,95 @@ def plot_per_element_bias_grid():
 
     plt.tight_layout()
     path = out_dir / "ablation_bias_elements_grid.png"
+    fig.savefig(path, dpi=200, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# ============================================================================
+# 7. g-Function Recovery Panels (4-way NeuralPLSI comparison)
+# ============================================================================
+import sys, warnings
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+warnings.filterwarnings("ignore")
+
+G_GRID = np.linspace(-3, 3, 500)
+
+# Ablation methods for g-function (NeuralPLSI only; PLSI has no g)
+ABLATION_METHODS = [
+    # (warmstart, initial, label, color)
+    (False, False, "NPLSI (random)", '#e74c3c'),
+    (True,  False, "NPLSI (ws)",     '#3498db'),
+    (False, True,  "NPLSI (init)",   '#2ecc71'),
+    (True,  True,  "NPLSI (ws+init)",'#9b59b6'),
+]
+
+
+def _get_true_g(x, g_fn):
+    """Evaluate the true g-function on a grid."""
+    from simulation import simulate_data
+    _, _, _, _, _, g_true = simulate_data(5, outcome="continuous", g_type=g_fn, seed=0)
+    return np.vectorize(g_true)(x)
+
+
+def _fit_and_get_g(outcome, g_type, seed, warmstart, initial, n=500):
+    """Fit one NeuralPLSI model and return estimated g-curve on G_GRID."""
+    from simulation import simulate_data
+    from models import NeuralPLSI
+    X, Z, y, _, _, _ = simulate_data(n, outcome=outcome, g_type=g_type, seed=seed)
+    model = NeuralPLSI(family=outcome, max_epoch=200, warmstart=warmstart, initial=initial)
+    model.fit(X, Z, y, random_state=seed)
+    return model.g_function(G_GRID)
+
+
+def plot_g_recovery_panel(n_reps=20, n=500):
+    """
+    3×3 grid: rows = g-function (linear, sigmoid, sfun),
+              cols = outcome   (continuous, binary, cox).
+    Each panel: true g (black dashed) + 4 NeuralPLSI ablation mean ± 2SD.
+    """
+    g_fns = ['linear', 'sigmoid', 'sfun']
+    outcomes_list = ['continuous', 'binary', 'cox']
+
+    fig, axes = plt.subplots(3, 3, figsize=(15, 13))
+    fig.suptitle(f"g-Function Recovery — Ablation (n={n}, {n_reps} reps)",
+                 fontsize=14, fontweight='bold')
+
+    for i, gfn in enumerate(g_fns):
+        g_truth = _get_true_g(G_GRID, gfn)
+        for j, oc in enumerate(outcomes_list):
+            ax = axes[i, j]
+            ax.plot(G_GRID, g_truth, 'k--', lw=2, label='True g', zorder=10)
+
+            for ws, init, label, color in ABLATION_METHODS:
+                g_curves = []
+                for rep in range(n_reps):
+                    seed = rep * 100
+                    try:
+                        g_est = _fit_and_get_g(oc, gfn, seed, ws, init, n)
+                        g_curves.append(g_est)
+                    except Exception as e:
+                        print(f"  SKIP {label}/{oc}/{gfn}/rep={rep}: {e}")
+                if len(g_curves) == 0:
+                    continue
+                gs = np.array(g_curves)
+                g_mean = gs.mean(axis=0)
+                g_sd = gs.std(axis=0)
+                ax.fill_between(G_GRID, g_mean - 2*g_sd, g_mean + 2*g_sd,
+                                color=color, alpha=0.10)
+                ax.plot(G_GRID, g_mean, color=color, lw=1.6, label=label)
+
+            ax.set_title(f"g={gfn}, y={oc}", fontsize=10)
+            ax.set_xlim(-3, 3)
+            ax.set_ylim(-4.5, 4.5)
+            if i == 0 and j == 0:
+                ax.legend(fontsize=7, loc='best')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    path = out_dir / "ablation_g_recovery.png"
     fig.savefig(path, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -424,5 +521,8 @@ if __name__ == "__main__":
 
     print("\n5. Per-element bias grid (3×3)...")
     plot_per_element_bias_grid()
+
+    print("\n6. g-Function recovery panel (3×3 — re-fits models)...")
+    plot_g_recovery_panel()
 
     print("\n✓ All ablation visualizations complete!")
