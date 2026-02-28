@@ -196,12 +196,13 @@ def main():
                 print(f"[{rep+1:4d}/{args.n_replicates}] ERROR for {mname}: {e}")
                 return None
 
-        # Execute replicates in parallel for the current model
-        print(f"--- Running {args.n_replicates} replicates for {mname} in parallel ---")
-        rep_results = Parallel(n_jobs=-1)(
-            delayed(_run_single_rep)(rep) for rep in range(args.n_replicates)
-        )
-        rep_results = [r for r in rep_results if r is not None]
+        # Execute replicates sequentially (model internals handle parallel bootstrapping)
+        print(f"--- Running {args.n_replicates} replicates for {mname} ---")
+        rep_results = []
+        for rep in range(args.n_replicates):
+            res = _run_single_rep(rep)
+            if res is not None:
+                rep_results.append(res)
         results[mname] = rep_results
 
     # Final save

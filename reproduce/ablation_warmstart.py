@@ -90,10 +90,11 @@ def main():
                             print(f"  SKIP NeuralPLSI/{outcome}/{g_type}/ws={ws}/init={init}/rep={rep}: {e}")
                             return None
 
-                    results = Parallel(n_jobs=-1)(
-                        delayed(_run_single_nplsi)(rep) for rep in range(args.n_reps)
-                    )
-                    results = [r for r in results if r is not None]
+                    results = []
+                    for rep in range(args.n_reps):
+                        res = _run_single_nplsi(rep)
+                        if res is not None:
+                            results.append(res)
 
                     if len(results) == 0:
                         continue
@@ -128,10 +129,11 @@ def main():
                         print(f"  SKIP PLSI/{outcome}/{g_type}/rep={rep}: {e}")
                         return None
                         
-                results = Parallel(n_jobs=-1)(
-                    delayed(_run_single_plsi)(rep) for rep in range(args.n_reps)
-                )
-                results = [r for r in results if r is not None]
+                results = []
+                for rep in range(args.n_reps):
+                    res = _run_single_plsi(rep)
+                    if res is not None:
+                        results.append(res)
 
                 if len(results) > 0:
                     betas = np.array([r[0] for r in results])
