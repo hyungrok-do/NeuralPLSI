@@ -162,7 +162,7 @@ def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
         first_layer.weight[0, 0] = scale
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, warmstart_state=None):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, warmstart_state=None):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
@@ -175,6 +175,7 @@ def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, l
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
         learning_rate=learning_rate, weight_decay=weight_decay,
+        weight_decay_beta=weight_decay_beta,
         grad_clip=grad_clip, random_state=seed
     )
 
@@ -205,7 +206,7 @@ class NeuralPLSI(_SummaryMixin):
     Supports continuous, binary, and time-to-event (Cox) outcomes.
     """
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
-                 learning_rate=1e-3, weight_decay=1e-4,
+                 learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='Tanh',
                  warmstart=True, initial=False):
@@ -215,6 +216,7 @@ class NeuralPLSI(_SummaryMixin):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.weight_decay_beta = weight_decay_beta
         self.hidden_units = hidden_units
         self.n_hidden_layers = n_hidden_layers
         self.grad_clip = grad_clip
@@ -250,13 +252,15 @@ class NeuralPLSI(_SummaryMixin):
         self.net = self._train(self.net, X, Z, y, self.family, self.device,
                                batch_size=self.batch_size, max_epoch=self.max_epoch,
                                learning_rate=self.learning_rate, weight_decay=self.weight_decay,
+                               weight_decay_beta=self.weight_decay_beta,
                                grad_clip=self.grad_clip, random_state=random_state)
         
         self._net_infer = self.net.eval()
 
     @staticmethod
     def _train(net, X, Z, y, family, device, batch_size=64, max_epoch=200,
-               learning_rate=1e-3, weight_decay=1e-4, grad_clip=1.0, random_state=0):
+               learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
+               grad_clip=1.0, random_state=0):
         X = np.asarray(X, dtype=np.float32)
         Z = np.asarray(Z, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32)
@@ -264,14 +268,14 @@ class NeuralPLSI(_SummaryMixin):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
 
         g_param_groups = [
-            {'params': net.x_input.parameters(), 'weight_decay': 0.},
+            {'params': net.x_input.parameters(), 'weight_decay': weight_decay_beta},
             {'params': net.g_network.parameters(), 'weight_decay': weight_decay},
         ]
         opt_g = torch.optim.AdamW(g_param_groups, lr=learning_rate)
         z_params = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
         if net.add_intercept:
             z_params.append({'params': [net.intercept], 'weight_decay': 0.})
-        opt_z = torch.optim.AdamW(z_params, lr=learning_rate * 10)
+        opt_z = torch.optim.AdamW(z_params, lr=learning_rate * 50)
 
         if family == 'continuous':
             loss_fn = nn.MSELoss()
@@ -443,6 +447,7 @@ class NeuralPLSI(_SummaryMixin):
         net = self._train(net, Xb, Zb, yb, self.family, self.device,
                           batch_size=self.batch_size, max_epoch=self.max_epoch,
                           learning_rate=self.learning_rate, weight_decay=self.weight_decay,
+                          weight_decay_beta=self.weight_decay_beta,
                           grad_clip=self.grad_clip, random_state=seed)
         beta = net.x_input.weight.detach().cpu().flatten().numpy()
         gamma = net.z_input.weight.detach().cpu().flatten().numpy()
@@ -495,6 +500,7 @@ class NeuralPLSI(_SummaryMixin):
                                        max_epoch=self.max_epoch,
                                        learning_rate=self.learning_rate,
                                        weight_decay=self.weight_decay,
+                                       weight_decay_beta=self.weight_decay_beta,
                                        grad_clip=self.grad_clip,
                                        hidden_units=self.hidden_units,
                                        n_hidden_layers=self.n_hidden_layers,

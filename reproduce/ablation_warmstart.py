@@ -12,6 +12,7 @@ import json
 import os, sys, warnings
 import numpy as np
 from time import perf_counter
+from joblib import Parallel, delayed
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -80,19 +81,28 @@ def main():
         for g_type in g_types:
             # --- NeuralPLSI ablation ---
             for ws, init in combos:
-                    betas, gammas, l2s, times = [], [], [], []
-                    for rep in range(args.n_reps):
+                    def _run_single_nplsi(rep):
                         seed = rep * 100
                         try:
                             b, g, g_est, g_fn, t = run_nplsi(outcome, g_type, seed, ws, init, args.n)
-                            betas.append(b); gammas.append(g)
-                            l2s.append(l2_norm_g(g_fn, g_est, G_GRID))
-                            times.append(t)
+                            return b, g, l2_norm_g(g_fn, g_est, G_GRID), t
                         except Exception as e:
                             print(f"  SKIP NeuralPLSI/{outcome}/{g_type}/ws={ws}/init={init}/rep={rep}: {e}")
-                    if len(betas) == 0:
+                            return None
+
+                    results = Parallel(n_jobs=-1)(
+                        delayed(_run_single_nplsi)(rep) for rep in range(args.n_reps)
+                    )
+                    results = [r for r in results if r is not None]
+
+                    if len(results) == 0:
                         continue
-                    betas = np.array(betas); gammas = np.array(gammas)
+                    
+                    betas = np.array([r[0] for r in results])
+                    gammas = np.array([r[1] for r in results])
+                    l2s = [r[2] for r in results]
+                    times = [r[3] for r in results]
+
                     mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
                     mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
                     mean_l2   = np.mean(l2s); mean_t = np.mean(times)
@@ -110,16 +120,24 @@ def main():
 
             # --- PLSI: ws=0 only (skip if running a specific combo) ---
             if args.ws is None and args.init is None:
-                betas, gammas, times = [], [], []
-                for rep in range(args.n_reps):
+                def _run_single_plsi(rep):
                     seed = rep * 100
                     try:
-                        b, g, t = run_plsi(outcome, g_type, seed, args.n)
-                        betas.append(b); gammas.append(g); times.append(t)
+                        return run_plsi(outcome, g_type, seed, args.n)
                     except Exception as e:
                         print(f"  SKIP PLSI/{outcome}/{g_type}/rep={rep}: {e}")
-                if len(betas) > 0:
-                    betas = np.array(betas); gammas = np.array(gammas)
+                        return None
+                        
+                results = Parallel(n_jobs=-1)(
+                    delayed(_run_single_plsi)(rep) for rep in range(args.n_reps)
+                )
+                results = [r for r in results if r is not None]
+
+                if len(results) > 0:
+                    betas = np.array([r[0] for r in results])
+                    gammas = np.array([r[1] for r in results])
+                    times = [r[2] for r in results]
+
                     mab_beta  = np.mean(np.abs(betas - TRUE_BETA))
                     mab_gamma = np.mean(np.abs(gammas - TRUE_GAMMA))
                     mean_t    = np.mean(times)

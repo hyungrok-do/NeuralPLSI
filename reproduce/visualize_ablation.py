@@ -18,10 +18,65 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 from pathlib import Path
 
+
+
 # ── Config ──────────────────────────────────────────────────────────────────
+import sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 data_dir = Path(__file__).parent / "output"
 out_dir  = Path(__file__).parent / "figures"
 out_dir.mkdir(exist_ok=True)
+
+# Imports for local simulation (for CIs and g-curves)
+import joblib
+from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
+from models import NeuralPLSI, SplinePLSI
+
+G_GRID = np.linspace(-3, 3, 500)
+
+def _worker_sim(outcome, g_type, seed, model_name, ws, init, n=500, return_g=False):
+    """Run a single simulation rep and return parameters (and optionally g-curve)."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        try:
+            data = simulate_data(n, outcome=outcome, g_type=g_type, seed=seed)
+            if data is None:
+                 return None
+            
+            X, Z, y, _, _, _ = data
+            
+            # Check for NaNs/Infs in data
+            if not np.isfinite(X).all() or not np.isfinite(Z).all():
+                 return None
+                 
+            if model_name == 'PLSI':
+                model = SplinePLSI(family=outcome)
+                model.fit(X, Z, y)
+                b_est = model.beta
+                g_est = model.gamma
+                g_curve = model.g_function(G_GRID) if return_g else None
+            else:
+                # NeuralPLSI
+                model = NeuralPLSI(family=outcome, max_epoch=200, warmstart=ws, initial=init)
+                model.fit(X, Z, y, random_state=seed)
+                b_est = model.beta
+                g_est = model.gamma
+                g_curve = model.g_function(G_GRID) if return_g else None
+            
+            # Discard non-finite results
+            if not np.isfinite(b_est).all() or not np.isfinite(g_est).all():
+                return None
+            if g_curve is not None and not np.isfinite(g_curve).all():
+                g_curve = None  # keep b/g estimates but drop bad g-curve
+            
+            return b_est, g_est, g_curve
+        except Exception as e:
+            return None
+
 
 # Load data
 files = sorted(data_dir.glob("ablation_init_*.json"))
@@ -337,77 +392,143 @@ def plot_avg_summary():
     print(f"  Saved: {path}")
 
 
+
+
 # ============================================================================
 # 6. PER-ELEMENT BIAS FOREST PLOT: all 9 scenarios in a 3×3 grid
 #    Parameters on y-axis, bias on x-axis, "X" markers at point estimate
 # ============================================================================
 
-def plot_per_element_bias_grid():
-    """3×3 grid of per-element bias forest plots (outcomes × g-functions)."""
-    fig, axes = plt.subplots(3, 3, figsize=(20, 14), sharey='row')
-    fig.suptitle('Per-Element Bias — All Scenarios',
-                 fontsize=15, fontweight='bold', y=0.99)
+def plot_per_element_bias_grid(n_reps=20, n=2000):
+    """
+    3×3 grid: rows = g-type, cols = outcome.
+    Plots bias for each element of Beta (8) and Gamma (3) with 95% CI.
+    Re-runs simulations locally to get variance.
+    """
+    rows_g = ['linear', 'sigmoid', 'sfun']
+    cols_outcome = ['continuous', 'binary', 'cox']
+    
+    # Define methods to run: (name, ws, init, label, color, marker)
+    # Markers: 'o' = no warmstart, 'D' = warmstart
+    # Colors:  random-start → warm reds, GLM-init → cool blues
+    methods_config = [
+        ('PLSI',       False, False, 'PLSI',            '#7f8c8d', 'o'),
+        ('NeuralPLSI', False, False, 'NPLSI\n(random)', '#e74c3c', 'o'),
+        ('NeuralPLSI', True,  False, 'NPLSI\n(ws)',     '#c0392b', 'D'),
+        ('NeuralPLSI', False, True,  'NPLSI\n(init)',   '#2980b9', 'o'),
+        ('NeuralPLSI', True,  True,  'NPLSI\n(ws+init)','#1a5276', 'D'),
+    ]
 
-    for row_idx, outcome in enumerate(OUTCOMES):
-        for col_idx, g_type in enumerate(G_TYPES):
+    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    fig.suptitle(f"Per-Element Bias (Mean ± 95% CI) — n={n}, {n_reps} reps", 
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    # Pre-calculate jobs
+    tasks = []
+    print(f"  Queueing {len(rows_g)*len(cols_outcome)*len(methods_config)*n_reps} simulations for Bias Grid...")
+    
+    # We will run them and organize results
+    # Use joblib to run all
+    # To parse results easily, we'll iterate and run standard loops, 
+    #   or just run per-panel to keep memory low and logic simple.
+    
+    for row_idx, g_type in enumerate(rows_g):
+        for col_idx, outcome in enumerate(cols_outcome):
             ax = axes[row_idx, col_idx]
-            key = (outcome, g_type)
-            if key not in table:
-                ax.set_visible(False)
-                continue
-
-            sample = list(table[key].values())[0]
-            p = len(sample.get('beta_bias', []))
-            q = len(sample.get('gamma_bias', []))
-            if p == 0 and q == 0:
-                ax.set_visible(False)
-                continue
-
-            param_labels = [f'β{i+1}' for i in range(p)] + [f'γ{i+1}' for i in range(q)]
-            n_params = len(param_labels)
-            n_methods = len(METHODS)
-            y_base = np.arange(n_params)
-            offset_step = 0.15
-
-            for i, method in enumerate(METHODS):
-                if method not in table[key]:
-                    continue
-                r = table[key][method]
-                beta_b = r.get('beta_bias', [])
-                gamma_b = r.get('gamma_bias', [])
-                biases = np.array(list(beta_b) + list(gamma_b))
-                if len(biases) != n_params:
-                    continue
-                offset = (i - (n_methods - 1) / 2) * offset_step
-                ax.errorbar(
-                    biases, y_base + offset,
-                    xerr=None,
-                    fmt='x', markersize=7, markeredgewidth=2,
-                    color=METHOD_COLORS[method],
-                    label=method if (row_idx == 0 and col_idx == 0) else "",
-                    alpha=0.9,
+            
+            # Param indices
+            p_beta = len(TRUE_BETA)
+            p_gamma = len(TRUE_GAMMA)
+            
+            # Y-positions
+            y_centers = np.arange(p_beta + p_gamma)
+            bar_height = 0.15
+            
+            # Plot reference line
+            ax.axvline(0, color='black', lw=0.8, alpha=0.5)
+            
+            # Run methods for this panel
+            for m_idx, (m_name, ws, init, label, color, mkr) in enumerate(methods_config):
+                
+                # Run parallel reps
+                results = joblib.Parallel(n_jobs=-1)(
+                    joblib.delayed(_worker_sim)(
+                        outcome, g_type, rep*100, m_name, ws, init, n, return_g=False
+                    ) for rep in range(n_reps)
                 )
+                
+                # Filter None
+                results = [r for r in results if r is not None]
+                if not results: continue
+                
+                betas = np.array([r[0] for r in results], dtype=float)
+                gammas = np.array([r[1] for r in results], dtype=float)
+                
+                # Compute bias stats (handled for NaNs)
+                # Count valid samples per parameter
+                n_valid_b = np.sum(np.isfinite(betas), axis=0)
+                n_valid_g = np.sum(np.isfinite(gammas), axis=0)
+                
+                # Avoid division by zero
+                n_valid_b[n_valid_b == 0] = 1
+                n_valid_g[n_valid_g == 0] = 1
+                
+                mean_b = np.nanmean(betas, axis=0) - TRUE_BETA
+                se_b   = np.nanstd(betas, axis=0) / np.sqrt(n_valid_b)
+                err_b  = 1.96 * se_b
+                
+                mean_g = np.nanmean(gammas, axis=0) - TRUE_GAMMA
+                se_g   = np.nanstd(gammas, axis=0) / np.sqrt(n_valid_g)
+                err_g  = 1.96 * se_g
+                
+                # Debug print for first panel to verify
+                # if row_idx==0 and col_idx==0:
+                #      print(f"    {m_name}: valid_b={n_valid_b.min()}-{n_valid_b.max()}, bias_b_range=[{np.nanmin(mean_b):.3f}, {np.nanmax(mean_b):.3f}]")
 
-            ax.axvline(0, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
-            ax.set_yticks(y_base)
-            ax.set_yticklabels(param_labels, fontsize=9)
-            ax.invert_yaxis()
-            ax.grid(axis='x', alpha=0.3, linestyle='--')
+                # Concatenate
+                means = np.concatenate([mean_b, mean_g])
+                errs  = np.concatenate([err_b, err_g])
+                
+                # Plot
+                offset = (m_idx - len(methods_config)/2) * bar_height
+                ys = y_centers + offset
+                
+                # Error bars first
+                ax.errorbar(means, ys, xerr=errs, fmt='none', 
+                            ecolor=color, elinewidth=1.0, capsize=2, alpha=0.6)
+                # Points
+                ax.scatter(means, ys, s=20, color=color, marker=mkr, 
+                           edgecolors='white', linewidths=0.3,
+                           label=label if (row_idx==0 and col_idx==0) else "",
+                           alpha=0.9, zorder=3)
 
-            # Row/column labels
-            ax.set_title(f'{outcome.capitalize()} / {g_type.capitalize()}',
-                        fontsize=10, fontweight='bold')
+            # Titles/Labels
+            if row_idx == 0:
+                ax.set_title(f"{outcome.capitalize()}\n({g_type})", fontsize=11)
+            else:
+                ax.set_title(f"{g_type}", fontsize=10)
+                
+            # Y-ticks
             if col_idx == 0:
-                ax.set_ylabel('Parameter', fontsize=10)
-            if row_idx == 2:
-                ax.set_xlabel('Bias', fontsize=10)
+                ytick_labels = [f"β{k+1}" for k in range(p_beta)] + [f"γ{k+1}" for k in range(p_gamma)]
+                ax.set_yticks(y_centers)
+                ax.set_yticklabels(ytick_labels, fontsize=8)
+            else:
+                ax.set_yticks([])
+                
+            # X-limit (relaxed, auto-scale by default, or wider)
+            # ax.set_xlim(-0.5, 0.5) # Let matplotlib auto-scale to show outliers
+            # Add grid
+            ax.grid(axis='x', linestyle=':', alpha=0.4)
 
+    # Legend
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncol=5,
-               bbox_to_anchor=(0.5, -0.01), fontsize=9,
-               frameon=True, fancybox=True, shadow=True)
+    # Deduplicate
+    by_label = dict(zip(labels, handles))
+    fig.legend(by_label.values(), by_label.keys(), loc='lower center', 
+               ncol=5, bbox_to_anchor=(0.5, 0.02), fontsize=9)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
     path = out_dir / "ablation_bias_elements_grid.png"
     fig.savefig(path, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
@@ -415,86 +536,75 @@ def plot_per_element_bias_grid():
 
 
 # ============================================================================
-# 7. g-Function Recovery Panels (4-way NeuralPLSI comparison)
+# 7. g-Function Recovery Panels (PLSI vs NPLSI ws+init)
 # ============================================================================
-import sys, warnings
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-warnings.filterwarnings("ignore")
-
-G_GRID = np.linspace(-3, 3, 500)
-
-# Ablation methods for g-function (NeuralPLSI only; PLSI has no g)
-ABLATION_METHODS = [
-    # (warmstart, initial, label, color)
-    (False, False, "NPLSI (random)", '#e74c3c'),
-    (True,  False, "NPLSI (ws)",     '#3498db'),
-    (False, True,  "NPLSI (init)",   '#2ecc71'),
-    (True,  True,  "NPLSI (ws+init)",'#9b59b6'),
-]
-
 
 def _get_true_g(x, g_fn):
     """Evaluate the true g-function on a grid."""
-    from simulation import simulate_data
     _, _, _, _, _, g_true = simulate_data(5, outcome="continuous", g_type=g_fn, seed=0)
     return np.vectorize(g_true)(x)
 
-
-def _fit_and_get_g(outcome, g_type, seed, warmstart, initial, n=500):
-    """Fit one NeuralPLSI model and return estimated g-curve on G_GRID."""
-    from simulation import simulate_data
-    from models import NeuralPLSI
-    X, Z, y, _, _, _ = simulate_data(n, outcome=outcome, g_type=g_type, seed=seed)
-    model = NeuralPLSI(family=outcome, max_epoch=200, warmstart=warmstart, initial=initial)
-    model.fit(X, Z, y, random_state=seed)
-    return model.g_function(G_GRID)
-
-
-def plot_g_recovery_panel(n_reps=20, n=500):
+def plot_g_recovery_panel(n_reps=20, n=2000):
     """
     3×3 grid: rows = g-function (linear, sigmoid, sfun),
               cols = outcome   (continuous, binary, cox).
-    Each panel: true g (black dashed) + 4 NeuralPLSI ablation mean ± 2SD.
+    Each panel: true g (black solid) + PLSI (orange) + NPLSI ws+init (blue).
+    g-curves are centered (mean-subtracted) to handle identifiability offsets.
     """
     g_fns = ['linear', 'sigmoid', 'sfun']
     outcomes_list = ['continuous', 'binary', 'cox']
 
-    fig, axes = plt.subplots(3, 3, figsize=(15, 13))
-    fig.suptitle(f"g-Function Recovery — Ablation (n={n}, {n_reps} reps)",
+    # Only PLSI and NPLSI (ws+init)
+    methods_g = [
+        # (model_name, ws, init, label, color, linestyle, fill_alpha)
+        ('PLSI',       False, False, 'PLSI (spline)',    '#e67e22', '--', 0.15),
+        ('NeuralPLSI', True,  True,  'NPLSI (ws+init)',  '#2980b9', '-',  0.15),
+    ]
+
+    fig, axes = plt.subplots(3, 3, figsize=(14, 12))
+    fig.suptitle(f"g-Function Recovery — PLSI vs NeuralPLSI (n={n}, {n_reps} reps)",
                  fontsize=14, fontweight='bold')
 
+    print(f"  Queueing simulations for g-Function Recovery (PLSI vs ws+init)...")
+
     for i, gfn in enumerate(g_fns):
-        g_truth = _get_true_g(G_GRID, gfn)
+        g_truth_raw = _get_true_g(G_GRID, gfn)
+        # Center the true g too (for consistent comparison)
+        g_truth = g_truth_raw - np.mean(g_truth_raw)
         for j, oc in enumerate(outcomes_list):
             ax = axes[i, j]
-            ax.plot(G_GRID, g_truth, 'k--', lw=2, label='True g', zorder=10)
+            # True g (centered)
+            ax.plot(G_GRID, g_truth, 'k-', lw=2.5, label='True g', zorder=10)
 
-            for ws, init, label, color in ABLATION_METHODS:
-                g_curves = []
-                for rep in range(n_reps):
-                    seed = rep * 100
-                    try:
-                        g_est = _fit_and_get_g(oc, gfn, seed, ws, init, n)
-                        g_curves.append(g_est)
-                    except Exception as e:
-                        print(f"  SKIP {label}/{oc}/{gfn}/rep={rep}: {e}")
-                if len(g_curves) == 0:
+            for m_name, ws, init, label, color, ls, fa in methods_g:
+                results = joblib.Parallel(n_jobs=-1)(
+                    joblib.delayed(_worker_sim)(
+                        oc, gfn, rep*100, m_name, ws, init, n, return_g=True
+                    ) for rep in range(n_reps)
+                )
+
+                g_curves = [r[2] for r in results if r is not None and r[2] is not None]
+                if not g_curves:
                     continue
-                gs = np.array(g_curves)
-                g_mean = gs.mean(axis=0)
-                g_sd = gs.std(axis=0)
-                ax.fill_between(G_GRID, g_mean - 2*g_sd, g_mean + 2*g_sd,
-                                color=color, alpha=0.10)
-                ax.plot(G_GRID, g_mean, color=color, lw=1.6, label=label)
 
-            ax.set_title(f"g={gfn}, y={oc}", fontsize=10)
+                # Center each g-curve (subtract its mean) for identifiability
+                gs = np.array(g_curves)
+                for k in range(gs.shape[0]):
+                    gs[k] -= np.nanmean(gs[k])
+
+                g_mean = np.nanmean(gs, axis=0)
+                g_sd   = np.nanstd(gs, axis=0)
+
+                ax.fill_between(G_GRID, g_mean - 2*g_sd, g_mean + 2*g_sd,
+                                color=color, alpha=fa)
+                ax.plot(G_GRID, g_mean, color=color, lw=2.0, ls=ls, label=label)
+
+            ax.set_title(f"g = {gfn},  y = {oc}", fontsize=10)
             ax.set_xlim(-3, 3)
             ax.set_ylim(-4.5, 4.5)
+            ax.grid(axis='both', linestyle=':', alpha=0.3)
             if i == 0 and j == 0:
-                ax.legend(fontsize=7, loc='best')
+                ax.legend(fontsize=8, loc='best')
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     path = out_dir / "ablation_g_recovery.png"

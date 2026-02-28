@@ -96,60 +96,79 @@ def _cox_nll(Xd_s, E_s, w, alpha, d):
     return nll + 0.5 * alpha * penalty
 
 
-def _cox_core(Xd_s, E_s, alpha, d):
-    """Newton-Raphson Cox solver with log-cumsum-exp and step damping."""
+def _cox_loss_and_grad(Xd_s, E_s, w, alpha, d):
+    """Compute penalized negative partial log-likelihood and its gradient."""
     n = Xd_s.shape[0]
-    w = np.zeros(d)
-    cur_loss = _cox_nll(Xd_s, E_s, w, alpha, d)
-    for _ in range(50):
-        risk = Xd_s @ w
-        for i in range(n):
-            if risk[i] > 30.0: risk[i] = 30.0
-            elif risk[i] < -30.0: risk[i] = -30.0
-        max_risk = risk[0]
-        for i in range(1, n):
-            if risk[i] > max_risk:
-                max_risk = risk[i]
-        shifted = np.empty(n)
-        for i in range(n):
-            shifted[i] = risk[i] - max_risk
-        exp_shifted = np.exp(shifted)
-        cum_exp = np.cumsum(exp_shifted)
-        ratio = exp_shifted / cum_exp
-        grad = Xd_s.T @ (E_s * (1.0 - ratio)) - alpha * w
-        gnorm = 0.0
-        for j in range(d):
-            gnorm += grad[j] * grad[j]
-        if gnorm < 1e-12:
-            break
-        diag_h = E_s * ratio * (1.0 - ratio)
-        H = -(Xd_s.T * diag_h) @ Xd_s
-        for j in range(d):
-            H[j, j] -= alpha
-        try:
-            step = np.linalg.solve(H, grad)
-        except Exception:
-            step = -0.01 * grad
-        lr = 1.0
-        for _ in range(8):
-            w_new = w - lr * step
-            new_loss = _cox_nll(Xd_s, E_s, w_new, alpha, d)
-            if new_loss < cur_loss + 1e-8:
-                break
-            lr *= 0.5
-        w = w - lr * step
-        new_loss = _cox_nll(Xd_s, E_s, w, alpha, d)
-        if abs(cur_loss - new_loss) < 1e-8:
-            cur_loss = new_loss
-            break
-        cur_loss = new_loss
-    return w, _cox_nll(Xd_s, E_s, w, alpha, d)
+    risk = Xd_s @ w
+    for i in range(n):
+        if risk[i] > 30.0: risk[i] = 30.0
+        elif risk[i] < -30.0: risk[i] = -30.0
+
+    max_risk = risk[0]
+    for i in range(1, n):
+        if risk[i] > max_risk:
+            max_risk = risk[i]
+
+    shifted = np.empty(n)
+    for i in range(n):
+        shifted[i] = risk[i] - max_risk
+
+    exp_shifted = np.exp(shifted)
+    
+    cur_sum = 0.0
+    cum_exp = np.empty(n)
+    for i in range(n):
+        cur_sum += exp_shifted[i]
+        cum_exp[i] = cur_sum
+
+    log_cum = np.empty(n)
+    for i in range(n):
+        log_cum[i] = np.log(cum_exp[i] + 1e-30) + max_risk
+
+    nll = 0.0
+    for i in range(n):
+        nll -= E_s[i] * (risk[i] - log_cum[i])
+
+    penalty = 0.0
+    for j in range(d):
+        penalty += w[j] * w[j]
+    nll += 0.5 * alpha * penalty
+
+    A = np.empty(n)
+    for i in range(n):
+        A[i] = E_s[i] / (cum_exp[i] + 1e-30)
+
+    B = np.empty(n)
+    B[n - 1] = A[n - 1]
+    for i in range(n - 2, -1, -1):
+        B[i] = B[i + 1] + A[i]
+
+    grad_risk = np.empty(n)
+    for i in range(n):
+        grad_risk[i] = exp_shifted[i] * B[i] - E_s[i]
+
+    grad_w = Xd_s.T @ grad_risk
+    for j in range(d):
+        grad_w[j] += alpha * w[j]
+
+    return nll, grad_w
+
+
+def _cox_core(Xd_s, E_s, alpha, d):
+    """L-BFGS Cox solver with exact gradient."""
+    def fun(w):
+        val, grad = _cox_loss_and_grad(Xd_s, E_s, w, alpha, d)
+        return float(val), grad.astype(np.float64)
+    
+    w0 = np.zeros(d)
+    res = opt.minimize(fun, w0, method='L-BFGS-B', jac=True, options={'maxiter': 500, 'ftol': 1e-6})
+    return res.x, res.fun
 
 
 if _HAVE_NUMBA:
     _irls_binary_core = njit(cache=True)(_irls_binary_core)
     _cox_nll = njit(cache=True)(_cox_nll)
-    _cox_core = njit(cache=True)(_cox_core)
+    _cox_loss_and_grad = njit(cache=True)(_cox_loss_and_grad)
 
 
 def _fast_binary_loss(Xd, y, alpha):

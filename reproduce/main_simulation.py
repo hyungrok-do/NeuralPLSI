@@ -19,6 +19,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from lifelines.utils import concordance_index
+from joblib import Parallel, delayed
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -125,78 +126,83 @@ def main():
     print(header)
     print("=" * len(header))
 
-    for rep in range(args.n_replicates):
-        seed = args.seed0 + rep
+    for mname in model_list:
+        def _run_single_rep(rep):
+            seed = args.seed0 + rep
+            try:
+                X, Z, y, _, _, _ = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist)
+                X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
-        X, Z, y, _, _, _ = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist)
-        X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
+                np.random.seed(seed)
 
-        for mname in model_list:
-            np.random.seed(seed)
+                if mname == 'NeuralPLSI':
+                    model = NeuralPLSI(family=outcome, activation=args.activation, warmstart=warmstart, initial=initial)
+                else:
+                    model = SplinePLSI(family=outcome)
 
-            if mname == 'NeuralPLSI':
-                model = NeuralPLSI(family=outcome, activation=args.activation, warmstart=warmstart, initial=initial)
-            else:
-                model = SplinePLSI(family=outcome)
+                # --- Fit ---
+                t0 = perf_counter()
+                model.fit(X_tr, Z_tr, y_tr)
+                time_fit = perf_counter() - t0
 
-            # --- Fit ---
-            t0 = perf_counter()
-            model.fit(X_tr, Z_tr, y_tr)
-            time_fit = perf_counter() - t0
+                # --- Point estimates ---
+                perf  = evaluate(model, X_te, Z_te, y_te, outcome)
+                g_est = model.g_function(g_grid).tolist()
 
-            # --- Point estimates ---
-            perf  = evaluate(model, X_te, Z_te, y_te, outcome)
-            g_est = model.g_function(g_grid).tolist()
+                entry = {
+                    'seed':           seed,
+                    'n':              n,
+                    'g_fn':           g_fn,
+                    'x_dist':         x_dist,
+                    'outcome':        outcome,
+                    'model':          mname,
+                    'performance':    perf,
+                    'beta_estimate':  model.beta.tolist(),
+                    'gamma_estimate': model.gamma.tolist(),
+                    'g_pred':         g_est,
+                    'time_fit':       round(time_fit, 4),
+                }
 
-            entry = {
-                'seed':           seed,
-                'n':              n,
-                'g_fn':           g_fn,
-                'x_dist':         x_dist,
-                'outcome':        outcome,
-                'model':          mname,
-                'performance':    perf,
-                'beta_estimate':  model.beta.tolist(),
-                'gamma_estimate': model.gamma.tolist(),
-                'g_pred':         g_est,
-                'time_fit':       round(time_fit, 4),
-            }
+                # --- Bootstrap inference ---
+                t0 = perf_counter()
+                boot = model.inference_bootstrap(
+                    X_tr, Z_tr, y_tr,
+                    n_samples=args.n_bootstrap,
+                    random_state=seed,
+                    ci=0.95,
+                    g_grid=g_grid,
+                )
+                time_boot = perf_counter() - t0
 
-            # --- Bootstrap inference (both models) ---
-            t0 = perf_counter()
-            boot = model.inference_bootstrap(
-                X_tr, Z_tr, y_tr,
-                n_samples=args.n_bootstrap,
-                random_state=seed,
-                ci=0.95,
-                g_grid=g_grid,
-            )
-            time_boot = perf_counter() - t0
+                entry['bootstrap_summary'] = to_json({
+                    k: boot[k] for k in ('beta_hat', 'beta_se', 'beta_lb', 'beta_ub',
+                                          'gamma_hat', 'gamma_se', 'gamma_lb', 'gamma_ub')
+                    if k in boot
+                })
+                entry['bootstrap_g'] = to_json({
+                    k: boot[k] for k in ('g_mean', 'g_se', 'g_lb', 'g_ub')
+                    if k in boot
+                })
+                entry['time_bootstrap'] = round(time_boot, 4)
+                
+                parts = [f"[{rep+1:4d}/{args.n_replicates}] {mname:12s}",
+                         f"perf={perf:.4f}",
+                         f"fit={time_fit:.2f}s",
+                         f"boot={time_boot:.2f}s"]
+                print(" | ".join(parts))
+                
+                return entry
+            except Exception as e:
+                print(f"[{rep+1:4d}/{args.n_replicates}] ERROR for {mname}: {e}")
+                return None
 
-            entry['bootstrap_summary'] = to_json({
-                k: boot[k] for k in ('beta_hat', 'beta_se', 'beta_lb', 'beta_ub',
-                                      'gamma_hat', 'gamma_se', 'gamma_lb', 'gamma_ub')
-                if k in boot
-            })
-            entry['bootstrap_g'] = to_json({
-                k: boot[k] for k in ('g_mean', 'g_se', 'g_lb', 'g_ub')
-                if k in boot
-            })
-            entry['time_bootstrap'] = round(time_boot, 4)
-
-            results[mname].append(entry)
-
-            # --- Log ---
-            parts = [f"[{rep+1:4d}/{args.n_replicates}] {mname:12s}",
-                     f"perf={perf:.4f}",
-                     f"fit={time_fit:.2f}s",
-                     f"boot={time_boot:.2f}s"]
-            print(" | ".join(parts))
-
-            # --- Checkpoint ---
-            if (rep + 1) % args.save_every == 0:
-                with open(out_paths[mname], 'w') as f:
-                    json.dump(results[mname], f)
+        # Execute replicates in parallel for the current model
+        print(f"--- Running {args.n_replicates} replicates for {mname} in parallel ---")
+        rep_results = Parallel(n_jobs=-1)(
+            delayed(_run_single_rep)(rep) for rep in range(args.n_replicates)
+        )
+        rep_results = [r for r in rep_results if r is not None]
+        results[mname] = rep_results
 
     # Final save
     for mname in model_list:
