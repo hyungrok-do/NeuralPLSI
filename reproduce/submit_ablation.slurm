@@ -6,7 +6,6 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --partition=compute
 
 # Note: Adjust the partition, memory, and cpvs-per-task to match your HPC environment.
 
