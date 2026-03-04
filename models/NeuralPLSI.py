@@ -118,10 +118,12 @@ def _glm_init_beta_and_g(X, Z, y, family):
             glm = LogisticRegression(max_iter=1000, penalty=None, solver='lbfgs')
             glm.fit(XZ, y.ravel())
             beta_init = glm.coef_[0][:p]
+            gamma_init = glm.coef_[0][p:]
         elif family == 'continuous':
             glm = LinearRegression()
             glm.fit(XZ, y.ravel())
             beta_init = glm.coef_[:p]
+            gamma_init = glm.coef_[p:]
         elif family == 'cox':
             import pandas as pd
             from lifelines import CoxPHFitter
@@ -133,12 +135,13 @@ def _glm_init_beta_and_g(X, Z, y, family):
             cph = CoxPHFitter(penalizer=0.01)
             cph.fit(df, duration_col='T', event_col='E')
             beta_init = cph.params_[cols_x].values
+            gamma_init = cph.params_[cols_z].values
         else:
             return None
         norm = np.linalg.norm(beta_init)
         if norm < 1e-8:
             return None
-        return (beta_init / norm).astype(np.float32), float(norm)
+        return (beta_init / norm).astype(np.float32), float(norm), gamma_init.astype(np.float32)
     except Exception:
         return None
 
@@ -152,10 +155,11 @@ def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
     result = _glm_init_beta_and_g(X, Z, y, family)
     if result is None:
         return
-    beta_dir, scale = result
+    beta_dir, scale, gamma_init = result
     with torch.no_grad():
         if not skip_beta:
             net.x_input.weight.copy_(torch.from_numpy(beta_dir).unsqueeze(0))
+        net.z_input.weight.copy_(torch.from_numpy(gamma_init).unsqueeze(0))
         first_layer = net.g_network[0]
         nn.init.zeros_(first_layer.weight)
         nn.init.zeros_(first_layer.bias)
@@ -349,6 +353,69 @@ class NeuralPLSI(_SummaryMixin):
 
             if sch_g(val_loss) and sch_z(val_loss):
                 break
+                
+        # --- Gamma Fine-Tuning Phase ---
+        # --- Gamma Fine-Tuning Phase ---
+        # Freeze X and g network to fit Z against residuals
+        for param in net.x_input.parameters():
+            param.requires_grad = False
+        for param in net.g_network.parameters():
+            param.requires_grad = False
+        
+        # MUST RE-INSTANTIATE GENERATOR FOR Z PARAMS
+        z_params_ft = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
+        if net.add_intercept:
+            z_params_ft.append({'params': [net.intercept], 'weight_decay': 0.})
+            
+        # Fresh optimizer for Z with 0 weight decay
+        opt_z_ft = torch.optim.AdamW(z_params_ft, lr=learning_rate * 10, weight_decay=0.0)
+        # Increase patience significantly for FT since it's only 3 parameters and convex
+        sch_z_ft = SchedulerCallback(opt_z_ft, patience=20)
+        
+        # Train for a fixed minimum of epochs or until convergence
+        ft_epochs = min(max_epoch, 50)
+        for epoch in range(ft_epochs):
+            net.train()
+            for bx, bz, by in tr_loader:
+                bx = bx.to(device)
+                bz = bz.to(device)
+                by = by.to(device)
+                opt_z_ft.zero_grad(set_to_none=True)
+                out = net(bx, bz)
+                if family == 'binary':
+                    loss = loss_fn(out, by.float().view_as(out))
+                elif family == 'cox':
+                    loss = loss_fn(out.view(-1), by)
+                else:
+                    loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
+                loss.backward()
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
+                opt_z_ft.step()
+                
+            net.eval(); val_loss = 0.0
+            with torch.inference_mode():
+                for bx, bz, by in val_loader:
+                    bx = bx.to(device)
+                    bz = bz.to(device)
+                    by = by.to(device)
+                    out = net(bx, bz)
+                    if family == 'binary':
+                        l = val_loss_fn(out, by.float().view_as(out))
+                    elif family == 'cox':
+                        l = val_loss_fn(out.view(-1), by)
+                    else:
+                        l = val_loss_fn(out.view(-1), by.view_as(out.view(-1)))
+                    val_loss += float(l.item())
+            if sch_z_ft(val_loss):
+                break
+                
+        # Unfreeze
+        for param in net.x_input.parameters():
+            param.requires_grad = True
+        for param in net.g_network.parameters():
+            param.requires_grad = True
+        # -------------------------------
         
         net.resolve_sign_ambiguity()
         return net
