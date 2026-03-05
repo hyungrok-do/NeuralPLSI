@@ -13,8 +13,8 @@ echo "Starting NeuralPLSI Ablation Grid Generation"
 date
 
 # Load necessary modules (adjust based on HPC environment)
-# module load python/3.10
-# source path/to/your/venv/bin/activate
+module load python/3.10 || module load miniconda3/4.6.14 || true
+pip install --user joblib pandas lifelines scikit-learn
 
 # Execute the python driver script
 python reproduce/run_ablation_grid.py
