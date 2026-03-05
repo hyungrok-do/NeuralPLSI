@@ -12,12 +12,17 @@
 echo "Starting NeuralPLSI Ablation Grid Generation"
 date
 
-# Load necessary modules (adjust based on HPC environment)
-module load python/3.10 || module load miniconda3/4.6.14 || true
-pip install --user joblib pandas lifelines scikit-learn
+# Load Singularity module
+source /etc/profile.d/modules.sh
+module load singularity/3.9.8 2>/dev/null || module load singularity/3.9.8_rhel9 2>/dev/null || module load singularity/3.11.5
 
-# Execute the python driver script
-python reproduce/run_ablation_grid.py
+SCRATCH=/gpfs/scratch/doh03
+cd $SCRATCH/NeuralPLSI
+
+# Execute the python driver script within the container
+singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
+    $SCRATCH/containers/nvidia-cuda12.9.sif \
+    /ext3/miniconda3/bin/python reproduce/run_ablation_grid.py
 
 echo "Ablation Grid complete."
 date
