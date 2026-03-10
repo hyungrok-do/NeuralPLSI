@@ -87,21 +87,21 @@ class HessianEngine:
         G = (G / m).detach()
 
         # 2. HVP function
-        def avg_loss():
-            L = 0.0
-            for bx, bz, by in self.dl:
-                bx = bx.to(self.device); bz = bz.to(self.device); by = by.to(self.device)
-                Lb = self._per_sample_losses(bx, bz, by, net).mean()
-                L = L + Lb * (bx.shape[0] / self.n)
-            return L
+        # Precompute grads for HVP to avoid recomputing forward/backward pass for L
+        L = 0.0
+        for bx, bz, by in self.dl:
+            bx = bx.to(self.device); bz = bz.to(self.device); by = by.to(self.device)
+            Lb = self._per_sample_losses(bx, bz, by, net).mean()
+            L = L + Lb * (bx.shape[0] / self.n)
+
+        # create_graph=True for 2nd derivative
+        grads = torch.autograd.grad(L, param_list, create_graph=True)
 
         def hvp(v_flat):
             v_parts = _split_like(v_flat)
-            net.zero_grad(set_to_none=True)
-            L = avg_loss()
-            # create_graph=True for 2nd derivative
-            grads = torch.autograd.grad(L, param_list, create_graph=True)
-            Hv_parts = torch.autograd.grad(grads, param_list, grad_outputs=v_parts, retain_graph=False)
+            # Use precomputed grads
+            # retain_graph=True is needed because grads graph is reused
+            Hv_parts = torch.autograd.grad(grads, param_list, grad_outputs=v_parts, retain_graph=True)
             Hv = _flatten(Hv_parts)
             return Hv + damping * v_flat
 
@@ -110,8 +110,32 @@ class HessianEngine:
         if build_explicit:
             H = torch.zeros((d, d), device=self.device)
             I = torch.eye(d, device=self.device)
-            for j in range(d):
-                H[:, j] = hvp(I[:, j])
+
+            # Try to use vmap for vectorized H construction (O(1) backward pass)
+            # Fallback to loop if vmap is not available
+            use_vmap = False
+            try:
+                if hasattr(torch, 'func') and hasattr(torch.func, 'vmap'):
+                    from torch.func import vmap
+                    use_vmap = True
+                elif hasattr(torch, 'vmap'):
+                    from torch import vmap
+                    use_vmap = True
+            except ImportError:
+                pass
+
+            if use_vmap:
+                try:
+                    # vmap over dim 0 of I (rows of I, which correspond to unit vectors e_j)
+                    # result is (d, d), where j-th row is hvp(e_j) = column j of H (since H symmetric)
+                    H = vmap(hvp)(I)
+                except Exception:
+                    # Fallback if vmap fails for some reason (e.g. some ops not supported)
+                    use_vmap = False
+
+            if not use_vmap:
+                for j in range(d):
+                    H[:, j] = hvp(I[:, j])
             
             # Robust inverse with Cholesky
             try:
