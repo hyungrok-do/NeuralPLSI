@@ -34,7 +34,7 @@ def _irls_binary_core(Xd, y, alpha, max_iter=25):
         mu = np.empty(n)
         for i in range(n):
             mu[i] = 1.0 / (1.0 + np.exp(-eta[i]))
-        s = mu * (1.0 - mu) + 1e-12
+        s = mu * (1.0 - mu) + 1e-6
         z = eta + (y - mu) / s
         XtSX = np.zeros((d, d))
         for i in range(n):
@@ -52,7 +52,7 @@ def _irls_binary_core(Xd, y, alpha, max_iter=25):
         for j in range(d):
             diff += (w_new[j] - w[j]) ** 2
         w = w_new
-        if diff < 1e-12:
+        if diff < 1e-6:
             break
     eta = Xd @ w
     nll = 0.0
@@ -61,7 +61,7 @@ def _irls_binary_core(Xd, y, alpha, max_iter=25):
         if e > 30.0: e = 30.0
         elif e < -30.0: e = -30.0
         p = 1.0 / (1.0 + np.exp(-e))
-        nll -= y[i] * np.log(p + 1e-9) + (1.0 - y[i]) * np.log(1.0 - p + 1e-9)
+        nll -= y[i] * np.log(p + 1e-6) + (1.0 - y[i]) * np.log(1.0 - p + 1e-6)
     penalty = 0.0
     for j in range(d):
         penalty += w[j] * w[j]
@@ -86,7 +86,7 @@ def _cox_nll(Xd_s, E_s, w, alpha, d):
     cum_exp = np.cumsum(exp_shifted)
     log_cum = np.empty(n)
     for i in range(n):
-        log_cum[i] = np.log(cum_exp[i] + 1e-30) + max_risk
+        log_cum[i] = np.log(cum_exp[i] + 1e-6) + max_risk
     nll = 0.0
     for i in range(n):
         nll -= E_s[i] * (risk[i] - log_cum[i])
@@ -123,7 +123,7 @@ def _cox_loss_and_grad(Xd_s, E_s, w, alpha, d):
 
     log_cum = np.empty(n)
     for i in range(n):
-        log_cum[i] = np.log(cum_exp[i] + 1e-30) + max_risk
+        log_cum[i] = np.log(cum_exp[i] + 1e-6) + max_risk
 
     nll = 0.0
     for i in range(n):
@@ -136,7 +136,7 @@ def _cox_loss_and_grad(Xd_s, E_s, w, alpha, d):
 
     A = np.empty(n)
     for i in range(n):
-        A[i] = E_s[i] / (cum_exp[i] + 1e-30)
+        A[i] = E_s[i] / (cum_exp[i] + 1e-6)
 
     B = np.empty(n)
     B[n - 1] = A[n - 1]
@@ -166,9 +166,9 @@ def _cox_core(Xd_s, E_s, alpha, d):
 
 
 if _HAVE_NUMBA:
-    _irls_binary_core = njit(cache=True)(_irls_binary_core)
-    _cox_nll = njit(cache=True)(_cox_nll)
-    _cox_loss_and_grad = njit(cache=True)(_cox_loss_and_grad)
+    _irls_binary_core = njit(cache=False)(_irls_binary_core)
+    _cox_nll = njit(cache=False)(_cox_nll)
+    _cox_loss_and_grad = njit(cache=False)(_cox_loss_and_grad)
 
 
 def _fast_binary_loss(Xd, y, alpha):
@@ -313,9 +313,9 @@ class SplinePLSI(_SummaryMixin):
                 if family == 'continuous':
                     val = _fast_ridge_loss(Xd, y, alpha)
                 elif family == 'binary':
-                    val = _fast_binary_loss(Xd, y, max(alpha, 1e-4))
+                    val = _fast_binary_loss(Xd, y, alpha)
                 elif family == 'cox':
-                    cox_pen = max(alpha, 0.1)
+                    cox_pen = alpha
                     # Xd is already sorted because X, Z, y are sorted in fit()
                     val = _fast_cox_loss(Xd, None, y[:, 1], cox_pen, sorted_data=True)
                 else:
@@ -375,11 +375,11 @@ class SplinePLSI(_SummaryMixin):
                 spline_new = coef[Z.shape[1]:]
 
             elif self.family == 'binary':
-                C_val = min(1.0 / max(self.alpha, 1e-12), 100.0)
+                C_val = min(1.0 / (self.alpha + 1e-12), 100.0)
                 model = LogisticRegression(penalty='l2', C=C_val, fit_intercept=False,
                                            solver='lbfgs', max_iter=500).fit(Xd, y)
                 p = model.predict_proba(Xd)[:, 1]
-                eps = 1e-9
+                eps = 1e-6
                 loss = float(-np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps)))
                 coef = model.coef_[0]
                 gamma_new = coef[:Z.shape[1]]
@@ -387,7 +387,7 @@ class SplinePLSI(_SummaryMixin):
 
             elif self.family == 'cox':
                 # Xd, y are already sorted
-                cox_pen = max(self.alpha, 0.1)
+                cox_pen = self.alpha
                 w, loss = _fast_cox_fit(Xd, None, y[:, 1], cox_pen, sorted_data=True)
                 gamma_new = w[:Z.shape[1]]
                 spline_new = w[Z.shape[1]:]
@@ -561,12 +561,12 @@ if _HAVE_NUMBA:
     raw_bsm = _raw(SplinePLSI._bspline_basis_matrix)
     raw_sig = _raw(SplinePLSI._sigmoid)
 
-    _jit_mkv = njit(cache=True)(raw_mkv)
-    _jit_nb  = njit(cache=True)(raw_nb)
-    _jit_bsm = njit(cache=True)(raw_bsm)
-    _jit_sig = njit(cache=True)(raw_sig)
+    _jit_mkv = njit(cache=False)(raw_mkv)
+    _jit_nb  = njit(cache=False)(raw_nb)
+    _jit_bsm = njit(cache=False)(raw_bsm)
+    _jit_sig = njit(cache=False)(raw_sig)
 
-    @njit(cache=True)
+    @njit(cache=False)
     def _jit_lin(X, Z, beta, gamma, spline_coeffs, t, degree):
         eta = X @ beta
         B = _jit_bsm(eta, t, degree)
