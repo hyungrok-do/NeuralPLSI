@@ -217,8 +217,16 @@ class SplinePLSI(_SummaryMixin):
     @staticmethod
     def _make_knot_vector(eta, num_knots, degree):
         eta_sorted = np.sort(eta.astype(np.float64))
-        idx = np.linspace(0, eta_sorted.size - 1, num_knots).astype(np.int64)
-        knots = eta_sorted[idx]
+        n = eta_sorted.size
+        idx_min = max(0, int(0.01 * n))
+        idx_max = min(n - 1, int(0.99 * n))
+        eta_min = eta_sorted[idx_min]
+        eta_max = eta_sorted[idx_max]
+        if eta_max - eta_min < 1e-3:
+            eta_min = eta_sorted[0]
+            eta_max = eta_sorted[-1]
+        
+        knots = np.linspace(eta_min, eta_max, num_knots)
         t = np.empty(num_knots + 2 * degree, dtype=np.float64)
         for i in range(degree):
             t[i] = knots[0]
