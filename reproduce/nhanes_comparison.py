@@ -216,8 +216,15 @@ if np.dot(m_spline.beta, beta_n) < 0:
 
 # --- 4. Visualizations ---
 # Plot 1: g(x)
-fig1 = plt.figure(figsize=(8, 6))
+fig1 = plt.figure(figsize=(6, 6))
 ax1 = fig1.add_subplot(111)
+
+# Calculate NeuralPLSI partial residuals
+eta_n = x @ beta_n
+res_n = y - z @ gamma_n
+
+# Plot partial residuals as open gray circles
+ax1.scatter(eta_n, res_n, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
 
 # Neural
 ax1.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI (Bootstrap)', linewidth=2)
@@ -227,8 +234,9 @@ ax1.fill_between(g_grid, g_lb_n, g_ub_n, color='#d62728', alpha=0.2)
 ax1.plot(g_grid, g_mean_s, color='#1f77b4', label='SplinePLSI (Bootstrap)', linewidth=2, linestyle='--')
 ax1.fill_between(g_grid, g_lb_s, g_ub_s, color='#1f77b4', alpha=0.2)
 
+ax1.set_xlim(-2, 4)
 ax1.set_xlabel(r'Linear Predictor $\eta = X\beta$', fontsize=14)
-ax1.set_ylabel(r'Link Function $\hat{g}(\eta)$', fontsize=14)
+ax1.set_ylabel(r'Partial Residuals $Y - Z\gamma$', fontsize=14)
 ax1.set_title(r'Estimated Non-linear Link Function $g(\cdot)$', fontsize=16)
 ax1.legend(loc='upper left', frameon=True, fontsize=12)
 ax1.grid(True, linestyle=':', alpha=0.6)
