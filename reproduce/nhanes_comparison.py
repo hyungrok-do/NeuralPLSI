@@ -162,25 +162,20 @@ boot_time = time.time() - t0
 print(f"SplinePLSI Bootstrap Time: {boot_time:.2f}s")
 
 # Extract Spline Results (Apply sign flip if needed)
-# SplinePLSI stores samples in local variables inside inference_bootstrap, but we need to modify 
-# the class to store samples or access them. Currently it stores beta_se/lb/ub as attributes.
-# But for plotting I might want the raw samples? No, let's use the stored SE/CI.
 
 # Check alignment again on the fitted beta
 beta_s = m_spline.beta
+beta_ci_s = np.column_stack([m_spline.beta_lb, m_spline.beta_ub])
+
 if np.dot(beta_s, beta_n) < 0:
     print("Detected sign flip between models. Flipping SplinePLSI results for visualization.")
     # Flip beta
     beta_s = -beta_s
-    # Flip g function (since g(-u) approx -g(u) for odd functions, or just flip x-axis)
-    # Actually, PLSI model is E[Y] = g(X'b) + Z'g. If b -> -b, then X'(-b) = -(X'b). 
-    # The g function must adapt. g_new(u) = g_old(-u).
-    # This is tricky for the plots.
-    # Let's rely on the fact that SplinePLSI optimization might find the same mode if initialized similarly?
-    # No, we initialized randomly.
-    
-    # Simple fix: If correlation is negative, flip beta and reverse g_grid interpretation?
-    # Let's just plot as is and note if they are flipped.
+    # Flip CI bounds
+    beta_ci_s_flipped = np.zeros_like(beta_ci_s)
+    beta_ci_s_flipped[:, 0] = -beta_ci_s[:, 1]
+    beta_ci_s_flipped[:, 1] = -beta_ci_s[:, 0]
+    beta_ci_s = beta_ci_s_flipped
     pass
 
 gamma_s = m_spline.gamma
@@ -192,7 +187,6 @@ gamma_s = m_spline.gamma
 # Let's check SplinePLSI attributes.
 
 beta_se_s = m_spline.beta_se
-beta_ci_s = np.column_stack([m_spline.beta_lb, m_spline.beta_ub])
 
 gamma_se_s = m_spline.gamma_se
 gamma_ci_s = np.column_stack([m_spline.gamma_lb, m_spline.gamma_ub])

@@ -276,7 +276,7 @@ class NeuralPLSI(_SummaryMixin):
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
 
         g_param_groups = [
-            {'params': net.x_input.parameters(), 'weight_decay': 0.0},
+            {'params': net.x_input.parameters(), 'weight_decay': weight_decay_beta},
             {'params': net.g_network.parameters(), 'weight_decay': weight_decay},
         ]
         opt_g = torch.optim.AdamW(g_param_groups, lr=learning_rate)
