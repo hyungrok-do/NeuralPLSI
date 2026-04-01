@@ -31,8 +31,6 @@ nhanes["RACE"] = nhanes["race"].map(race_map).astype("category")
 
 exposure_cols = nhanes.columns[2:24].tolist()
 
-no_log_name = "a5.Retinol"
-
 df = nhanes.copy()
 
 def zscore(s: pd.Series) -> pd.Series:
@@ -46,12 +44,9 @@ def zscore(s: pd.Series) -> pd.Series:
 
 for col in exposure_cols:
     new_col = f"normed_{col}"
-    if col == no_log_name:
-        df[new_col] = zscore(df[col].astype(float))
-    else:
-        vals = pd.to_numeric(df[col], errors="coerce")
-        vals = vals.where(vals > 0, np.nan)
-        df[new_col] = zscore(np.log(vals))
+    vals = pd.to_numeric(df[col], errors="coerce")
+    vals = vals.where(vals > 0, np.nan)
+    df[new_col] = zscore(np.log(vals))
 
 normed_exposure_cols = [f"normed_{c}" for c in exposure_cols]
 
@@ -69,16 +64,7 @@ covariates = ["age", "sex", "race1", "race2", "race3", "race4"]
 y_name = "normed_triglyceride"
 y = df[y_name].values
 
-exposures_pick = [
-    "normed_a7.a.Tocopherol",
-    "normed_a6.g.tocopherol",
-    "normed_a4.Retinyl.stearate",
-    "normed_a5.Retinol",
-    "normed_a20.3.3.4.4.5.pncb",
-    "normed_a17.PCB194",
-    "normed_a22.2.3.4.6.7.8.hxcdf",
-    "normed_a1.trans.b.carotene"
-]
+exposures_pick = normed_exposure_cols
 
 x = df[exposures_pick].copy().values
 
