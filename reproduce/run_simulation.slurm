@@ -2,8 +2,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --time=2-00:00:00
-#SBATCH --partition=cpu_medium
+#SBATCH --time=12:00:00
+#SBATCH --partition=cpu_short
 #SBATCH --mem=32GB
 #SBATCH --job-name=NPLSI
 #SBATCH --output=logs/simulation_%03a.log
