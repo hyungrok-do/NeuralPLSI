@@ -217,16 +217,30 @@ class SplinePLSI(_SummaryMixin):
     @staticmethod
     def _make_knot_vector(eta, num_knots, degree):
         eta_sorted = np.sort(eta.astype(np.float64))
-        n = eta_sorted.size
-        idx_min = max(0, int(0.01 * n))
-        idx_max = min(n - 1, int(0.99 * n))
-        eta_min = eta_sorted[idx_min]
-        eta_max = eta_sorted[idx_max]
+        
+        # As per PLSI literature (e.g., Wang et al.), knots are typically placed at sample quantiles 
+        # to ensure enough data support in each basis interval, rather than equidistantly.
+        # We scatter them within the standard normal bounds of [-3, 3] or empirical limits.
+        eta_min = max(-3.0, eta_sorted[0])
+        eta_max = min(3.0, eta_sorted[-1])
+        
         if eta_max - eta_min < 1e-3:
             eta_min = eta_sorted[0]
             eta_max = eta_sorted[-1]
+            
+        # Filter data within bounds for quantile calculation
+        eta_inner = eta_sorted[(eta_sorted >= eta_min) & (eta_sorted <= eta_max)]
+        if len(eta_inner) < num_knots:
+            eta_inner = eta_sorted
+            
+        # Place knots at empirical quantiles (non-equidistant)
+        idx = np.linspace(0, eta_inner.size - 1, num_knots).astype(np.int64)
+        knots = eta_inner[idx]
         
-        knots = np.linspace(eta_min, eta_max, num_knots)
+        # Enforce exact boundaries
+        knots[0] = eta_min
+        knots[-1] = eta_max
+        
         t = np.empty(num_knots + 2 * degree, dtype=np.float64)
         for i in range(degree):
             t[i] = knots[0]
