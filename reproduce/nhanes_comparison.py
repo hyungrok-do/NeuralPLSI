@@ -215,11 +215,9 @@ if np.dot(m_spline.beta, beta_n) < 0:
 
 
 # --- 4. Visualizations ---
-fig = plt.figure(figsize=(20, 10))
-gs = fig.add_gridspec(1, 2, width_ratios=[1, 1.2])
-
 # Plot 1: g(x)
-ax1 = fig.add_subplot(gs[0])
+fig1 = plt.figure(figsize=(8, 6))
+ax1 = fig1.add_subplot(111)
 
 # Neural
 ax1.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI (Bootstrap)', linewidth=2)
@@ -234,9 +232,12 @@ ax1.set_ylabel(r'Link Function $\hat{g}(\eta)$', fontsize=14)
 ax1.set_title(r'Estimated Non-linear Link Function $g(\cdot)$', fontsize=16)
 ax1.legend(loc='upper left', frameon=True, fontsize=12)
 ax1.grid(True, linestyle=':', alpha=0.6)
+fig1.tight_layout()
+fig1.savefig('output/nhanes_g_function.png', dpi=300, bbox_inches='tight')
 
 # Plot 2: Forest Plot (Coefficients)
-ax2 = fig.add_subplot(gs[1])
+fig2 = plt.figure(figsize=(10, 14))
+ax2 = fig2.add_subplot(111)
 
 # Combine Beta and Gamma for plotting
 # Neural
@@ -291,10 +292,11 @@ ax2.grid(True, axis='x', linestyle=':', alpha=0.6)
 # Adjust Z-covariate labels in plot
 # Since Z includes "Race" dummies, we should group them? No, individual coefs are fine.
 
-plt.tight_layout()
-out_file = 'output/nhanes_comparison.png'
-plt.savefig(out_file, dpi=300, bbox_inches='tight')
-print(f"Plot saved to {out_file}")
+fig2.tight_layout()
+out_file2 = 'output/nhanes_forest_plot.png'
+fig2.savefig(out_file2, dpi=300, bbox_inches='tight')
+print(f"Forest plot saved to {out_file2}")
+print("g-function plot saved to output/nhanes_g_function.png")
 
 # Save CSV results
 df_res = pd.DataFrame({
