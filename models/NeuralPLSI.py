@@ -42,7 +42,7 @@ class CoxCCLoss(nn.Module):
         return -(r - log_cumsum_h).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
-    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='ELU'):
+    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='Tanh'):
         super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, n_classes, bias=False)
@@ -166,15 +166,19 @@ def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
         first_layer.weight[0, 0] = scale
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='ELU', initial=False):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', initial=False, warmstart=True, warmstart_state=None):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
 
     torch.manual_seed(seed)
     net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
-    if initial:
+    
+    if warmstart and warmstart_state is not None:
+        net_b.load_state_dict(warmstart_state)
+    elif initial:
         _apply_glm_init(net_b, Xb, Zb, yb, family)
+        
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
@@ -212,8 +216,8 @@ class NeuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
-                 num_workers=0, add_intercept=False, activation='ELU',
-                 initial=False):
+                 num_workers=0, add_intercept=False, activation='Tanh',
+                 initial=False, warmstart=True):
         self.family = family
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -232,6 +236,7 @@ class NeuralPLSI(_SummaryMixin):
         self.num_workers = num_workers
         self.add_intercept = add_intercept
         self.activation = activation
+        self.warmstart = warmstart
         self.initial = initial
         self.net = None
         self._net_infer = None
@@ -557,7 +562,11 @@ class NeuralPLSI(_SummaryMixin):
         else:
             g_grid = None
 
-        # Bootstrap samples are initialized via self.initial (Naive vs GLM).
+        # Extract fitted model state dict for warmstart bootstrap
+        warmstart_state = None
+        if self.warmstart:
+            warmstart_state = {k: v.cpu().clone() for k, v in self.net.state_dict().items()}
+
         refit_func = functools.partial(_refit_nplsi,
                                        family=self.family,
                                        device_type=self.device.type,
@@ -573,7 +582,9 @@ class NeuralPLSI(_SummaryMixin):
                                        g_grid=g_grid,
                                        add_intercept=self.add_intercept,
                                        activation=self.activation,
-                                       initial=self.initial)
+                                       initial=self.initial,
+                                       warmstart=self.warmstart,
+                                       warmstart_state=warmstart_state)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):

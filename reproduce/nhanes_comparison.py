@@ -252,6 +252,17 @@ err_s_high = np.concatenate([beta_ci_s[:,1] - beta_s, gamma_ci_s[:,1] - gamma_s]
 
 # Names (exclude intercept for comparison)
 plot_names = np.concatenate([clean_exposure_names, clean_covariate_names])
+
+# Sort by NeuralPLSI absolute estimate for better visualization
+sort_idx = np.argsort(np.abs(est_n))[::-1]
+est_n = est_n[sort_idx]
+err_n_low = err_n_low[sort_idx]
+err_n_high = err_n_high[sort_idx]
+est_s = est_s[sort_idx]
+err_s_low = err_s_low[sort_idx]
+err_s_high = err_s_high[sort_idx]
+plot_names = plot_names[sort_idx]
+
 y_pos = np.arange(len(plot_names))
 
 height = 0.35
