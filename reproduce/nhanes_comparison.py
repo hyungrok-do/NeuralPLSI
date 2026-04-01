@@ -237,18 +237,18 @@ ax2 = fig.add_subplot(gs[1])
 # Neural
 est_n = np.concatenate([beta_n, gamma_n])
 err_n = np.concatenate([
-    (beta_n - beta_ci_n[:,0]).reshape(-1), (gamma_n - gamma_ci_n[:,0]).reshape(-1), # Lower error
-    (beta_ci_n[:,1] - beta_n).reshape(-1), (gamma_ci_n[:,1] - gamma_n).reshape(-1)  # Upper error
+    np.clip(beta_n - beta_ci_n[:,0], 0, None).reshape(-1), np.clip(gamma_n - gamma_ci_n[:,0], 0, None).reshape(-1), # Lower error
+    np.clip(beta_ci_n[:,1] - beta_n, 0, None).reshape(-1), np.clip(gamma_ci_n[:,1] - gamma_n, 0, None).reshape(-1)  # Upper error
 ]).reshape(2, -1)
 # Reshape for errorbar: (2, N) where row 0 is lower, row 1 is upper
 
-err_n_low = np.concatenate([beta_n - beta_ci_n[:,0], gamma_n - gamma_ci_n[:,0]])
-err_n_high = np.concatenate([beta_ci_n[:,1] - beta_n, gamma_ci_n[:,1] - gamma_n])
+err_n_low = np.concatenate([np.clip(beta_n - beta_ci_n[:,0], 0, None), np.clip(gamma_n - gamma_ci_n[:,0], 0, None)])
+err_n_high = np.concatenate([np.clip(beta_ci_n[:,1] - beta_n, 0, None), np.clip(gamma_ci_n[:,1] - gamma_n, 0, None)])
 
 # Spline
 est_s = np.concatenate([beta_s, gamma_s])
-err_s_low = np.concatenate([beta_s - beta_ci_s[:,0], gamma_s - gamma_ci_s[:,0]])
-err_s_high = np.concatenate([beta_ci_s[:,1] - beta_s, gamma_ci_s[:,1] - gamma_s])
+err_s_low = np.concatenate([np.clip(beta_s - beta_ci_s[:,0], 0, None), np.clip(gamma_s - gamma_ci_s[:,0], 0, None)])
+err_s_high = np.concatenate([np.clip(beta_ci_s[:,1] - beta_s, 0, None), np.clip(gamma_ci_s[:,1] - gamma_s, 0, None)])
 
 # Names (exclude intercept for comparison)
 plot_names = np.concatenate([clean_exposure_names, clean_covariate_names])
