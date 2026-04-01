@@ -215,8 +215,10 @@ class SplinePLSI(_SummaryMixin):
         self.knot_vector = None
 
     @staticmethod
-    def _make_knot_vector(eta_min, eta_max, num_knots, degree):
-        knots = np.linspace(eta_min, eta_max, num_knots)
+    def _make_knot_vector(eta, num_knots, degree):
+        eta_sorted = np.sort(eta.astype(np.float64))
+        idx = np.linspace(0, eta_sorted.size - 1, num_knots).astype(np.int64)
+        knots = eta_sorted[idx]
         t = np.empty(num_knots + 2 * degree, dtype=np.float64)
         for i in range(degree):
             t[i] = knots[0]
@@ -231,7 +233,7 @@ class SplinePLSI(_SummaryMixin):
 
     @staticmethod
     def _bspline_basis_matrix(eta, t, degree):
-        eta = eta.astype(np.float64)
+        eta = np.clip(eta.astype(np.float64), t[0], t[-1])
         t = t.astype(np.float64)
         n = eta.size
         k = degree
@@ -288,7 +290,7 @@ class SplinePLSI(_SummaryMixin):
         return beta_init / nrm
 
     def _construct_spline_basis(self, eta):
-        t = self._make_knot_vector(eta.min(), eta.max(), self.num_knots, self.spline_degree)
+        t = self._make_knot_vector(eta, self.num_knots, self.spline_degree)
         B = self._bspline_basis_matrix(eta, t, self.spline_degree)
         return B, t
 
@@ -305,7 +307,7 @@ class SplinePLSI(_SummaryMixin):
             eta = X @ beta
             if not np.all(np.isfinite(eta)):
                 return _BIG
-            t = SplinePLSI._make_knot_vector(eta.min(), eta.max(), num_knots, spline_degree)
+            t = SplinePLSI._make_knot_vector(eta, num_knots, spline_degree)
             B = SplinePLSI._bspline_basis_matrix(eta, t, spline_degree)
             Xd = np.hstack((Z, B))
 
@@ -433,7 +435,7 @@ class SplinePLSI(_SummaryMixin):
         t = self.knot_vector
         if t is None:
             eta = X @ self.beta
-            t = self._make_knot_vector(eta.min(), eta.max(), self.num_knots, self.spline_degree)
+            t = self._make_knot_vector(eta, self.num_knots, self.spline_degree)
         return self._linear_predict(X, Z, self.beta, self.gamma, self.spline_coeffs, t, self.spline_degree)
 
     def predict_proba(self, X, Z):
@@ -450,7 +452,7 @@ class SplinePLSI(_SummaryMixin):
         x = np.asarray(x, dtype=np.float64)
         t = self.knot_vector
         if t is None:
-            t = self._make_knot_vector(x.min(), x.max(), self.num_knots, self.spline_degree)
+            t = self._make_knot_vector(x, self.num_knots, self.spline_degree)
         B = self._bspline_basis_matrix(x, t, self.spline_degree)
         return B @ self.spline_coeffs
 
