@@ -130,9 +130,9 @@ gamma_se_n = (boot_res_n['gamma_ub'] - boot_res_n['gamma_lb']) / (2 * 1.96)
 beta_ci_n = np.column_stack([boot_res_n['beta_lb'], boot_res_n['beta_ub']])
 gamma_ci_n = np.column_stack([boot_res_n['gamma_lb'], boot_res_n['gamma_ub']])
 
-g_mean_n = boot_res_n['g_mean']
-g_lb_n = boot_res_n['g_lb']
-g_ub_n = boot_res_n['g_ub']
+g_mean_n = boot_res_n['g_mean'] + icept_n
+g_lb_n = boot_res_n['g_lb'] + icept_n
+g_ub_n = boot_res_n['g_ub'] + icept_n
 
 
 # --- 3. Fit SplinePLSI + Bootstrap ---
@@ -202,6 +202,11 @@ gamma_ci_s = np.column_stack([m_spline.gamma_lb, m_spline.gamma_ub])
 g_mean_s = m_spline.g_grid_mean
 g_lb_s = m_spline.g_grid_lb
 g_ub_s = m_spline.g_grid_ub
+
+if np.dot(m_spline.beta, beta_n) < 0:
+    g_mean_s = g_mean_s[::-1]
+    g_lb_s = g_lb_s[::-1]
+    g_ub_s = g_ub_s[::-1]
 
 # Handle Intercept for SplinePLSI
 # SplinePLSI absorbs intercept into the spline basis (or Y centering). 
