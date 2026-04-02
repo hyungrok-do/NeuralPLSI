@@ -112,7 +112,7 @@ fit_time_neural = time.time() - t0
 print(f"NeuralPLSI Fit Time: {fit_time_neural:.2f}s")
 
 # Bootstrap Inference
-g_grid = np.linspace(-3, 3, 200)
+g_grid = np.linspace(-2, 4, 200)
 n_boot_neural = 200
 t0 = time.time()
 boot_res_n = m_neural.inference_bootstrap(x, z, y, n_samples=n_boot_neural, g_grid=g_grid, n_jobs=-1)
@@ -216,30 +216,42 @@ if np.dot(m_spline.beta, beta_n) < 0:
 
 # --- 4. Visualizations ---
 # Plot 1: g(x)
-fig1 = plt.figure(figsize=(6, 6))
-ax1 = fig1.add_subplot(111)
+fig1, axes = plt.subplots(1, 2, figsize=(12, 6))
 
 # Calculate NeuralPLSI partial residuals
 eta_n = x @ beta_n
 res_n = y - z @ gamma_n
 
-# Plot partial residuals as open gray circles
-ax1.scatter(eta_n, res_n, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
+# Calculate PLSI partial residuals
+eta_s = x @ beta_s
+res_s = y - z @ gamma_s
 
-# Neural
-ax1.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI (Bootstrap)', linewidth=2)
-ax1.fill_between(g_grid, g_lb_n, g_ub_n, color='#d62728', alpha=0.2)
+# NeuralPLSI subplot
+ax1a = axes[0]
+ax1a.scatter(eta_n, res_n, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
+ax1a.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI', linewidth=2)
+ax1a.fill_between(g_grid, g_lb_n, g_ub_n, color='#d62728', alpha=0.2)
+ax1a.set_xlim(-2, 4)
+ax1a.set_xlabel('Index', fontsize=14)
+ax1a.set_ylabel('g(Index)', fontsize=14)
+ax1a.set_title('NeuralPLSI', fontsize=16)
+ax1a.legend(loc='upper left', frameon=True, fontsize=12)
+ax1a.grid(True, linestyle=':', alpha=0.6)
+ax1a.set_box_aspect(1)
 
-# Spline
-ax1.plot(g_grid, g_mean_s, color='#1f77b4', label='SplinePLSI (Bootstrap)', linewidth=2, linestyle='--')
-ax1.fill_between(g_grid, g_lb_s, g_ub_s, color='#1f77b4', alpha=0.2)
+# PLSI subplot
+ax1b = axes[1]
+ax1b.scatter(eta_s, res_s, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
+ax1b.plot(g_grid, g_mean_s, color='#1f77b4', label='PLSI', linewidth=2, linestyle='--')
+ax1b.fill_between(g_grid, g_lb_s, g_ub_s, color='#1f77b4', alpha=0.2)
+ax1b.set_xlim(-2, 4)
+ax1b.set_xlabel('Index', fontsize=14)
+ax1b.set_ylabel('g(Index)', fontsize=14)
+ax1b.set_title('PLSI', fontsize=16)
+ax1b.legend(loc='upper left', frameon=True, fontsize=12)
+ax1b.grid(True, linestyle=':', alpha=0.6)
+ax1b.set_box_aspect(1)
 
-ax1.set_xlim(-2, 4)
-ax1.set_xlabel(r'Linear Predictor $\eta = X\beta$', fontsize=14)
-ax1.set_ylabel(r'Partial Residuals $Y - Z\gamma$', fontsize=14)
-ax1.set_title(r'Estimated Non-linear Link Function $g(\cdot)$', fontsize=16)
-ax1.legend(loc='upper left', frameon=True, fontsize=12)
-ax1.grid(True, linestyle=':', alpha=0.6)
 fig1.tight_layout()
 fig1.savefig('output/nhanes_g_function.png', dpi=300, bbox_inches='tight')
 
@@ -309,7 +321,7 @@ print("g-function plot saved to output/nhanes_g_function.png")
 # Save CSV results
 df_res = pd.DataFrame({
     'Neural_Est': est_n, 'Neural_LB': est_n - err_n_low, 'Neural_UB': est_n + err_n_high,
-    'Spline_Est': est_s, 'Spline_LB': est_s - err_s_low, 'Spline_UB': est_s + err_s_high,
+    'PLSI_Est': est_s, 'PLSI_LB': est_s - err_s_low, 'PLSI_UB': est_s + err_s_high,
 }, index=plot_names)
 csv_file = 'output/nhanes_comparison.csv'
 df_res.to_csv(csv_file)
