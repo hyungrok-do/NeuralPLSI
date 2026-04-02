@@ -216,7 +216,6 @@ if np.dot(m_spline.beta, beta_n) < 0:
 
 # --- 4. Visualizations ---
 # Plot 1: g(x)
-fig1, axes = plt.subplots(1, 2, figsize=(12, 6))
 
 # Calculate NeuralPLSI partial residuals
 eta_n = x @ beta_n
@@ -226,8 +225,9 @@ res_n = y - z @ gamma_n
 eta_s = x @ beta_s
 res_s = y - z @ gamma_s
 
-# NeuralPLSI subplot
-ax1a = axes[0]
+# NeuralPLSI Figure
+fig1a = plt.figure(figsize=(6, 6))
+ax1a = fig1a.add_subplot(111)
 ax1a.scatter(eta_n, res_n, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
 ax1a.plot(g_grid, g_mean_n, color='#d62728', label='NeuralPLSI', linewidth=2)
 ax1a.fill_between(g_grid, g_lb_n, g_ub_n, color='#d62728', alpha=0.2)
@@ -238,9 +238,12 @@ ax1a.set_title('NeuralPLSI', fontsize=16)
 ax1a.legend(loc='upper left', frameon=True, fontsize=12)
 ax1a.grid(True, linestyle=':', alpha=0.6)
 ax1a.set_box_aspect(1)
+fig1a.tight_layout()
+fig1a.savefig('output/nhanes_g_function_neural.png', dpi=300, bbox_inches='tight')
 
-# PLSI subplot
-ax1b = axes[1]
+# PLSI Figure
+fig1b = plt.figure(figsize=(6, 6))
+ax1b = fig1b.add_subplot(111)
 ax1b.scatter(eta_s, res_s, facecolors='none', edgecolors='gray', alpha=0.5, label='Partial Residuals')
 ax1b.plot(g_grid, g_mean_s, color='#1f77b4', label='PLSI', linewidth=2, linestyle='--')
 ax1b.fill_between(g_grid, g_lb_s, g_ub_s, color='#1f77b4', alpha=0.2)
@@ -251,9 +254,8 @@ ax1b.set_title('PLSI', fontsize=16)
 ax1b.legend(loc='upper left', frameon=True, fontsize=12)
 ax1b.grid(True, linestyle=':', alpha=0.6)
 ax1b.set_box_aspect(1)
-
-fig1.tight_layout()
-fig1.savefig('output/nhanes_g_function.png', dpi=300, bbox_inches='tight')
+fig1b.tight_layout()
+fig1b.savefig('output/nhanes_g_function_plsi.png', dpi=300, bbox_inches='tight')
 
 # Plot 2: Forest Plot (Coefficients)
 fig2 = plt.figure(figsize=(10, 14))
@@ -316,7 +318,7 @@ fig2.tight_layout()
 out_file2 = 'output/nhanes_forest_plot.png'
 fig2.savefig(out_file2, dpi=300, bbox_inches='tight')
 print(f"Forest plot saved to {out_file2}")
-print("g-function plot saved to output/nhanes_g_function.png")
+print("g-function plots saved to output/nhanes_g_function_neural.png and output/nhanes_g_function_plsi.png")
 
 # Save CSV results
 df_res = pd.DataFrame({
