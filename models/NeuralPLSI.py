@@ -95,78 +95,7 @@ class _nPLSInet(nn.Module):
                     self.x_input.bias.data.mul_(-1.)
 
 
-def _glm_warmstart_beta(X, Z, y, family):
-    """Compute initial beta direction from GLM fit (direction only)."""
-    result = _glm_init_beta_and_g(X, Z, y, family)
-    if result is None:
-        return None
-    return result[0]
-
-
-def _glm_init_beta_and_g(X, Z, y, family):
-    """Compute both beta direction and effect scale from GLM fit.
-    
-    Returns (beta_direction, scale) where:
-    - beta_direction: normalized beta (float32)
-    - scale: magnitude of beta (for initializing g's first layer)
-    Returns None if GLM fails.
-    """
-    p = X.shape[1]
-    try:
-        XZ = np.hstack([X, Z])
-        if family == 'binary':
-            glm = LogisticRegression(max_iter=1000, penalty=None, solver='lbfgs')
-            glm.fit(XZ, y.ravel())
-            beta_init = glm.coef_[0][:p]
-            gamma_init = glm.coef_[0][p:]
-        elif family == 'continuous':
-            glm = LinearRegression()
-            glm.fit(XZ, y.ravel())
-            beta_init = glm.coef_[:p]
-            gamma_init = glm.coef_[p:]
-        elif family == 'cox':
-            import pandas as pd
-            from lifelines import CoxPHFitter
-            cols_x = [f'x{i}' for i in range(p)]
-            cols_z = [f'z{i}' for i in range(XZ.shape[1] - p)]
-            df = pd.DataFrame(XZ, columns=cols_x + cols_z)
-            df['T'] = y[:, 0]
-            df['E'] = y[:, 1]
-            cph = CoxPHFitter(penalizer=0.01)
-            cph.fit(df, duration_col='T', event_col='E')
-            beta_init = cph.params_[cols_x].values
-            gamma_init = cph.params_[cols_z].values
-        else:
-            return None
-        norm = np.linalg.norm(beta_init)
-        if norm < 1e-6:
-            return None
-        return (beta_init / norm).astype(np.float32), float(norm), gamma_init.astype(np.float32)
-    except Exception:
-        return None
-
-
-def _apply_glm_init(net, X, Z, y, family, skip_beta=False):
-    """Initialize net's beta and first g-layer from GLM solution.
-    
-    If skip_beta=True, only the g-layer is initialized (beta is left as-is,
-    e.g. because warmstart already set it).
-    """
-    result = _glm_init_beta_and_g(X, Z, y, family)
-    if result is None:
-        return
-    beta_dir, scale, gamma_init = result
-    with torch.no_grad():
-        if not skip_beta:
-            net.x_input.weight.copy_(torch.from_numpy(beta_dir).unsqueeze(0))
-        net.z_input.weight.copy_(torch.from_numpy(gamma_init).unsqueeze(0))
-        first_layer = net.g_network[0]
-        nn.init.zeros_(first_layer.weight)
-        nn.init.zeros_(first_layer.bias)
-        first_layer.weight[0, 0] = scale
-
-
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', initial=False, warmstart=True, warmstart_state=None):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, warmstart_state=None):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
@@ -176,8 +105,6 @@ def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, l
     
     if warmstart and warmstart_state is not None:
         net_b.load_state_dict(warmstart_state)
-    elif initial:
-        _apply_glm_init(net_b, Xb, Zb, yb, family)
         
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
@@ -254,16 +181,12 @@ class NeuralPLSI(_SummaryMixin):
         torch.manual_seed(random_state)
         p, q = X.shape[1], Z.shape[1]
 
-        self.net = _nPLSInet(p, q, hidden_units=self.hidden_units, 
+        self.net = _nPLSInet(p, q, hidden_units=self.hidden_units,
                             n_hidden_layers=self.n_hidden_layers,
-                            add_intercept=self.add_intercept, 
+                            add_intercept=self.add_intercept,
                             activation=self.activation).to(self.device)
 
-        if self.initial:
-            _apply_glm_init(self.net, X, Z, y, self.family)
-
-        self.net = self._train(self.net, X, Z, y, self.family, self.device,
-                               batch_size=self.batch_size, max_epoch=self.max_epoch,
+        self.net = self._train(self.net, X, Z, y, self.family, self.device,                               batch_size=self.batch_size, max_epoch=self.max_epoch,
                                learning_rate=self.learning_rate, weight_decay=self.weight_decay,
                                weight_decay_beta=self.weight_decay_beta,
                                grad_clip=self.grad_clip, random_state=random_state)
@@ -582,7 +505,6 @@ class NeuralPLSI(_SummaryMixin):
                                        g_grid=g_grid,
                                        add_intercept=self.add_intercept,
                                        activation=self.activation,
-                                       initial=self.initial,
                                        warmstart=self.warmstart,
                                        warmstart_state=warmstart_state)
 
@@ -625,5 +547,13 @@ class NeuralPLSI(_SummaryMixin):
             self.g_grid = g_grid.ravel(); self.g_grid_mean = g_mean; self.g_grid_se = g_se
             self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
             out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
+        return out
+
+lb": g_lb, "g_ub": g_ub})
+        return out
+
+return out
+
+lb": g_lb, "g_ub": g_ub})
         return out
 

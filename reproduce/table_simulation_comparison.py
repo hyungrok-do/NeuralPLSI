@@ -17,8 +17,15 @@ def true_g(x, g_fn):
     return np.vectorize(g_true)(x)
 
 def load_results():
-    data_dir = Path("output")
-    files = sorted([f for f in data_dir.glob("simulation+*.json") if f.is_file()])
+    data_dir = Path("outputs")
+    files = []
+    for f in data_dir.glob("simulation+*.json"):
+        try:
+            if f.is_file():
+                files.append(f)
+        except PermissionError:
+            files.append(f)
+    files = sorted(files)
     
     LIST_KEYS = [
         "seed", "performance", "beta_estimate", "gamma_estimate",
@@ -60,9 +67,14 @@ def load_results():
         else:
             rec["_outcome"] = Path(f).stem.split("+")[4] if len(Path(f).stem.split("+")) >= 5 else "?"
             
-        records.append(rec)
-    return records
+        if str(rec.get("_n", "")) != "1000":
+            continue
 
+        if "ws1" in Path(f).name:
+            continue
+
+        records.append(rec)
+        return records
 def compute_coverage(estimates, lb_list, ub_list, true_val):
     coverage = []
     for lb, ub in zip(lb_list, ub_list):
@@ -72,7 +84,7 @@ def compute_coverage(estimates, lb_list, ub_list, true_val):
     return np.mean(coverage, axis=0)
 
 def extract_inference(rec):
-    inf = rec.get("hessian_summary")
+    inf = rec.get("bootstrap_summary")
     if not inf or all(not s for s in inf):
         inf = rec.get("inference_summary")
     return inf if inf else []
@@ -91,7 +103,7 @@ def main():
         g_fn = rec["_g_fn"]
         x_dist = rec["_x_dist"]
         
-        if x_dist != "normal": continue # Only process normal for simplicity unless requested
+        if x_dist != "normal": continue
         
         beta_est = np.array([b for b in rec.get("beta_estimate", []) if b is not None])
         gamma_est = np.array([g for g in rec.get("gamma_estimate", []) if g is not None])
@@ -121,14 +133,26 @@ def main():
         beta_cov = compute_coverage(beta_est, beta_lb_list, beta_ub_list, TRUE_BETA)
         gamma_cov = compute_coverage(gamma_est, gamma_lb_list, gamma_ub_list, TRUE_GAMMA)
         
+        # Collect per-coefficient metrics
         for i in range(len(TRUE_BETA)):
             rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": f"beta_{i}", 
                          "bias": beta_bias[i], "sd": beta_sd[i], "se": beta_se[i], "cov": beta_cov[i]})
+        
+        # Squared bias for beta vector
+        sq_bias_beta = np.sum(beta_bias**2)
+        rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": "beta_SqBias",
+                     "bias": sq_bias_beta, "sd": np.nan, "se": np.nan, "cov": np.nan})
+
         for i in range(len(TRUE_GAMMA)):
             rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": f"gamma_{i}", 
                          "bias": gamma_bias[i], "sd": gamma_sd[i], "se": gamma_se[i], "cov": gamma_cov[i]})
-                         
-        # g L2 error
+        
+        # Squared bias for gamma vector
+        sq_bias_gamma = np.sum(gamma_bias**2)
+        rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": "gamma_SqBias",
+                     "bias": sq_bias_gamma, "sd": np.nan, "se": np.nan, "cov": np.nan})
+
+        # g MSE
         g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
         if g_preds:
             G = np.vstack(g_preds)
@@ -138,19 +162,19 @@ def main():
             if outcome == "cox":
                 g_true_vals = g_true_vals - g_true_vals[500]
                 
-            l2_errors = np.sqrt(np.mean((G - g_true_vals)**2, axis=1))
-            rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": "g_L2",
-                         "bias": np.nan, "sd": np.nan, "se": np.nan, "cov": np.nan,
-                         "g_l2": np.mean(l2_errors)})
+            mse_errors = np.mean((G - g_true_vals)**2, axis=1)
+            rows.append({"model": model, "outcome": outcome, "g_fn": g_fn, "param": "g_MSE",
+                         "bias": np.mean(mse_errors), "sd": np.std(mse_errors, ddof=1), "se": np.nan, "cov": np.nan})
 
     df = pd.DataFrame(rows)
-    # create table
     out_lines = []
     
-    # pivot table
     outcomes = ["continuous", "binary", "cox"]
     g_fns = ["linear", "sfun", "sigmoid"]
-    params = [f"beta_{i}" for i in range(2)] + [f"gamma_{i}" for i in range(3)] + ["g_L2"]
+    params = [f"beta_{i}" for i in range(len(TRUE_BETA))] + ["beta_SqBias"] + \
+             [f"gamma_{i}" for i in range(len(TRUE_GAMMA))] + ["gamma_SqBias", "g_MSE"]
+             
+    models = ["PLSI", "NeuralPLSI (Naive)", "NeuralPLSI (GLM)"]
     
     for outcome in outcomes:
         out_lines.append(f"\\section*{{Outcome: {outcome}}}")
@@ -158,39 +182,36 @@ def main():
         # tabular initialization
         out_lines.append("\\begin{table}[h]")
         out_lines.append("\\centering")
-        out_lines.append("\\begin{tabular}{ll|4c|4c}")
+        out_lines.append("\\begin{tabular}{ll|cccc|cccc|cccc}")
         out_lines.append("\\hline")
-        out_lines.append(" & & \\multicolumn{4}{c|}{PLSI} & \\multicolumn{4}{c}{NeuralPLSI} \\\\")
-        out_lines.append("$g$ fn & Param & Bias & SD & SE & Cov & Bias & SD & SE & Cov \\\\")
+        out_lines.append(" & & \\multicolumn{4}{c|}{PLSI} & \\multicolumn{4}{c|}{NeuralPLSI (Naive)} & \\multicolumn{4}{c}{NeuralPLSI (GLM)} \\\\")
+        out_lines.append("$g$ fn & Param & Bias & SD & SE & Cov & Bias & SD & SE & Cov & Bias & SD & SE & Cov \\\\")
         out_lines.append("\\hline")
         
         for g_fn in g_fns:
             for pi, param in enumerate(params):
-                row_str = f"{g_fn} & {param} & " if pi == 0 else f" & {param} & "
+                param_str = param.replace('_', '\\_')
+                row_str = f"{g_fn} & {param_str} & " if pi == 0 else f" & {param_str} & "
                 
-                # PLSI
-                p_df = df[(df["model"]=="PLSI") & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
-                if len(p_df) > 0:
-                    r = p_df.iloc[0]
-                    if param == "g_L2":
-                        plsi_str = f"{r['g_l2']:.3f} & - & - & - "
+                model_strs = []
+                for m in models:
+                    m_df = df[(df["model"]==m) & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
+                    if len(m_df) > 0:
+                        r = m_df.iloc[0]
+                        bias_str = f"{r['bias']:.3f}"
+                        if param.endswith("_SqBias") or param.endswith("_MSE"):
+                            sd_str = f"{r['sd']:.3f}" if pd.notna(r['sd']) else "-"
+                            m_str = f"{bias_str} & {sd_str} & - & - "
+                        else:
+                            sd_str = f"{r['sd']:.3f}"
+                            se_val = f"{r['se']:.3f}" if pd.notna(r['se']) else "-"
+                            cov_val = f"{r['cov']:.3f}" if pd.notna(r['cov']) else "-"
+                            m_str = f"{bias_str} & {sd_str} & {se_val} & {cov_val} "
                     else:
-                        plsi_str = f"{r['bias']:.3f} & {r['sd']:.3f} & {r['se']:.3f} & {r['cov']:.2f} "
-                else:
-                    plsi_str = "- & - & - & - "
+                        m_str = "- & - & - & - "
+                    model_strs.append(m_str)
                     
-                # NeuralPLSI
-                n_df = df[(df["model"]=="NeuralPLSI") & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
-                if len(n_df) > 0:
-                    r = n_df.iloc[0]
-                    if param == "g_L2":
-                        npl_str = f"{r['g_l2']:.3f} & - & - & - "
-                    else:
-                        npl_str = f"{r['bias']:.3f} & {r['sd']:.3f} & {r['se']:.3f} & {r['cov']:.2f} "
-                else:
-                    npl_str = "- & - & - & - "
-                    
-                row_str += plsi_str + "& " + npl_str + "\\\\"
+                row_str += "& ".join(model_strs) + "\\\\"
                 out_lines.append(row_str)
             out_lines.append("\\hline")
         
@@ -198,7 +219,7 @@ def main():
         out_lines.append("\\end{table}")
         out_lines.append("\n")
 
-    with open("logs/comparison_table.tex", "w") as f:
+    with open("outputs_logs/comparison_table.tex", "w") as f:
         f.write("\n".join(out_lines))
         
     print("Saved logs/comparison_table.tex")
@@ -207,43 +228,35 @@ def main():
     md_lines = []
     for outcome in outcomes:
         md_lines.append(f"### Outcome: {outcome}\n")
-        md_lines.append("| g fn | Param | PLSI Bias | PLSI SD | PLSI SE | PLSI Cov | NeuralPLSI Bias | NeuralPLSI SD | NeuralPLSI SE | NeuralPLSI Cov |")
-        md_lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        md_lines.append("| g fn | Param | PLSI Bias | PLSI SD | PLSI SE | PLSI Cov | NN (Naive) Bias | NN (Naive) SD | NN (Naive) SE | NN (Naive) Cov | NN (GLM) Bias | NN (GLM) SD | NN (GLM) SE | NN (GLM) Cov |")
+        md_lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         
         for g_fn in g_fns:
             for pi, param in enumerate(params):
                 g_str = g_fn if pi == 0 else ""
                 
-                # PLSI
-                p_df = df[(df["model"]=="PLSI") & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
-                if len(p_df) > 0:
-                    r = p_df.iloc[0]
-                    if param == "g_L2":
-                        plsi_str = f"{r['g_l2']:.3f} | - | - | - "
+                model_strs = []
+                for m in models:
+                    m_df = df[(df["model"]==m) & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
+                    if len(m_df) > 0:
+                        r = m_df.iloc[0]
+                        bias_str = f"{r['bias']:.3f}"
+                        if param.endswith("_SqBias") or param.endswith("_MSE"):
+                            sd_str = f"{r['sd']:.3f}" if pd.notna(r['sd']) else "-"
+                            m_str = f"{bias_str} | {sd_str} | - | -"
+                        else:
+                            sd_str = f"{r['sd']:.3f}"
+                            cov_val = f"{r['cov']:.3f}" if pd.notna(r['cov']) else "-"
+                            se_val = f"{r['se']:.3f}" if pd.notna(r['se']) else "-"
+                            m_str = f"{bias_str} | {sd_str} | {se_val} | {cov_val}"
                     else:
-                        cov_val = f"{r['cov']:.2f}" if pd.notna(r['cov']) else "-"
-                        se_val = f"{r['se']:.3f}" if pd.notna(r['se']) else "-"
-                        plsi_str = f"{r['bias']:.3f} | {r['sd']:.3f} | {se_val} | {cov_val} "
-                else:
-                    plsi_str = "- | - | - | - "
+                        m_str = "- | - | - | -"
+                    model_strs.append(m_str)
                     
-                # NeuralPLSI
-                n_df = df[(df["model"]=="NeuralPLSI") & (df["outcome"]==outcome) & (df["g_fn"]==g_fn) & (df["param"]==param)]
-                if len(n_df) > 0:
-                    r = n_df.iloc[0]
-                    if param == "g_L2":
-                        npl_str = f"{r['g_l2']:.3f} | - | - | - "
-                    else:
-                        cov_val = f"{r['cov']:.2f}" if pd.notna(r['cov']) else "-"
-                        se_val = f"{r['se']:.3f}" if pd.notna(r['se']) else "-"
-                        npl_str = f"{r['bias']:.3f} | {r['sd']:.3f} | {se_val} | {cov_val} "
-                else:
-                    npl_str = "- | - | - | - "
-                    
-                md_lines.append(f"| {g_str} | {param} | {plsi_str} | {npl_str} |")
+                md_lines.append(f"| {g_str} | {param} | " + " | ".join(model_strs) + " |")
         md_lines.append("\n")
         
-    with open("logs/comparison_table.md", "w") as f:
+    with open("outputs_logs/comparison_table.md", "w") as f:
         f.write("\n".join(md_lines))
         
     print("Saved logs/comparison_table.md")

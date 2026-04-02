@@ -28,10 +28,17 @@ plt.rcParams['savefig.dpi'] = 150
 # ============================================================================
 # Data Loading
 # ============================================================================
-data_dir = Path("output")
-out_dir = Path("logs")
+data_dir = Path("outputs")
+out_dir = Path("outputs_logs")
 out_dir.mkdir(exist_ok=True)
-files = sorted([f for f in data_dir.glob("simulation+*.json") if f.is_file()])
+files = []
+for f in data_dir.glob("simulation+*.json"):
+    try:
+        if f.is_file():
+            files.append(f)
+    except PermissionError:
+        files.append(f)
+files = sorted(files)
 
 if not files:
     raise FileNotFoundError("No simulation+*.json files found in output/")
@@ -49,7 +56,7 @@ def load_results():
     LIST_KEYS = [
         "seed", "performance", "beta_estimate", "gamma_estimate",
         "g_pred", "time_fit", "time_hessian", "time_bootstrap",
-        "hessian_summary", "hessian_g", "bootstrap_summary", "bootstrap_g",
+        "bootstrap_summary", "bootstrap_g", "bootstrap_summary", "bootstrap_g",
     ]
 
     records = []
@@ -60,6 +67,8 @@ def load_results():
         except (json.JSONDecodeError, ValueError) as e:
             print(f"  Skipping {f.name}: {e}")
             continue
+            
+
 
         if isinstance(raw, list):
             if len(raw) == 0:
@@ -77,7 +86,9 @@ def load_results():
         else:
             rec = raw
 
-        rec["_file"] = str(f)
+        if "ws1" in f.name:
+            continue
+
         rec["_model"] = rec.get("model", ["Unknown"])[0]
         rec["_n"] = str(rec.get("n", ["?"])[0])
         rec["_g_fn"] = rec.get("g_fn", ["?"])[0]
@@ -118,7 +129,7 @@ def extract_inference(rec, inf_type):
     """
     Extract inference summary from record.
     inf_type: 'hessian' or 'bootstrap'
-    Handles both old format (inference_summary) and new format (hessian_summary/bootstrap_summary).
+    Handles both old format (inference_summary) and new format (bootstrap_summary/bootstrap_summary).
     """
     # New format
     if f"{inf_type}_summary" in rec:
@@ -145,12 +156,41 @@ def compute_summaries(records):
         x_dist = rec["_x_dist"]
         n_reps = len(rec.get("seed", []))
         
-        beta_est = np.array([np.array(b) for b in rec.get("beta_estimate", [])])
-        gamma_est = np.array([np.array(g) for g in rec.get("gamma_estimate", [])])
+        beta_est = np.array([np.array(b) for b in rec.get("beta_est", rec.get("beta_estimate", [])) if b is not None])
+        gamma_est = np.array([np.array(g) for g in rec.get("gamma_est", rec.get("gamma_estimate", [])) if g is not None])
         
         if beta_est.size == 0 or gamma_est.size == 0:
             continue
-        
+            
+        # Support new direct metric format
+        if "beta_bias" in rec and len(rec["beta_bias"]) > 0:
+            beta_bias = np.array(rec["beta_bias"]).mean(axis=0)
+            gamma_bias = np.array(rec["gamma_bias"]).mean(axis=0)
+            beta_se_avg = np.array(rec["beta_se"]).mean(axis=0)
+            gamma_se_avg = np.array(rec["gamma_se"]).mean(axis=0)
+            beta_cov = np.array(rec["beta_cov"]).mean(axis=0)
+            gamma_cov = np.array(rec["gamma_cov"]).mean(axis=0)
+            beta_emp_sd = beta_est.std(axis=0, ddof=1)
+            gamma_emp_sd = gamma_est.std(axis=0, ddof=1)
+            
+            for i, (bias, emp_sd, se, cov) in enumerate(zip(beta_bias, beta_emp_sd, beta_se_avg, beta_cov)):
+                summaries.append({
+                    "model": model, "n": n, "g_fn": g_fn, "outcome": outcome, "x_dist": x_dist,
+                    "param": f"beta_{i}", "true_val": TRUE_BETA[i],
+                    "bias": bias, "emp_sd": emp_sd, "se": se, "coverage": cov,
+                    "n_reps": n_reps, "inference_type": "Bootstrap"
+                })
+            
+            for i, (bias, emp_sd, se, cov) in enumerate(zip(gamma_bias, gamma_emp_sd, gamma_se_avg, gamma_cov)):
+                summaries.append({
+                    "model": model, "n": n, "g_fn": g_fn, "outcome": outcome, "x_dist": x_dist,
+                    "param": f"gamma_{i}", "true_val": TRUE_GAMMA[i],
+                    "bias": bias, "emp_sd": emp_sd, "se": se, "coverage": cov,
+                    "n_reps": n_reps, "inference_type": "Bootstrap"
+                })
+            continue # Done with this record
+            
+        # Fallback for old format
         beta_bias = beta_est.mean(axis=0) - TRUE_BETA
         gamma_bias = gamma_est.mean(axis=0) - TRUE_GAMMA
         beta_emp_sd = beta_est.std(axis=0, ddof=1)
@@ -327,14 +367,18 @@ def plot_bias_bars(df):
                 for i, model in enumerate(models):
                     if model in pivot.columns:
                         offset = (i - len(models)/2 + 0.5) * width
-                        color = "steelblue" if model == "NeuralPLSI" else "coral"
+                        if model == "NeuralPLSI":
+                            color = "steelblue"
+                        else:
+                            color = "coral"
                         ax.bar(x + offset, pivot[model], width, label=model, color=color, alpha=0.8)
                 
                 ax.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
                 ax.set_xticks(x)
                 ax.set_xticklabels(pivot.index, rotation=45, ha='right')
                 ax.set_title(f"g_fn = {g_fn}")
-                ax.set_ylabel("Bias" if ax == axes[0] else "")
+                if ax == axes[0]:
+                    ax.set_ylabel("Empirical Bias\n(Mean Estimate - True)")
                 ax.legend()
             
             fig.suptitle(f"Parameter Bias: {outcome}, X~{x_dist}", fontsize=12, fontweight='bold')
@@ -344,70 +388,71 @@ def plot_bias_bars(df):
             plt.close()
             print(f"Saved: {fname}")
 
-plot_bias_bars(summary_df)
+# plot_bias_bars(summary_df)
 
 # ============================================================================
 # 4. SE Comparison: Hessian vs Bootstrap (for NeuralPLSI)
 # ============================================================================
-def plot_hessian_vs_bootstrap(df):
     """Compare Hessian vs Bootstrap SE for NeuralPLSI."""
     if df.empty:
         return
     
-    neural_df = df[df["model"] == "NeuralPLSI"].copy()
+    neural_df = df[df["model"].str.startswith("NeuralPLSI")].copy()
     if neural_df.empty:
         return
     
     beta_df = neural_df[neural_df["param"].str.startswith("beta")]
     
-    for outcome in beta_df["outcome"].unique():
-        for x_dist in beta_df["x_dist"].unique():
-            subset = beta_df[(beta_df["outcome"] == outcome) & (beta_df["x_dist"] == x_dist)]
-            if subset.empty:
-                continue
-            
-            g_fns = subset["g_fn"].unique()
-            
-            fig, axes = plt.subplots(1, len(g_fns), figsize=(5*len(g_fns), 5), sharey=True)
-            if len(g_fns) == 1:
-                axes = [axes]
-            
-            for ax, g_fn in zip(axes, g_fns):
-                g_subset = subset[subset["g_fn"] == g_fn]
-                
-                hess_data = g_subset[g_subset["inference_type"] == "Hessian"]
-                boot_data = g_subset[g_subset["inference_type"] == "Bootstrap"]
-                
-                if hess_data.empty or boot_data.empty:
-                    ax.text(0.5, 0.5, "Missing data", ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title(f"g_fn = {g_fn}")
+    for model in beta_df["model"].unique():
+        m_df = beta_df[beta_df["model"] == model]
+        for outcome in m_df["outcome"].unique():
+            for x_dist in m_df["x_dist"].unique():
+                subset = m_df[(m_df["outcome"] == outcome) & (m_df["x_dist"] == x_dist)]
+                if subset.empty:
                     continue
                 
-                params = hess_data["param"].unique()
-                x = np.arange(len(params))
-                width = 0.35
+                g_fns = subset["g_fn"].unique()
                 
-                hess_se = [hess_data[hess_data["param"] == p]["se"].values[0] for p in params]
-                boot_se = [boot_data[boot_data["param"] == p]["se"].values[0] if p in boot_data["param"].values else np.nan for p in params]
+                fig, axes = plt.subplots(1, len(g_fns), figsize=(5*len(g_fns), 5), sharey=True)
+                if len(g_fns) == 1:
+                    axes = [axes]
                 
-                ax.bar(x - width/2, hess_se, width, label="Hessian", color="steelblue", alpha=0.8)
-                ax.bar(x + width/2, boot_se, width, label="Bootstrap", color="coral", alpha=0.8)
+                for ax, g_fn in zip(axes, g_fns):
+                    g_subset = subset[subset["g_fn"] == g_fn]
+                    
+                    hess_data = g_subset[g_subset["inference_type"] == "Hessian"]
+                    boot_data = g_subset[g_subset["inference_type"] == "Bootstrap"]
+                    
+                    if hess_data.empty or boot_data.empty:
+                        ax.text(0.5, 0.5, "Missing data", ha='center', va='center', transform=ax.transAxes)
+                        ax.set_title(f"g_fn = {g_fn}")
+                        continue
+                    
+                    params = hess_data["param"].unique()
+                    x = np.arange(len(params))
+                    width = 0.35
+                    
+                    hess_se = [hess_data[hess_data["param"] == p]["se"].values[0] for p in params]
+                    boot_se = [boot_data[boot_data["param"] == p]["se"].values[0] if p in boot_data["param"].values else np.nan for p in params]
+                    
+                    ax.bar(x - width/2, hess_se, width, label="Hessian", color="steelblue", alpha=0.8)
+                    ax.bar(x + width/2, boot_se, width, label="Bootstrap", color="coral", alpha=0.8)
+                    
+                    ax.set_xticks(x)
+                    ax.set_xticklabels(params, rotation=45, ha='right')
+                    ax.set_title(f"g_fn = {g_fn}")
+                    if ax == axes[0]:
+                        ax.set_ylabel("Standard Error")
+                    ax.legend()
                 
-                ax.set_xticks(x)
-                ax.set_xticklabels(params, rotation=45, ha='right')
-                ax.set_title(f"g_fn = {g_fn}")
-                if ax == axes[0]:
-                    ax.set_ylabel("Standard Error")
-                ax.legend()
-            
-            fig.suptitle(f"NeuralPLSI: Hessian vs Bootstrap SE ({outcome}, X~{x_dist})", fontsize=12, fontweight='bold')
-            plt.tight_layout()
-            fname = f"bar_hess_vs_boot+{outcome}+{x_dist}.png"
-            plt.savefig(out_dir / fname)
-            plt.close()
-            print(f"Saved: {fname}")
+                fig.suptitle(f"{model}: Hessian vs Bootstrap SE ({outcome}, X~{x_dist})", fontsize=12, fontweight='bold')
+                plt.tight_layout()
+                model_safe = model.replace(" ", "_").replace("(", "").replace(")", "")
+                fname = f"bar_hess_vs_boot_{model_safe}+{outcome}+{x_dist}.png"
+                plt.savefig(out_dir / fname)
+                plt.close()
+                print(f"Saved: {fname}")
 
-plot_hessian_vs_bootstrap(summary_df)
 
 # ============================================================================
 # 5. Coverage Comparison: Hessian vs Bootstrap
@@ -437,7 +482,7 @@ def plot_coverage_comparison(df):
         
         combos = subset[["model", "inference_type"]].drop_duplicates().values.tolist()
         colors = {"NeuralPLSI": {"Hessian": "steelblue", "Bootstrap": "skyblue"},
-                  "PLSI": {"Hessian": "coral", "Bootstrap": "lightsalmon"}}
+                  "PLSI": {"Hessian": "darkorange", "Bootstrap": "coral"}}
         
         for i, (model, inf_type) in enumerate(combos):
             vals = []
@@ -464,7 +509,7 @@ def plot_coverage_comparison(df):
         plt.close()
         print(f"Saved: {fname}")
 
-plot_coverage_comparison(summary_df)
+# plot_coverage_comparison(summary_df)
 
 # ============================================================================
 # 6. Inference Time Comparison
@@ -479,17 +524,6 @@ def plot_inference_time(records):
         x_dist = rec["_x_dist"]
         
         # New format
-        if "time_hessian" in rec:
-            for t in rec.get("time_hessian", []):
-                if t is not None and t > 0:
-                    time_data.append({"model": model, "outcome": outcome, "g_fn": g_fn, 
-                                     "x_dist": x_dist, "inference_type": "Hessian", "time": t})
-        if "time_bootstrap" in rec:
-            for t in rec.get("time_bootstrap", []):
-                if t is not None and t > 0:
-                    time_data.append({"model": model, "outcome": outcome, "g_fn": g_fn, 
-                                     "x_dist": x_dist, "inference_type": "Bootstrap", "time": t})
-        # Old format fallback
         if "time_inference" in rec and "time_hessian" not in rec:
             inf_type = "Hessian" if model == "NeuralPLSI" else "Bootstrap"
             for t in rec.get("time_inference", []):
@@ -513,7 +547,7 @@ def plot_inference_time(records):
     plt.close()
     print("Saved: boxplot_inference_time.png")
 
-plot_inference_time(records)
+# plot_inference_time(records)
 
 # ============================================================================
 # 7. g-Function Recovery Plots (NeuralPLSI + PLSI overlay)
@@ -525,7 +559,7 @@ def plot_g_panels():
     x = np.linspace(-3, 3, 1000)
     
     outcomes = set(r["_outcome"] for r in records)
-    x_dists = set(r["_x_dist"] for r in records)
+    x_dists = ["normal"]  # Generate panels exclusively for normal x_dist
     
     for outcome in outcomes:
         for x_dist in x_dists:
@@ -537,17 +571,18 @@ def plot_g_panels():
                 ax.plot(x, g_true, color="black", lw=2, ls="--", label="True")
                 
                 # Plot NeuralPLSI
-                neural_recs = [r for r in records 
-                              if r["_model"] == "NeuralPLSI" 
-                              and r["_g_fn"] == g_fn 
-                              and r["_outcome"] == outcome 
-                              and r["_x_dist"] == x_dist]
-                
-                if neural_recs:
-                    rec = neural_recs[0]
+                nplsi_recs = [r for r in records 
+                                    if r["_model"] == "NeuralPLSI" 
+                                    and r["_g_fn"] == g_fn 
+                                    and r["_outcome"] == outcome 
+                                    and r["_x_dist"] == x_dist]
+                if nplsi_recs:
+                    rec = nplsi_recs[0]
                     g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
                     if g_preds:
                         G = np.vstack(g_preds)
+                        if outcome == "cox":
+                            G = G - G[:, 500:501]
                         mean = G.mean(axis=0)
                         lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
                         ax.fill_between(x, lb, ub, color="steelblue", alpha=0.2)
@@ -565,6 +600,9 @@ def plot_g_panels():
                     g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
                     if g_preds:
                         G = np.vstack(g_preds)
+                        if outcome == "cox":
+                            # Center g_pred at x=0 (index 500)
+                            G = G - G[:, 500:501]
                         mean = G.mean(axis=0)
                         lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
                         ax.fill_between(x, lb, ub, color="coral", alpha=0.2)
@@ -604,20 +642,18 @@ def plot_g_panels():
 plot_g_panels()
 
 # ============================================================================
-# 8. Hessian vs Bootstrap Detailed Comparison Table
-# ============================================================================
 def create_inference_comparison_table(df):
     """Create detailed comparison between Hessian and Bootstrap for NeuralPLSI."""
     if df.empty:
         return
     
-    neural_df = df[df["model"] == "NeuralPLSI"]
+    neural_df = df[df["model"].str.startswith("NeuralPLSI")]
     if neural_df.empty:
         return
     
     comparison_rows = []
     
-    for (g_fn, outcome, x_dist), grp in neural_df.groupby(["g_fn", "outcome", "x_dist"]):
+    for (model, g_fn, outcome, x_dist), grp in neural_df.groupby(["model", "g_fn", "outcome", "x_dist"]):
         hess = grp[grp["inference_type"] == "Hessian"]
         boot = grp[grp["inference_type"] == "Bootstrap"]
         
@@ -632,7 +668,7 @@ def create_inference_comparison_table(df):
             h_row, b_row = h_row.iloc[0], b_row.iloc[0]
             
             comparison_rows.append({
-                "g_fn": g_fn, "outcome": outcome, "x_dist": x_dist, "param": param,
+                "model": model, "g_fn": g_fn, "outcome": outcome, "x_dist": x_dist, "param": param,
                 "Hessian_SE": h_row["se"], "Bootstrap_SE": b_row["se"],
                 "Hessian_Coverage": h_row["coverage"], "Bootstrap_Coverage": b_row["coverage"],
                 "Emp_SD": h_row["emp_sd"], "Bias": h_row["bias"]
@@ -643,7 +679,7 @@ def create_inference_comparison_table(df):
         comp_df.to_csv(out_dir / "inference_comparison.csv", index=False)
         print("Saved: logs/inference_comparison.csv")
         
-        summary = comp_df.groupby(["g_fn", "outcome", "x_dist"]).agg({
+        summary = comp_df.groupby(["model", "g_fn", "outcome", "x_dist"]).agg({
             "Hessian_SE": "mean", "Bootstrap_SE": "mean",
             "Hessian_Coverage": "mean", "Bootstrap_Coverage": "mean",
             "Emp_SD": "mean"

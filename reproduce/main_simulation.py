@@ -98,8 +98,6 @@ def main():
     ap.add_argument('--seed0',          type=int,   default=0)
     ap.add_argument('--save_every',     type=int,   default=1)
     ap.add_argument('--out',            type=str,   default=None)
-    ap.add_argument('--initial',        type=int,   default=0, choices=[0, 1],
-                    help='GLM initial solution for NeuralPLSI beta+g (1=on, 0=off)')
     ap.add_argument('--g_grid_min',     type=float, default=-3.0)
     ap.add_argument('--g_grid_max',     type=float, default=3.0)
     ap.add_argument('--g_grid_n',       type=int,   default=1000)
@@ -111,14 +109,13 @@ def main():
     g_fn       = args.g_fn
     outcome    = args.outcome
     x_dist     = args.exposure_dist
-    initial    = bool(args.initial)
     g_grid     = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
 
     results     = {m: [] for m in model_list}
-    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist, initial) for m in model_list}
+    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist) for m in model_list}
 
     header = (f"Simulation: n={n}, g_fn={g_fn}, outcome={outcome}, "
-              f"x_dist={x_dist}, initial={initial}, models={model_list}")
+              f"x_dist={x_dist}, models={model_list}")
     print(header)
     print("=" * len(header))
 
@@ -132,7 +129,7 @@ def main():
                 np.random.seed(seed)
 
                 if mname == 'NeuralPLSI':
-                    model = NeuralPLSI(family=outcome, activation=args.activation, initial=initial)
+                    model = NeuralPLSI(family=outcome, activation=args.activation)
                 else:
                     model = SplinePLSI(family=outcome)
 
@@ -235,6 +232,11 @@ def main():
         with open(out_paths[mname], 'w') as f:
             json.dump(rep_results, f)
         print(f"Saved {len(rep_results)} entries → {out_paths[mname]}")
+
+
+if __name__ == "__main__":
+    main()
+len(rep_results)} entries → {out_paths[mname]}")
 
 
 if __name__ == "__main__":
