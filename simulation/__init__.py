@@ -25,7 +25,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     if U.ndim == 1:
         U = U.reshape(-1, p)
 
-    V = norm.cdf(U)
+    V = np.clip(norm.cdf(U), 1e-12, 1 - 1e-12)
 
     if x_dist == 'normal':
         X = U

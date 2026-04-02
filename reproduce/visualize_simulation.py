@@ -56,7 +56,7 @@ def load_results():
     LIST_KEYS = [
         "seed", "performance", "beta_est", "gamma_est",
         "g_pred", "time_fit", "time_hessian", "time_bootstrap",
-        "bootstrap_summary", "bootstrap_g", "bootstrap_summary", "bootstrap_g",
+        "hessian_summary", "bootstrap_summary", "inference_summary"
     ]
 
     records = []

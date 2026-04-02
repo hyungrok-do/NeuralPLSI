@@ -178,8 +178,9 @@ def main():
     models = ["PLSI", "NeuralPLSI"]
     n_values = ["1000", "2000"]
     
-    for outcome in outcomes:
-        for n_val in n_values:
+    for n_val in n_values:
+        out_lines = []
+        for outcome in outcomes:
             out_lines.append(f"\\section*{{Outcome: {outcome}, N: {n_val}}}")
             
             # tabular initialization
@@ -222,15 +223,15 @@ def main():
             out_lines.append("\\end{table}")
             out_lines.append("\n")
 
-    with open("outputs_logs/comparison_table.tex", "w") as f:
-        f.write("\n".join(out_lines))
-        
-    print("Saved logs/comparison_table.tex")
+        with open(f"logs/comparison_table_n{n_val}.tex", "w") as f:
+            f.write("\n".join(out_lines))
+            
+        print(f"Saved logs/comparison_table_n{n_val}.tex")
     
     # Save a markdown version as well for easier viewing
-    md_lines = []
-    for outcome in outcomes:
-        for n_val in n_values:
+    for n_val in n_values:
+        md_lines = []
+        for outcome in outcomes:
             md_lines.append(f"### Outcome: {outcome}, N: {n_val}\n")
             md_lines.append("| g fn | Param | PLSI Bias | PLSI SD | PLSI SE | PLSI Cov | NN Bias | NN SD | NN SE | NN Cov |")
             md_lines.append("|---|---|---|---|---|---|---|---|---|---|")
@@ -260,10 +261,10 @@ def main():
                     md_lines.append(f"| {g_str} | {param} | " + " | ".join(model_strs) + " |")
             md_lines.append("\n")
         
-    with open("outputs_logs/comparison_table.md", "w") as f:
-        f.write("\n".join(md_lines))
-        
-    print("Saved logs/comparison_table.md")
+        with open(f"logs/comparison_table_n{n_val}.md", "w") as f:
+            f.write("\n".join(md_lines))
+            
+        print(f"Saved logs/comparison_table_n{n_val}.md")
 
 if __name__ == "__main__":
     main()
