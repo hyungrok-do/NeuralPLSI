@@ -17,7 +17,7 @@ def true_g(x, g_fn):
     return np.vectorize(g_true)(x)
 
 def load_results():
-    data_dir = Path("outputs")
+    data_dir = Path("output/simulation")
     files = []
     for f in data_dir.glob("simulation+*.json"):
         try:
@@ -223,10 +223,10 @@ def main():
             out_lines.append("\\end{table}")
             out_lines.append("\n")
 
-        with open(f"logs/comparison_table_n{n_val}.tex", "w") as f:
+        with open(f"output/simulation/comparison_table_n{n_val}.tex", "w") as f:
             f.write("\n".join(out_lines))
             
-        print(f"Saved logs/comparison_table_n{n_val}.tex")
+        print(f"Saved output/simulation/comparison_table_n{n_val}.tex")
     
     # Save a markdown version as well for easier viewing
     for n_val in n_values:
@@ -261,10 +261,10 @@ def main():
                     md_lines.append(f"| {g_str} | {param} | " + " | ".join(model_strs) + " |")
             md_lines.append("\n")
         
-        with open(f"logs/comparison_table_n{n_val}.md", "w") as f:
+        with open(f"output/simulation/comparison_table_n{n_val}.md", "w") as f:
             f.write("\n".join(md_lines))
             
-        print(f"Saved logs/comparison_table_n{n_val}.md")
+        print(f"Saved output/simulation/comparison_table_n{n_val}.md")
 
 if __name__ == "__main__":
     main()

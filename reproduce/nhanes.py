@@ -12,7 +12,7 @@ if root_dir not in sys.path:
 
 from models import NeuralPLSI
 
-os.makedirs('output', exist_ok=True)
+os.makedirs('output/nhanes', exist_ok=True)
 
 csv_path = r"NHANES/12940_2020_644_MOESM2_ESM.csv"
 nhanes = pd.read_csv(csv_path)
@@ -165,5 +165,5 @@ plt.title('Coefficient Estimates (Beta, Gamma, Intercept)')
 plt.legend()
 
 plt.tight_layout()
-plt.savefig('output/nhanes.png', dpi=300)
+plt.savefig('output/nhanes/nhanes.png', dpi=300)
 plt.close()

@@ -77,8 +77,8 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
     init_tag = 'init1' if initial else 'init0'
     name = f"simulation+{model}+{n}+{g_fn}+{outcome}+{x_dist}+{init_tag}.json"
     if base is None:
-        os.makedirs("output", exist_ok=True)
-        return os.path.join("output", name)
+        os.makedirs("output/simulation", exist_ok=True)
+        return os.path.join("output/simulation", name)
     os.makedirs(base, exist_ok=True)
     return os.path.join(base, name)
 

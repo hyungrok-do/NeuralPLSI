@@ -24,7 +24,7 @@ plt.rcParams['ytick.labelsize'] = 12
 plt.rcParams['legend.fontsize'] = 12
 plt.rcParams['figure.titlesize'] = 16
 
-os.makedirs('output', exist_ok=True)
+os.makedirs('output/nhanes', exist_ok=True)
 
 # --- 1. Load and Preprocess Data ---
 print("Loading NHANES data...")
@@ -239,7 +239,7 @@ ax1a.legend(loc='upper left', frameon=True, fontsize=12)
 ax1a.grid(True, linestyle=':', alpha=0.6)
 ax1a.set_box_aspect(1)
 fig1a.tight_layout()
-fig1a.savefig('output/nhanes_g_function_neural.png', dpi=300, bbox_inches='tight')
+fig1a.savefig('output/nhanes/nhanes_g_function_neural.png', dpi=300, bbox_inches='tight')
 
 # PLSI Figure
 fig1b = plt.figure(figsize=(6, 6))
@@ -255,7 +255,7 @@ ax1b.legend(loc='upper left', frameon=True, fontsize=12)
 ax1b.grid(True, linestyle=':', alpha=0.6)
 ax1b.set_box_aspect(1)
 fig1b.tight_layout()
-fig1b.savefig('output/nhanes_g_function_plsi.png', dpi=300, bbox_inches='tight')
+fig1b.savefig('output/nhanes/nhanes_g_function_plsi.png', dpi=300, bbox_inches='tight')
 
 # Plot 2: Forest Plot (Coefficients)
 fig2 = plt.figure(figsize=(10, 14))
@@ -315,16 +315,16 @@ ax2.grid(True, axis='x', linestyle=':', alpha=0.6)
 # Since Z includes "Race" dummies, we should group them? No, individual coefs are fine.
 
 fig2.tight_layout()
-out_file2 = 'output/nhanes_forest_plot.png'
+out_file2 = 'output/nhanes/nhanes_forest_plot.png'
 fig2.savefig(out_file2, dpi=300, bbox_inches='tight')
 print(f"Forest plot saved to {out_file2}")
-print("g-function plots saved to output/nhanes_g_function_neural.png and output/nhanes_g_function_plsi.png")
+print("g-function plots saved to output/nhanes/nhanes_g_function_neural.png and output/nhanes/nhanes_g_function_plsi.png")
 
 # Save CSV results
 df_res = pd.DataFrame({
     'Neural_Est': est_n, 'Neural_LB': est_n - err_n_low, 'Neural_UB': est_n + err_n_high,
     'PLSI_Est': est_s, 'PLSI_LB': est_s - err_s_low, 'PLSI_UB': est_s + err_s_high,
 }, index=plot_names)
-csv_file = 'output/nhanes_comparison.csv'
+csv_file = 'output/nhanes/nhanes_comparison.csv'
 df_res.to_csv(csv_file)
 print(f"Results saved to {csv_file}")

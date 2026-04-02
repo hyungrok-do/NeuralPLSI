@@ -6,7 +6,7 @@
 #SBATCH --partition=cpu_short
 #SBATCH --mem=32GB
 #SBATCH --job-name=NPLSI_2k
-#SBATCH --output=logs/simulation_2k_%03a.log
+#SBATCH --output=output/simulation/simulation_2k_%03a.log
 #SBATCH -a 0-26
 #SBATCH --exclude=cn-00[08-10]
 

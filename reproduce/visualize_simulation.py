@@ -28,8 +28,8 @@ plt.rcParams['savefig.dpi'] = 150
 # ============================================================================
 # Data Loading
 # ============================================================================
-data_dir = Path("outputs")
-out_dir = Path("outputs_logs")
+data_dir = Path("output/simulation")
+out_dir = Path("output/simulation")
 out_dir.mkdir(exist_ok=True)
 files = []
 for f in data_dir.glob("simulation+*.json"):
@@ -261,7 +261,7 @@ def save_summary_tables(df):
         return
     
     df.to_csv(out_dir / "summary_table.csv", index=False)
-    print(f"Saved: logs/summary_table.csv")
+    print(f"Saved: output/simulation/summary_table.csv")
     
     agg_df = df.groupby(["model", "g_fn", "outcome", "x_dist", "inference_type"]).agg({
         "bias": lambda x: np.mean(np.abs(x)),
@@ -272,7 +272,7 @@ def save_summary_tables(df):
     }).reset_index()
     agg_df.columns = ["Model", "g_fn", "Outcome", "X_dist", "Inference", "MAB", "Emp_SD", "SE", "Coverage", "N_reps"]
     agg_df.to_csv(out_dir / "summary_aggregated.csv", index=False)
-    print(f"Saved: logs/summary_aggregated.csv")
+    print(f"Saved: output/simulation/summary_aggregated.csv")
     
     latex_df = agg_df.copy()
     latex_df["MAB"] = latex_df["MAB"].apply(lambda x: f"{x:.4f}")
@@ -280,7 +280,7 @@ def save_summary_tables(df):
     latex_df["SE"] = latex_df["SE"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "-")
     latex_df["Coverage"] = latex_df["Coverage"].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "-")
     latex_df.to_latex(out_dir / "summary_table.tex", index=False, escape=False)
-    print(f"Saved: logs/summary_table.tex")
+    print(f"Saved: output/simulation/summary_table.tex")
 
 save_summary_tables(summary_df)
 
@@ -330,7 +330,7 @@ def save_per_setting_tables(df):
         # Save LaTeX (formatted)
         fmt_df.to_latex(tables_dir / f"{fname_base}.tex", escape=False)
     
-    print(f"Saved: {len(df.groupby(groupby_cols))} per-setting tables to logs/tables/")
+    print(f"Saved: {len(df.groupby(groupby_cols))} per-setting tables to output/simulation/tables/")
 
 save_per_setting_tables(summary_df)
 
@@ -641,7 +641,7 @@ def plot_g_panels():
                 fname_s = f"gplot_panels_{outcome}_{x_dist}_n{n_val}_PLSI.png"
                 fig_s.savefig(out_dir / fname_s)
                 plt.close(fig_s)
-                print(f"Saved: {fname_s}")
+                print(f"Saved: {out_dir}/{fname_s}")
     
     # True g-functions only
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
@@ -658,7 +658,7 @@ def plot_g_panels():
     plt.tight_layout()
     plt.savefig(out_dir / "gplot_true.png")
     plt.close()
-    print("Saved: gplot_true.png")
+    print(f"Saved: {out_dir}/gplot_true.png")
 
 plot_g_panels()
 
@@ -698,7 +698,7 @@ def create_inference_comparison_table(df):
     if comparison_rows:
         comp_df = pd.DataFrame(comparison_rows)
         comp_df.to_csv(out_dir / "inference_comparison.csv", index=False)
-        print("Saved: logs/inference_comparison.csv")
+        print("Saved: output/simulation/inference_comparison.csv")
         
         summary = comp_df.groupby(["model", "g_fn", "outcome", "x_dist"]).agg({
             "Hessian_SE": "mean", "Bootstrap_SE": "mean",
@@ -706,7 +706,7 @@ def create_inference_comparison_table(df):
             "Emp_SD": "mean"
         }).reset_index()
         summary.to_csv(out_dir / "inference_comparison_summary.csv", index=False)
-        print("Saved: logs/inference_comparison_summary.csv")
+        print("Saved: output/simulation/inference_comparison_summary.csv")
 
 create_inference_comparison_table(summary_df)
 
