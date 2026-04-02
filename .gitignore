@@ -2,4 +2,4 @@ output/*
 logs/*
 __pycache__/
 *.py[cod]
-*$py.class
+*$py.classoutputs/legacy/

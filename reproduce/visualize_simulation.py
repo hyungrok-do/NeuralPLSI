@@ -54,7 +54,7 @@ def load_results():
     work unchanged.
     """
     LIST_KEYS = [
-        "seed", "performance", "beta_estimate", "gamma_estimate",
+        "seed", "performance", "beta_est", "gamma_est",
         "g_pred", "time_fit", "time_hessian", "time_bootstrap",
         "bootstrap_summary", "bootstrap_g", "bootstrap_summary", "bootstrap_g",
     ]
@@ -560,67 +560,71 @@ def plot_g_panels():
     
     outcomes = set(r["_outcome"] for r in records)
     x_dists = ["normal"]  # Generate panels exclusively for normal x_dist
+    n_vals = ["1000", "2000"]
     
     for outcome in outcomes:
         for x_dist in x_dists:
-            fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-            
-            for i, g_fn in enumerate(g_functions):
-                ax = axes[i]
-                g_true = true_g(x, g_fn)
-                ax.plot(x, g_true, color="black", lw=2, ls="--", label="True")
+            for n_val in n_vals:
+                fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
                 
-                # Plot NeuralPLSI
-                nplsi_recs = [r for r in records 
-                                    if r["_model"] == "NeuralPLSI" 
-                                    and r["_g_fn"] == g_fn 
-                                    and r["_outcome"] == outcome 
-                                    and r["_x_dist"] == x_dist]
-                if nplsi_recs:
-                    rec = nplsi_recs[0]
-                    g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
-                    if g_preds:
-                        G = np.vstack(g_preds)
-                        if outcome == "cox":
-                            G = G - G[:, 500:501]
-                        mean = G.mean(axis=0)
-                        lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
-                        ax.fill_between(x, lb, ub, color="steelblue", alpha=0.2)
-                        ax.plot(x, mean, color="steelblue", lw=2, label="NeuralPLSI")
+                for i, g_fn in enumerate(g_functions):
+                    ax = axes[i]
+                    g_true = true_g(x, g_fn)
+                    ax.plot(x, g_true, color="black", lw=2, ls="--", label="True")
+                    
+                    # Plot NeuralPLSI
+                    nplsi_recs = [r for r in records 
+                                        if r["_model"] == "NeuralPLSI" 
+                                        and r["_g_fn"] == g_fn 
+                                        and r["_outcome"] == outcome 
+                                        and r["_x_dist"] == x_dist
+                                        and r["_n"] == n_val]
+                    if nplsi_recs:
+                        rec = nplsi_recs[0]
+                        g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
+                        if g_preds:
+                            G = np.vstack(g_preds)
+                            if outcome == "cox":
+                                G = G - G[:, 500:501]
+                            mean = G.mean(axis=0)
+                            lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
+                            ax.fill_between(x, lb, ub, color="steelblue", alpha=0.2)
+                            ax.plot(x, mean, color="steelblue", lw=2, label="NeuralPLSI")
+                    
+                    # Plot PLSI (overlay)
+                    plsi_recs = [r for r in records 
+                                if r["_model"] == "PLSI" 
+                                and r["_g_fn"] == g_fn 
+                                and r["_outcome"] == outcome 
+                                and r["_x_dist"] == x_dist
+                                and r["_n"] == n_val]
+                    
+                    if plsi_recs:
+                        rec = plsi_recs[0]
+                        g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
+                        if g_preds:
+                            G = np.vstack(g_preds)
+                            if outcome == "cox":
+                                # Center g_pred at x=0 (index 500)
+                                G = G - G[:, 500:501]
+                            mean = G.mean(axis=0)
+                            lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
+                            ax.fill_between(x, lb, ub, color="coral", alpha=0.2)
+                            ax.plot(x, mean, color="coral", lw=2, label="PLSI")
+                    
+                    ax.set_ylim(-4.5, 4.5)
+                    ax.set_title(g_map.get(g_fn, g_fn))
+                    ax.set_xlabel("Index (X'β)")
+                    if i == 0:
+                        ax.set_ylabel("g(Index)")
+                    ax.legend()
                 
-                # Plot PLSI (overlay)
-                plsi_recs = [r for r in records 
-                            if r["_model"] == "PLSI" 
-                            and r["_g_fn"] == g_fn 
-                            and r["_outcome"] == outcome 
-                            and r["_x_dist"] == x_dist]
-                
-                if plsi_recs:
-                    rec = plsi_recs[0]
-                    g_preds = [np.array(g) for g in rec.get("g_pred", []) if len(g) > 0]
-                    if g_preds:
-                        G = np.vstack(g_preds)
-                        if outcome == "cox":
-                            # Center g_pred at x=0 (index 500)
-                            G = G - G[:, 500:501]
-                        mean = G.mean(axis=0)
-                        lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
-                        ax.fill_between(x, lb, ub, color="coral", alpha=0.2)
-                        ax.plot(x, mean, color="coral", lw=2, label="PLSI")
-                
-                ax.set_ylim(-4.5, 4.5)
-                ax.set_title(g_map.get(g_fn, g_fn))
-                ax.set_xlabel("Index (X'β)")
-                if i == 0:
-                    ax.set_ylabel("g(Index)")
-                ax.legend()
-            
-            plt.suptitle(f"g-Function Recovery: {outcome}, X~{x_dist}", fontsize=12, fontweight='bold')
-            plt.tight_layout()
-            fname = f"gplot_panels+{outcome}+{x_dist}.png"
-            plt.savefig(out_dir / fname)
-            plt.close()
-            print(f"Saved: {fname}")
+                plt.suptitle(f"g-Function Recovery: {outcome}, X~{x_dist}, N={n_val}", fontsize=12, fontweight='bold')
+                plt.tight_layout()
+                fname = f"gplot_panels_{outcome}_{x_dist}_n{n_val}.png"
+                plt.savefig(out_dir / fname)
+                plt.close()
+                print(f"Saved: {fname}")
     
     # True g-functions only
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
