@@ -282,7 +282,7 @@ def save_summary_tables(df):
     latex_df.to_latex(out_dir / "summary_table.tex", index=False, escape=False)
     print(f"Saved: output/simulation/summary_table.tex")
 
-save_summary_tables(summary_df)
+# save_summary_tables(summary_df)
 
 # ============================================================================
 # 2b. Per-Setting Tables (parameters as rows, Bias/SE/SD/Coverage as columns)
@@ -509,7 +509,7 @@ def plot_coverage_comparison(df):
         plt.close()
         print(f"Saved: {fname}")
 
-# plot_coverage_comparison(summary_df)
+# # plot_coverage_comparison(summary_df)
 
 # ============================================================================
 # 6. Inference Time Comparison
@@ -661,53 +661,3 @@ def plot_g_panels():
     print(f"Saved: {out_dir}/gplot_true.png")
 
 plot_g_panels()
-
-# ============================================================================
-def create_inference_comparison_table(df):
-    """Create detailed comparison between Hessian and Bootstrap for NeuralPLSI."""
-    if df.empty:
-        return
-    
-    neural_df = df[df["model"].str.startswith("NeuralPLSI")]
-    if neural_df.empty:
-        return
-    
-    comparison_rows = []
-    
-    for (model, g_fn, outcome, x_dist), grp in neural_df.groupby(["model", "g_fn", "outcome", "x_dist"]):
-        hess = grp[grp["inference_type"] == "Hessian"]
-        boot = grp[grp["inference_type"] == "Bootstrap"]
-        
-        if hess.empty or boot.empty:
-            continue
-        
-        for param in hess["param"].unique():
-            h_row = hess[hess["param"] == param]
-            b_row = boot[boot["param"] == param]
-            if h_row.empty or b_row.empty:
-                continue
-            h_row, b_row = h_row.iloc[0], b_row.iloc[0]
-            
-            comparison_rows.append({
-                "model": model, "g_fn": g_fn, "outcome": outcome, "x_dist": x_dist, "param": param,
-                "Hessian_SE": h_row["se"], "Bootstrap_SE": b_row["se"],
-                "Hessian_Coverage": h_row["coverage"], "Bootstrap_Coverage": b_row["coverage"],
-                "Emp_SD": h_row["emp_sd"], "Bias": h_row["bias"]
-            })
-    
-    if comparison_rows:
-        comp_df = pd.DataFrame(comparison_rows)
-        comp_df.to_csv(out_dir / "inference_comparison.csv", index=False)
-        print("Saved: output/simulation/inference_comparison.csv")
-        
-        summary = comp_df.groupby(["model", "g_fn", "outcome", "x_dist"]).agg({
-            "Hessian_SE": "mean", "Bootstrap_SE": "mean",
-            "Hessian_Coverage": "mean", "Bootstrap_Coverage": "mean",
-            "Emp_SD": "mean"
-        }).reset_index()
-        summary.to_csv(out_dir / "inference_comparison_summary.csv", index=False)
-        print("Saved: output/simulation/inference_comparison_summary.csv")
-
-create_inference_comparison_table(summary_df)
-
-print("\n✓ Visualization complete!")
