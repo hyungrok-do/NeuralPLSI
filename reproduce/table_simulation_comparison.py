@@ -29,8 +29,9 @@ def load_results():
     
     LIST_KEYS = [
         "seed", "performance", "beta_est", "gamma_est",
-        "g_pred", "time_fit", "time_hessian", "time_bootstrap",
-        "hessian_summary", "bootstrap_summary", "inference_summary"
+        "beta_bias", "gamma_bias", "beta_se", "gamma_se",
+        "beta_cov", "gamma_cov", "g_pred", 
+        "time_fit", "time_hessian", "time_bootstrap"
     ]
 
     records = []
@@ -76,19 +77,6 @@ def load_results():
         records.append(rec)
         
     return records
-def compute_coverage(estimates, lb_list, ub_list, true_val):
-    coverage = []
-    for lb, ub in zip(lb_list, ub_list):
-        if lb is None or ub is None: continue
-        coverage.append((np.array(lb) <= true_val) & (true_val <= np.array(ub)))
-    if not coverage: return np.full_like(true_val, np.nan, dtype=float)
-    return np.mean(coverage, axis=0)
-
-def extract_inference(rec):
-    inf = rec.get("bootstrap_summary")
-    if not inf or all(not s for s in inf):
-        inf = rec.get("inference_summary")
-    return inf if inf else []
 
 def main():
     records = load_results()
@@ -112,28 +100,21 @@ def main():
         
         if len(beta_est) == 0: continue
         
-        inf_summaries = extract_inference(rec)
-        beta_se_list, gamma_se_list, beta_lb_list, beta_ub_list, gamma_lb_list, gamma_ub_list = [], [], [], [], [], []
-        if inf_summaries:
-            for s in inf_summaries:
-                if not s: continue
-                beta_se_list.append(s.get("beta_se"))
-                gamma_se_list.append(s.get("gamma_se"))
-                beta_lb_list.append(s.get("beta_lb"))
-                beta_ub_list.append(s.get("beta_ub"))
-                gamma_lb_list.append(s.get("gamma_lb"))
-                gamma_ub_list.append(s.get("gamma_ub"))
-                
         beta_bias = beta_est.mean(axis=0) - TRUE_BETA
         gamma_bias = gamma_est.mean(axis=0) - TRUE_GAMMA
         beta_sd = beta_est.std(axis=0, ddof=1)
         gamma_sd = gamma_est.std(axis=0, ddof=1)
         
-        beta_se = np.mean([s for s in beta_se_list if s is not None], axis=0) if beta_se_list else np.full(len(TRUE_BETA), np.nan)
-        gamma_se = np.mean([s for s in gamma_se_list if s is not None], axis=0) if gamma_se_list else np.full(len(TRUE_GAMMA), np.nan)
-        
-        beta_cov = compute_coverage(beta_est, beta_lb_list, beta_ub_list, TRUE_BETA)
-        gamma_cov = compute_coverage(gamma_est, gamma_lb_list, gamma_ub_list, TRUE_GAMMA)
+        if "beta_se" in rec and len(rec["beta_se"]) > 0:
+            beta_se = np.array(rec["beta_se"]).mean(axis=0)
+            gamma_se = np.array(rec["gamma_se"]).mean(axis=0)
+            beta_cov = np.array(rec["beta_cov"]).mean(axis=0)
+            gamma_cov = np.array(rec["gamma_cov"]).mean(axis=0)
+        else:
+            beta_se = np.full(len(TRUE_BETA), np.nan)
+            gamma_se = np.full(len(TRUE_GAMMA), np.nan)
+            beta_cov = np.full(len(TRUE_BETA), np.nan)
+            gamma_cov = np.full(len(TRUE_GAMMA), np.nan)
         
         # Collect per-coefficient metrics
         for i in range(len(TRUE_BETA)):
