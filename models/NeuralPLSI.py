@@ -42,10 +42,13 @@ class CoxCCLoss(nn.Module):
         return -(r - log_cumsum_h).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
-    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='LeakyReLU'):
+    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='ELU'):
         super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, n_classes, bias=False)
+        
+        # Linear skip-connection for the g-function to handle unbounded tail extrapolation
+        self.g_skip = nn.Linear(1, n_classes, bias=False)
         
         act_cls = getattr(nn, activation)
 
@@ -69,21 +72,22 @@ class _nPLSInet(nn.Module):
         w_norm = w / (w.norm() + 1e-6)
         xb = F.linear(x, w_norm, self.x_input.bias)
         if self.flip_sign: xb = -xb
-        out = self.g_network(xb) + self.z_input(z)
+        # Combine MLP non-linearity with global linear skip-connection
+        out = self.g_network(xb) + self.g_skip(xb) + self.z_input(z)
         if self.add_intercept:
             out = out + self.intercept
         return out
 
     def g_function(self, x):
         if self.flip_sign: x = -x
-        return self.g_network(x)
+        return self.g_network(x) + self.g_skip(x)
 
     def gxb(self, x):
         w = self.x_input.weight
         w_norm = w / (w.norm() + 1e-6)
         xb = F.linear(x, w_norm, self.x_input.bias)
         if self.flip_sign: xb = -xb
-        return self.g_network(xb)
+        return self.g_network(xb) + self.g_skip(xb)
 
     def resolve_sign_ambiguity(self):
         with torch.no_grad():
@@ -206,6 +210,7 @@ class NeuralPLSI(_SummaryMixin):
         g_param_groups = [
             {'params': net.x_input.parameters(), 'weight_decay': weight_decay_beta},
             {'params': net.g_network.parameters(), 'weight_decay': weight_decay},
+            {'params': net.g_skip.parameters(), 'weight_decay': weight_decay},
         ]
         opt_g = torch.optim.AdamW(g_param_groups, lr=learning_rate)
         z_params = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
