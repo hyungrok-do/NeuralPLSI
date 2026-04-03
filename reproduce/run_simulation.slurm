@@ -7,30 +7,29 @@
 #SBATCH --mem=32GB
 #SBATCH --job-name=NPLSI
 #SBATCH --output=output/simulation/simulation_%03a.log
-#SBATCH -a 0-17
+#SBATCH -a 0-8
 #SBATCH --exclude=cn-00[08-10]
 
 source /etc/profile.d/modules.sh
 module load singularity/3.9.8 2>/dev/null || module load singularity/3.9.8_rhel9 2>/dev/null || module load singularity/3.11.5
 
-# Layout: 36 jobs total
-#   NeuralPLSI: 2n × 3g × 3outcome = 18 jobs  (IDs 0-17)
-#   PLSI:       2n × 3g × 3outcome = 18 jobs  (IDs 18-35)
+# Layout: 18 jobs total
+#   NeuralPLSI: 1n × 3g × 3outcome = 9 jobs  (IDs 0-8)
+#   PLSI:       1n × 3g × 3outcome = 9 jobs  (IDs 9-17)
 
-n_values=(200 1000)
+n_values=(1000)
 g_values=(sigmoid sfun linear)
 outcomes=(continuous binary cox)
 
 ID=$SLURM_ARRAY_TASK_ID
 
-if [ $ID -lt 18 ]; then
+if [ $ID -lt 9 ]; then
     # --- NeuralPLSI ---
     model="NeuralPLSI"
     outcome_idx=$(( ID % 3 ))
     g_idx=$(( (ID / 3) % 3 ))
-    n_idx=$(( ID / 9 ))
 
-    n=${n_values[$n_idx]}
+    n=${n_values[0]}
     g_fn=${g_values[$g_idx]}
     outcome=${outcomes[$outcome_idx]}
 
@@ -47,12 +46,11 @@ if [ $ID -lt 18 ]; then
 else
     # --- PLSI ---
     model="PLSI"
-    local_id=$(( ID - 18 ))
+    local_id=$(( ID - 9 ))
     outcome_idx=$(( local_id % 3 ))
     g_idx=$(( (local_id / 3) % 3 ))
-    n_idx=$(( local_id / 9 ))
 
-    n=${n_values[$n_idx]}
+    n=${n_values[0]}
     g_fn=${g_values[$g_idx]}
     outcome=${outcomes[$outcome_idx]}
 
