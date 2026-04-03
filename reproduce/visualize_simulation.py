@@ -565,10 +565,9 @@ def plot_g_panels():
     for outcome in outcomes:
         for x_dist in x_dists:
             for n_val in n_vals:
-                # --- NeuralPLSI Plot ---
-                fig_n, axes_n = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+                fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
                 for i, g_fn in enumerate(g_functions):
-                    ax = axes_n[i]
+                    ax = axes[i]
                     g_true = true_g(x, g_fn)
                     ax.plot(x, g_true, color="black", lw=2, ls="--", label="True")
                     
@@ -589,27 +588,6 @@ def plot_g_panels():
                             lb, ub = np.percentile(G, [2.5, 97.5], axis=0)
                             ax.fill_between(x, lb, ub, color="steelblue", alpha=0.2)
                             ax.plot(x, mean, color="steelblue", lw=2, label="NeuralPLSI")
-                    
-                    ax.set_ylim(-4.5, 4.5)
-                    ax.set_title(g_map.get(g_fn, g_fn))
-                    ax.set_xlabel("Index")
-                    if i == 0:
-                        ax.set_ylabel("g(Index)")
-                    ax.legend()
-                
-                plt.suptitle(f"NeuralPLSI g-Function: {outcome}, N={n_val}", fontsize=12, fontweight='bold')
-                fig_n.tight_layout()
-                fname_n = f"gplot_panels_{outcome}_{x_dist}_n{n_val}_NeuralPLSI.png"
-                fig_n.savefig(out_dir / fname_n)
-                plt.close(fig_n)
-                print(f"Saved: {fname_n}")
-
-                # --- PLSI Plot ---
-                fig_s, axes_s = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-                for i, g_fn in enumerate(g_functions):
-                    ax = axes_s[i]
-                    g_true = true_g(x, g_fn)
-                    ax.plot(x, g_true, color="black", lw=2, ls="--", label="True")
                     
                     plsi_recs = [r for r in records 
                                 if r["_model"] == "PLSI" 
@@ -636,12 +614,12 @@ def plot_g_panels():
                         ax.set_ylabel("g(Index)")
                     ax.legend()
                 
-                plt.suptitle(f"PLSI g-Function: {outcome}, N={n_val}", fontsize=12, fontweight='bold')
-                fig_s.tight_layout()
-                fname_s = f"gplot_panels_{outcome}_{x_dist}_n{n_val}_PLSI.png"
-                fig_s.savefig(out_dir / fname_s)
-                plt.close(fig_s)
-                print(f"Saved: {out_dir}/{fname_s}")
+                plt.suptitle(f"g-Function Recovery: {outcome}, N={n_val}", fontsize=12, fontweight='bold')
+                fig.tight_layout()
+                fname = f"gplot_panels_{outcome}_{x_dist}_n{n_val}.png"
+                fig.savefig(out_dir / fname)
+                plt.close(fig)
+                print(f"Saved: {out_dir}/{fname}")
     
     # True g-functions only
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
