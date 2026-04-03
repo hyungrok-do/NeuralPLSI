@@ -101,7 +101,7 @@ def main():
     ap.add_argument('--g_grid_min',     type=float, default=-3.0)
     ap.add_argument('--g_grid_max',     type=float, default=3.0)
     ap.add_argument('--g_grid_n',       type=int,   default=1000)
-    ap.add_argument('--activation',     type=str,   default='ELU')
+    ap.add_argument('--activation',     type=str,   default='LeakyReLU')
     args = ap.parse_args()
 
     model_list = parse_models(args.models)

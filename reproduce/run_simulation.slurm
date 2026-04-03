@@ -7,7 +7,7 @@
 #SBATCH --mem=32GB
 #SBATCH --job-name=NPLSI
 #SBATCH --output=output/simulation/simulation_%03a.log
-#SBATCH -a 0-35
+#SBATCH -a 0-17
 #SBATCH --exclude=cn-00[08-10]
 
 source /etc/profile.d/modules.sh

@@ -42,7 +42,7 @@ class CoxCCLoss(nn.Module):
         return -(r - log_cumsum_h).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
-    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='Tanh'):
+    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='LeakyReLU'):
         super().__init__()
         self.x_input = nn.Linear(p, 1, bias=False)
         self.z_input = nn.Linear(q, n_classes, bias=False)
@@ -95,7 +95,7 @@ class _nPLSInet(nn.Module):
                     self.x_input.bias.data.mul_(-1.)
 
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='Tanh', warmstart=True, warmstart_state=None):
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='LeakyReLU', warmstart=True, warmstart_state=None):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
@@ -143,7 +143,7 @@ class NeuralPLSI(_SummaryMixin):
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
-                 num_workers=0, add_intercept=False, activation='Tanh',
+                 num_workers=0, add_intercept=False, activation='LeakyReLU',
                  initial=False, warmstart=True):
         self.family = family
         if torch.cuda.is_available():
