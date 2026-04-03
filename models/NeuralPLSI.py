@@ -549,11 +549,3 @@ class NeuralPLSI(_SummaryMixin):
             out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
         return out
 
-lb": g_lb, "g_ub": g_ub})
-        return out
-
-return out
-
-lb": g_lb, "g_ub": g_ub})
-        return out
-
