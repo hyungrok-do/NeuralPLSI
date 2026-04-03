@@ -236,8 +236,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-len(rep_results)} entries → {out_paths[mname]}")
-
-
-if __name__ == "__main__":
-    main()
