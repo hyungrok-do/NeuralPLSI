@@ -83,9 +83,6 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
     return os.path.join(base, name)
 
 
-MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI}
-
-
 def main():
     ap = argparse.ArgumentParser(description="Simulation study: PLSI vs NeuralPLSI inference comparison.")
     ap.add_argument('--n_instances',    type=int,   default=500)
