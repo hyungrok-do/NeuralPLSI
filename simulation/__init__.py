@@ -6,7 +6,7 @@ beta = beta / np.linalg.norm(beta)
 gamma = np.array([1, -0.5, 0.5])
 
 def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3, seed=0, x_dist='normal'):
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
 
     g_dict = {
         'linear': lambda x, a=1: a * x,
@@ -21,7 +21,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     Sigma = np.full((p, p), 0.3)
     np.fill_diagonal(Sigma, 1)
 
-    U = multivariate_normal.rvs(mean=np.zeros(p), cov=Sigma, size=n)
+    U = multivariate_normal.rvs(mean=np.zeros(p), cov=Sigma, size=n, random_state=rng)
     if U.ndim == 1:
         U = U.reshape(-1, p)
 
@@ -36,26 +36,26 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     else:
         raise ValueError(f"Invalid x_dist '{x_dist}'. Choose 'normal', 'uniform', or 't'.")
 
-    z1 = np.random.normal(size=n)
-    z2 = np.random.normal(size=n)
-    z3 = np.random.binomial(1, 0.5, size=n) * 2 - 1
+    z1 = rng.normal(size=n)
+    z2 = rng.normal(size=n)
+    z3 = rng.binomial(1, 0.5, size=n) * 2 - 1
     Z = np.column_stack([z1, z2, z3])
 
     xb = X @ beta
     gxb = g_fn(xb)
 
     if outcome == 'continuous':
-        y = gxb + Z @ gamma + np.random.normal(size=n)
+        y = gxb + Z @ gamma + rng.normal(size=n)
     elif outcome == 'binary':
         logits = gxb + Z @ gamma
         prob = 1 / (1 + np.exp(-logits))
-        y = bernoulli.rvs(prob)
+        y = bernoulli.rvs(prob, random_state=rng)
     elif outcome == 'cox':
         lin_pred = gxb + Z @ gamma
         baseline_lambda = 1.0
         true_lambda = baseline_lambda * np.exp(lin_pred)
-        T = expon.rvs(scale=1 / true_lambda)
-        C = expon.rvs(scale=np.median(1 / true_lambda) / censoring_rate, size=n)
+        T = expon.rvs(scale=1 / true_lambda, random_state=rng)
+        C = expon.rvs(scale=np.median(1 / true_lambda) / censoring_rate, size=n, random_state=rng)
         time = np.minimum(T, C)
         event = (T <= C).astype(int)
         y = np.column_stack([time, event])

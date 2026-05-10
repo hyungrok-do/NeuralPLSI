@@ -287,8 +287,8 @@ class SplinePLSI(_SummaryMixin):
         B = SplinePLSI._bspline_basis_matrix(eta, t, degree)
         return Z @ gamma + B @ spline_coeffs
 
-    def _initialize_params(self, X):
-        beta_init = np.random.randn(X.shape[1])
+    def _initialize_params(self, X, rng):
+        beta_init = rng.standard_normal(X.shape[1])
         if beta_init[0] < 0: beta_init = -beta_init
         nrm = np.linalg.norm(beta_init) or 1.0
         return beta_init / nrm
@@ -343,7 +343,7 @@ class SplinePLSI(_SummaryMixin):
         nrm = np.linalg.norm(beta) or 1.0
         return beta / nrm
 
-    def fit(self, X, Z, y, beta_init=None):
+    def fit(self, X, Z, y, beta_init=None, random_state=None):
         """
         Fit the SplinePLSI model.
         
@@ -352,6 +352,7 @@ class SplinePLSI(_SummaryMixin):
             Z: Covariate matrix (n_samples, q)
             y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
             beta_init: Optional warm-start for beta (e.g. from a previous fit)
+            random_state: Seed for reproducibility
         """
         X = np.asarray(X, dtype=np.float64)
         Z = np.asarray(Z, dtype=np.float64)
@@ -361,7 +362,8 @@ class SplinePLSI(_SummaryMixin):
             order = np.argsort(-y[:, 0])
             X, Z, y = X[order], Z[order], y[order]
         
-        self.beta = beta_init.copy() if beta_init is not None else self._initialize_params(X)
+        rng = np.random.default_rng(random_state)
+        self.beta = beta_init.copy() if beta_init is not None else self._initialize_params(X, rng)
         prev_loss = np.inf
 
         n_increases = 0
@@ -383,7 +385,7 @@ class SplinePLSI(_SummaryMixin):
             elif self.family == 'binary':
                 C_val = min(1.0 / (self.alpha + 1e-12), 100.0)
                 model = LogisticRegression(penalty='l2', C=C_val, fit_intercept=False,
-                                           solver='lbfgs', max_iter=500).fit(Xd, y)
+                                           solver='lbfgs', max_iter=500, random_state=random_state).fit(Xd, y)
                 p = model.predict_proba(Xd)[:, 1]
                 eps = 1e-6
                 loss = float(-np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps)))
@@ -462,8 +464,7 @@ class SplinePLSI(_SummaryMixin):
 
     def _refit_clone(self, Xb, Zb, yb, seed, beta_init=None):
         m = SplinePLSI(self.family, self.num_knots, self.spline_degree, self.alpha, self.max_iter, self.tol)
-        np.random.seed(seed)
-        m.fit(Xb, Zb, yb, beta_init=beta_init)
+        m.fit(Xb, Zb, yb, beta_init=beta_init, random_state=seed)
         return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy(), m.knot_vector.copy()
 
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs=-1):

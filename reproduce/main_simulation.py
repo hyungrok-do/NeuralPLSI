@@ -126,8 +126,6 @@ def main():
                 X, Z, y, _, _, _ = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist)
                 X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
 
-                np.random.seed(seed)
-
                 if mname == 'NeuralPLSI':
                     model = NeuralPLSI(family=outcome, activation=args.activation)
                 else:
@@ -135,7 +133,7 @@ def main():
 
                 # --- Fit ---
                 t0 = perf_counter()
-                model.fit(X_tr, Z_tr, y_tr)
+                model.fit(X_tr, Z_tr, y_tr, random_state=seed)
                 time_fit = perf_counter() - t0
 
                 # --- Point estimates ---

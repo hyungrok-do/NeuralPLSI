@@ -104,10 +104,9 @@ coef_names = np.concatenate([clean_exposure_names, clean_covariate_names, ['Inte
 
 # --- 2. Fit NeuralPLSI + Bootstrap ---
 print("\n--- Fitting NeuralPLSI (Bootstrap Inference) ---")
-np.random.seed(42)
 m_neural = NeuralPLSI(family='continuous', add_intercept=True)
 t0 = time.time()
-m_neural.fit(x, z, y)
+m_neural.fit(x, z, y, random_state=42)
 fit_time_neural = time.time() - t0
 print(f"NeuralPLSI Fit Time: {fit_time_neural:.2f}s")
 
@@ -137,10 +136,9 @@ g_ub_n = boot_res_n['g_ub'] + icept_n
 
 # --- 3. Fit SplinePLSI + Bootstrap ---
 print("\n--- Fitting SplinePLSI (Bootstrap Inference) ---")
-np.random.seed(42)
 m_spline = SplinePLSI(family='continuous', num_knots=5, spline_degree=3) # Default params
 t0 = time.time()
-m_spline.fit(x, z, y)
+m_spline.fit(x, z, y, random_state=42)
 fit_time_spline = time.time() - t0
 print(f"SplinePLSI Fit Time: {fit_time_spline:.2f}s")
 
