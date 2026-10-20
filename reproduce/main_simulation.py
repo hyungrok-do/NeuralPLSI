@@ -22,7 +22,6 @@ from time import perf_counter
 import numpy as np
 import sklearn
 import scipy
-import torch
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from lifelines.utils import concordance_index
@@ -98,11 +97,11 @@ MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI}
 def run_configuration(args, model):
     """Record the estimator, inference settings and exact simulation source."""
     paths = ['reproduce/main_simulation.py', 'simulation/__init__.py',
-             'models/base.py', 'models/utils.py',
+             'models/base.py',
              'models/NeuralPLSI.py' if model == 'NeuralPLSI' else 'models/PLSI.py']
     if model == 'NeuralPLSI':
         paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
-                        if p.suffix in ('.py', '.cpp'))
+                        if p.suffix in ('.py', '.cpp', '.h'))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(path.encode())
@@ -114,7 +113,7 @@ def run_configuration(args, model):
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if model == 'NeuralPLSI' else 'cpu')
-    return dict(protocol_version=2, model=model, n=args.n_instances,
+    return dict(protocol_version=3, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
                 activation=args.activation if model == 'NeuralPLSI' else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
@@ -125,10 +124,10 @@ def run_configuration(args, model):
                 warmstart=args.warmstart if model == 'NeuralPLSI' else False,
                 backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
                 device=resolved_device, native_build=native_build,
-                normalization='l2',
+                normalization='l2', native_rng='splitmix64_v1' if model == 'NeuralPLSI' else None,
                 g_grid=[args.g_grid_min, args.g_grid_max, args.g_grid_n],
                 source_sha256=digest.hexdigest(), numpy=np.__version__,
-                sklearn=sklearn.__version__, scipy=scipy.__version__, torch=str(torch.__version__))
+                sklearn=sklearn.__version__, scipy=scipy.__version__)
 
 
 def load_compatible_results(path, configuration):
@@ -205,8 +204,6 @@ def run_replicate(args, mname, seed, configuration):
     start = perf_counter()
     options = {'quantile_method': args.nn_bootstrap_quantile} if mname == 'NeuralPLSI' else {}
     jobs = args.bootstrap_jobs
-    if mname == 'NeuralPLSI' and model.device.type != 'cpu' and jobs == 'auto':
-        jobs = 1
     boot = model.inference_bootstrap(X_tr, Z_tr, y_tr, n_samples=args.n_bootstrap,
         random_state=seed, ci=.95, g_grid=grid, n_jobs=jobs, **options)
     time_boot = perf_counter()-start
@@ -227,7 +224,7 @@ def run_replicate(args, mname, seed, configuration):
                     block+'_bootstrap_mean': samples.mean(axis=0),
                     block+'_bootstrap_bias': samples.mean(axis=0)-estimate})
     if mname == 'NeuralPLSI':
-        row['fit_diagnostics'] = model.net.fit_diagnostics
+        row['fit_diagnostics'] = model.fit_diagnostics
         row['device'] = str(model.device)
     else:
         row['fit_diagnostics'] = dict(converged=bool(model.converged_), iterations=model.n_iter_)
@@ -271,8 +268,8 @@ def build_parser():
     parser.add_argument('--activation', default='ELU')
     parser.add_argument('--initial', action='store_true')
     parser.add_argument('--warmstart', action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--device', default='auto', choices=['auto','cpu','cuda','mps'])
-    parser.add_argument('--nn_backend', default='torch', choices=['torch','cpp'])
+    parser.add_argument('--device', default='cpu', choices=['auto','cpu'])
+    parser.add_argument('--nn_backend', default='cpp', choices=['cpp'])
     return parser
 
 
@@ -284,7 +281,6 @@ def main(argv=None):
             args.seed0 < 0 or args.fit_seed < 0):
         parser.error('Invalid sample, replicate, bootstrap, checkpoint, grid, or seed setting')
     bootstrap_jobs(args.bootstrap_jobs, args.n_bootstrap)
-    torch.set_num_threads(1)
     for mname in parse_models(args.models):
         path = output_path(args.out, mname, args.n_instances, args.g_fn,
                            args.outcome, args.exposure_dist, args.initial if mname == 'NeuralPLSI' else False)

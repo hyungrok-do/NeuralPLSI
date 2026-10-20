@@ -9,7 +9,7 @@ Arxiv: [https://arxiv.org/abs/2512.11593](https://arxiv.org/abs/2512.11593)
 ## Overview
 
 This package implements two models:
-- **NeuralPLSI**: Uses a neural network to learn the nonlinear link function $g(\beta^T X)$.
+- **NeuralPLSI**: Uses a standalone C++ neural network to learn the nonlinear link function $g(\beta^T X)$.
 - **PLSI**: Uses B-splines to estimate the link function (Wang et al., 2020).
 
 ## Installation
@@ -21,6 +21,9 @@ cd neuralplsi
 ```
 
 ### 2. Install Dependencies
+
+Use Python 3.10+ and a C++17 compiler (`g++` or `clang++`). Torch is not required.
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -80,61 +83,129 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 }
 ```
 
-## C++ CPU training backend
+## Standalone C++ NeuralPLSI
 
-The optional `cpp` backend runs the forward pass, analytic gradients, AdamW,
-minibatches, validation, early stopping and gamma fine-tuning in C++17. The
-single-index model, L2 normalization and bootstrap procedure are shared with the
-Torch backend. The public Python API still uses PyTorch for initialization,
-checkpoint objects and prediction. There are no LibTorch, Eigen or pybind11
-build dependencies. Torch remains the default backend.
+NeuralPLSI is implemented entirely in C++17. Initialization, the network, analytic
+backpropagation, AdamW, data splitting, minibatch shuffling, early stopping,
+prediction and model serialization all run in C++. There is **no Torch or
+LibTorch dependency**, including in the Python examples and tests. The Python API
+uses NumPy arrays and handles bootstrap orchestration and reporting. The separate
+SplinePLSI comparator continues to use NumPy/SciPy.
 
 ```python
 from models import NeuralPLSI
 
-model = NeuralPLSI(family="binary", activation="ELU", backend="cpp", device="cpu")
+model = NeuralPLSI(family="binary", activation="ELU")
 model.fit(X, Z, y, random_state=0)
 boot = model.inference_bootstrap(X, Z, y, n_samples=999, n_jobs=8)
+probability = model.predict_proba(X, Z)
+
+model.save("exposure_model.nplsi")
+restored = NeuralPLSI.load("exposure_model.nplsi")
 ```
 
-Linux/macOS with a C++17 compiler is required. `CXX` selects the compiler
-(default `g++`). The library is compiled once, cached by source/compiler/platform,
-and loaded through `ctypes`. Compilation is protected by a process lock so
-bootstrap workers can share the cache. To prebuild inside your HPC environment:
+Native model files retain the weights, settings and index/link orientation with
+exact float32 round trips. Bootstrap intervals and draws are separate results;
+they are not included in these prediction-model files.
+
+The Python binding supports Linux/macOS with a C++17 compiler. `CXX` selects the
+compiler (default `g++`). The shared library is built once, cached by source,
+compiler and platform, and loaded through `ctypes`. A process lock coordinates
+bootstrap workers. No Eigen, pybind11 or external numerical library is needed
+by the C++ model. To prebuild inside your HPC environment:
 
 ```bash
 python -m models.native
 ```
 
-Use `NEURALPLSI_CACHE_DIR` to select a writable cache directory. C++ supports
-continuous, binary and Cox outcomes, ELU, LeakyReLU, ReLU and Tanh, arbitrary
-positive hidden widths/depths, and optional intercepts for continuous/binary
-outcomes. It runs on CPU with float32 parameters. Unsupported configurations
-raise an error. The native kernel does not silently fall back to Torch.
+Use `NEURALPLSI_CACHE_DIR` to select a writable cache directory. The implementation
+supports continuous, binary and Cox outcomes, ELU, LeakyReLU, ReLU and Tanh, and
+optional intercepts for continuous/binary outcomes. It uses float32 network
+parameters and double precision for Cox risk-set accumulation and the optional
+linear initialization. `backend="cpp"` and `device="cpu"` are the defaults and
+only supported execution modes (`device="auto"` is a CPU alias).
 
-A local single-thread benchmark used n=2,000, p=8, q=3, the repository's `sfun`
-scenario, 32 units in two hidden layers, seeds 0–2, and three serial warm-start
-bootstrap refits per dataset. Median speedups across seeds were:
+### Optimization
 
-| Outcome | Fit | Bootstrap refits |
-|---|---:|---:|
-| Continuous | 17.5× | 18.2× |
-| Binary | 17.1× | 21.8× |
-| Cox | 16.6× | 20.4× |
+Training uses **minibatch AdamW**, with explicit C++ backpropagation. It uses
+stochastic minibatches, with Adam's adaptive first and second moments and
+decoupled weight decay. Default settings are:
 
-Compilation/loading was excluded. Maximum absolute beta/gamma discrepancy,
-including bootstrap draws, was 2.4e-7. Both backends selected the same stopping
-epochs in these checks. These are small local timing checks, not a coverage
-study or a promise of identical floating-point results on every machine.
-Adam can amplify roundoff near a stationary point, particularly with an optional
-linear initialization and full-batch training. Use the same backend throughout
-a coverage study and record it with the results.
-Reproduce the comparison with:
+| Parameter group | Joint training learning rate | Fine-tuning learning rate | Weight decay |
+|---|---:|---:|---:|
+| Raw index weights, beta | 0.001 | Frozen | 0.00001 |
+| Link network and linear skip | 0.001 | Frozen | 0.0001 |
+| Covariate coefficients, gamma, and optional intercept | 0.05 | 0.01 | 0 |
+
+The `learning_rate` argument controls the base rate. Gamma uses 50 times that
+rate during joint training and 10 times that rate during fine-tuning. Adam's
+moment coefficients are 0.9 and 0.999, with epsilon 1e-8. The default gradient
+norm limit is 1.0; fine-tuning clips only gamma and the optional intercept.
+
+Each fit uses an 80/20 training/validation split and shuffled minibatches of 64.
+Joint training runs for at most 200 epochs, with patience 5. The best joint
+checkpoint is restored before freezing beta and the entire link. Gamma then
+trains for at most `min(max_epoch, 50)` epochs, with patience 20, and its best
+validation checkpoint is restored. Gamma fine-tuning starts with fresh Adam
+moments. `max_epoch=0` performs initialization only.
+
+The objectives are mean squared error, binary cross-entropy, or the negative
+Breslow Cox partial likelihood divided by the event count, plus the identifying
+`g(0)^2` anchor during joint training. Cox risk sets include all tied observations
+within each training batch; validation uses its full partition. The original L2
+index normalization, linear skip and sign canonicalization are retained.
+`initial=True` optionally starts from a native linear/logistic/Cox regression
+fit to the training partition; it is off by default.
+
+### Use without Python
+
+The C API is declared in `models/native/core.h`. The example trains a nonlinear
+model and checks a native save/load round trip using only the C++ standard library:
+
+```bash
+g++ -O3 -ffp-contract=off -std=c++17 -I models/native \
+  models/native/core.cpp examples/native_neuralplsi.cpp -o /tmp/neuralplsi_demo
+/tmp/neuralplsi_demo /tmp/example.nplsi
+```
+
+An optional CMake build is also supplied:
+
+```bash
+cmake -S models/native -B /tmp/neuralplsi-build -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/neuralplsi-build
+/tmp/neuralplsi-build/neuralplsi_demo /tmp/example.nplsi
+```
+
+### Reproducibility and timing
+
+The native RNG protocol is `splitmix64_v1`, with separate streams for weights,
+validation splits and minibatch permutations. Fixed seeds reproduce native fits
+without changing NumPy's global RNG state. The new protocol changes initialization
+and splitting relative to the former Torch implementation, so old and new fits
+need separate simulation directories. Simulation data generation itself is unchanged.
+
+For a small timing check, including fit, prediction and serial bootstrap refits:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python reproduce/benchmark_backends.py --n 2000 --repeats 3
 ```
+
+Despite its historical filename, this script now benchmarks only native C++ and
+writes `output/benchmark_native.json`. Compilation/loading is reported separately.
+These checks do not estimate coverage; run the full scenarios on HPC for that.
+
+A local single-thread check with n=2,000, p=8, q=3, the `sfun` scenario,
+two hidden layers of 32 ELU units, and seeds 0–2 gave these median wall times:
+
+| Outcome | Fit | Predict 2,000 rows | Three warm-start bootstrap refits |
+|---|---:|---:|---:|
+| Continuous | 0.079 s | 0.0020 s | 0.143 s |
+| Binary | 0.111 s | 0.0020 s | 0.134 s |
+| Cox | 0.097 s | 0.0020 s | 0.114 s |
+
+These measurements exclude compilation/loading and are specific to this machine
+and early-stopping behavior. They are not a comparison against the old RNG protocol.
 
 ## Corrected simulation and HPC workflow
 
@@ -148,7 +219,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_fixed_cpp_b999
+export OUT_DIR=output/simulation_native_v3_b999
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -176,7 +247,7 @@ For a local run:
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_fixed_cpp_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v3_b999
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -187,8 +258,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_fixed_cpp_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_fixed_cpp_b999
+python reproduce/visualize_simulation.py --input output/simulation_native_v3_b999
+python reproduce/table_simulation_comparison.py --input output/simulation_native_v3_b999
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage
@@ -214,8 +285,8 @@ replicates, not a bootstrap confidence band.
 - `initial=True` now performs linear-model initialization using the training
   partition. It was previously ignored. It is still off by default.
 - Simulation data retain the historical seeded draws without changing the
-  caller's NumPy RNG state. Torch and C++ training use the same local minibatch
-  permutations. Corrected fits therefore need fresh simulation results.
+  caller's NumPy RNG state. Native initialization and minibatch shuffling use
+  the versioned C++ RNG protocol. Corrected fits need fresh simulation results.
 - NHANES preprocessing excludes incomplete observations explicitly; reported
   SEs use bootstrap sample SDs. Curve grids use the index, and curve-plus-intercept
   intervals include their joint bootstrap uncertainty. Plots preserve actual
@@ -229,7 +300,11 @@ part of the production estimator. Spline coefficient intervals describe
 coefficients in adaptively selected bases; use the bootstrap `g_grid` bands for
 inference on the common link-function scale.
 
-Run the regression and native parity checks with:
+Run the regression tests with the command below. They independently verify
+forward values and analytic gradients for every outcome/activation combination,
+multi-step AdamW updates, linear initialization, stopping/checkpoint behavior,
+bootstrap orientation, serial/parallel reproducibility, and native serialization.
+A separate subprocess also blocks every Torch import during fitting and inference.
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \

@@ -1,8 +1,4 @@
-"""Optional C++ CPU training, with no third-party C++ dependencies.
-
-The public model still uses PyTorch for initialization, serialization and
-prediction. All training loops and gradients run inside the native library.
-"""
+"""NumPy/ctypes bindings to the standalone C++ NeuralPLSI implementation."""
 import ctypes
 import functools
 import hashlib
@@ -12,13 +8,13 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+from numbers import Integral
 
 import numpy as np
-import torch
-from sklearn.model_selection import train_test_split
 
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
+RNG_PROTOCOL = 'splitmix64_v1'
 
 
 def build_library():
@@ -30,8 +26,8 @@ def build_library():
     try:
         version = subprocess.check_output(compiler+['--version'], stderr=subprocess.STDOUT)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError('The cpp backend needs a C++17 compiler. Set CXX or use backend="torch".') from exc
-    digest = hashlib.sha256(source.read_bytes()+version+repr(flags).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
+        raise RuntimeError('NeuralPLSI needs a C++17 compiler. Install one or set CXX.') from exc
+    digest = hashlib.sha256(source.read_bytes()+source.with_suffix('.h').read_bytes()+version+repr(flags).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
     cache = Path(os.environ.get('NEURALPLSI_CACHE_DIR', Path.home()/'.cache'/'neuralplsi'))
     cache.mkdir(parents=True, exist_ok=True)
     target = cache/f'core-{digest}.so'
@@ -59,13 +55,35 @@ def library():
     fp = np.ctypeslib.ndpointer(dtype=np.float32, flags='C_CONTIGUOUS')
     ip = np.ctypeslib.ndpointer(dtype=np.int32, flags='C_CONTIGUOUS')
     dp = np.ctypeslib.ndpointer(dtype=np.float64, flags='C_CONTIGUOUS')
-    integer = ctypes.c_int
-    lib.nplsi_error.restype = ctypes.c_char_p
-    lib.nplsi_loss_grad.argtypes = [ip, fp, fp, fp, fp, fp, integer, integer, dp, fp]
-    lib.nplsi_adam_step.argtypes = [ip, fp, fp, fp, integer]
-    lib.nplsi_train.argtypes = [ip, fp, fp, fp, fp, fp, integer, fp, fp, fp, integer, ip, dp]
-    for name in ('nplsi_loss_grad', 'nplsi_adam_step', 'nplsi_train'):
-        getattr(lib, name).restype = integer
+    pointer, integer, seed = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint64
+    size, chars = ctypes.c_size_t, ctypes.c_char_p
+    signatures = {
+        'nplsi_error': ([], chars),
+        'nplsi_create': ([ip, fp, seed], pointer),
+        'nplsi_destroy': ([pointer], None),
+        'nplsi_split': ([integer, seed, ip], integer),
+        'nplsi_fit': ([pointer, fp, fp, fp, integer, seed, integer], integer),
+        'nplsi_predict': ([pointer, fp, fp, integer, integer, integer, fp], integer),
+        'nplsi_link': ([pointer, fp, integer, fp], integer),
+        'nplsi_coefficients': ([pointer, fp, fp, fp], integer),
+        'nplsi_get_config': ([pointer, ip, fp, dp], integer),
+        'nplsi_get_weights': ([pointer, fp], integer),
+        'nplsi_set_weights': ([pointer, fp, ctypes.c_float], integer),
+        'nplsi_canonicalize': ([pointer], integer),
+        'nplsi_state_size': ([pointer], size),
+        'nplsi_export_state': ([pointer, pointer, size], integer),
+        'nplsi_import_state': ([chars, size], pointer),
+        'nplsi_save': ([pointer, chars], integer),
+        'nplsi_load': ([chars], pointer),
+        'nplsi_loss_grad': ([ip, fp, fp, fp, fp, fp, integer, integer, dp, fp], integer),
+        'nplsi_adam_step': ([ip, fp, fp, fp, integer], integer),
+        'nplsi_adam_updates': ([ip, fp, fp, fp, integer, integer], integer),
+        'nplsi_outcome': ([fp, fp, integer, integer, dp, fp], integer),
+        'nplsi_train': ([ip, fp, fp, fp, fp, fp, integer, fp, fp, fp, integer, ip, dp], integer),
+    }
+    for name, (arguments, result) in signatures.items():
+        function = getattr(lib, name)
+        function.argtypes, function.restype = arguments, result
     return lib
 
 
@@ -74,79 +92,178 @@ def checked(status):
         raise RuntimeError(library().nplsi_error().decode())
 
 
-def parameters(net):
-    """Explicit layout, independent of nn.Module's root-parameter ordering."""
-    params = [net.x_input.weight, net.z_input.weight, net.g_skip.weight]
-    for layer in net.g_network:
-        if isinstance(layer, torch.nn.Linear):
-            params.extend([layer.weight, layer.bias])
-    if net.add_intercept:
-        params.append(net.intercept)
-    return params
+def seed_value(value):
+    if isinstance(value, bool) or not isinstance(value, Integral) or not 0 <= value < 2**64:
+        raise ValueError('random_state must be an integer in [0, 2**64)')
+    return int(value)
 
 
-def pack(net):
-    return np.concatenate([p.detach().cpu().numpy().ravel() for p in parameters(net)]).astype(np.float32)
+def parameter_count(p, q, width, depth, intercept):
+    return p+q+1+2*width+(depth-1)*(width*width+width)+width+1+int(intercept)
 
 
-def unpack(net, weights):
-    offset = 0
-    with torch.no_grad():
-        for param in parameters(net):
-            param.copy_(torch.from_numpy(weights[offset:offset+param.numel()].reshape(param.shape)))
-            offset += param.numel()
-    if offset != len(weights):
-        raise ValueError('Wrong native parameter count')
+class NativeModel:
+    """Own a native model handle. No Python network or automatic differentiation."""
+    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, add_intercept=False,
+                 family='continuous', activation='ELU', batch_size=64, max_epoch=200,
+                 learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
+                 grad_clip=1., initial=False, warmstart=True, random_state=0):
+        self._library = library()
+        self._handle = None
+        self.config = np.array([p, q, hidden_units, n_hidden_layers, int(add_intercept),
+            FAMILIES[family], ACTIVATIONS[activation],
+            parameter_count(p, q, hidden_units, n_hidden_layers, add_intercept),
+            batch_size, max_epoch, int(initial), int(warmstart)], dtype=np.int32)
+        self.hyper = np.array([learning_rate, weight_decay, weight_decay_beta, grad_clip, 1.], dtype=np.float32)
+        self._handle = self._library.nplsi_create(self.config, self.hyper, seed_value(random_state))
+        self._check_handle()
+        self._refresh()
+
+    def _check_handle(self):
+        if not self._handle:
+            raise RuntimeError(self._library.nplsi_error().decode())
+
+    def close(self):
+        if getattr(self, '_handle', None):
+            self._library.nplsi_destroy(self._handle)
+            self._handle = None
+
+    def __del__(self):
+        self.close()
+
+    def _refresh(self):
+        self.config, self.hyper = np.empty(12, dtype=np.int32), np.empty(5, dtype=np.float32)
+        diagnostics = np.empty(3, dtype=np.float64)
+        checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
+        self.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_epochs=int(diagnostics[1]),
+                                   validation_loss=float(diagnostics[2]))
+
+    @classmethod
+    def _from_handle(cls, handle):
+        result = cls.__new__(cls)
+        result._library, result._handle = library(), handle
+        result._check_handle()
+        result._refresh()
+        return result
+
+    def to_bytes(self):
+        size = self._library.nplsi_state_size(self._handle)
+        if not size:
+            raise RuntimeError(self._library.nplsi_error().decode())
+        buffer = ctypes.create_string_buffer(size)
+        checked(self._library.nplsi_export_state(self._handle, buffer, size))
+        return buffer.raw
+
+    @classmethod
+    def from_bytes(cls, data):
+        if not isinstance(data, bytes):
+            raise TypeError('Native model state must be bytes')
+        return cls._from_handle(library().nplsi_import_state(data, len(data)))
+
+    def __reduce__(self):
+        return (type(self).from_bytes, (self.to_bytes(),))
+
+    def save(self, path):
+        checked(self._library.nplsi_save(self._handle, os.fsencode(path)))
+
+    @classmethod
+    def load(cls, path):
+        return cls._from_handle(library().nplsi_load(os.fsencode(path)))
+
+    @property
+    def weights(self):
+        weights = np.empty(int(self.config[7]), dtype=np.float32)
+        checked(self._library.nplsi_get_weights(self._handle, weights))
+        return weights
+
+    def set_weights(self, weights, sign=None):
+        weights = np.ascontiguousarray(weights, dtype=np.float32)
+        if weights.shape != (int(self.config[7]),):
+            raise ValueError('Wrong native weight dimensions')
+        checked(self._library.nplsi_set_weights(self._handle, weights, float(self.hyper[4] if sign is None else sign)))
+        self._refresh()
+
+    @property
+    def flip_sign(self):
+        return self.hyper[4] < 0
+
+    def resolve_sign_ambiguity(self):
+        checked(self._library.nplsi_canonicalize(self._handle))
+        self._refresh()
+
+    def coefficients(self):
+        beta, gamma, intercept = (np.empty(int(self.config[0]), dtype=np.float32),
+                                  np.empty(int(self.config[1]), dtype=np.float32), np.empty(1, dtype=np.float32))
+        checked(self._library.nplsi_coefficients(self._handle, beta, gamma, intercept))
+        return beta, gamma, intercept if self.config[4] else None
+
+    def fit(self, X, Z, y, random_state=0, reset=True):
+        from ..base import validate_data
+        family = next(k for k, v in FAMILIES.items() if v == self.config[5])
+        X, Z, y = validate_data(X, Z, y, family, dtype=np.float32)
+        X, Z, y = [np.ascontiguousarray(a) for a in (X, Z, y)]
+        if X.shape[1] != self.config[0] or Z.shape[1] != self.config[1]:
+            raise ValueError('Fit dimensions differ from the native model')
+        checked(self._library.nplsi_fit(self._handle, X, Z, y, len(X), seed_value(random_state), int(reset)))
+        self._refresh()
+        return self
+
+    def predict(self, X, Z=None, batch_size=128, mode=0):
+        X = np.ascontiguousarray(X, dtype=np.float32)
+        if (X.ndim != 2 or X.shape[1] != self.config[0] or not np.isfinite(X).all()):
+            raise ValueError('X must be finite and match the fitted exposure dimensions')
+        if mode == 3:
+            Z = np.empty(0, dtype=np.float32)
+        else:
+            Z = np.ascontiguousarray(Z, dtype=np.float32)
+            if Z.shape != (len(X), self.config[1]) or not np.isfinite(Z).all():
+                raise ValueError('Z must be finite and match the fitted covariate dimensions')
+        if isinstance(batch_size, bool) or not isinstance(batch_size, Integral) or batch_size < 1:
+            raise ValueError('batch_size must be a positive integer')
+        result = np.empty(len(X), dtype=np.float32)
+        checked(self._library.nplsi_predict(self._handle, X, Z, len(X), int(batch_size), mode, result))
+        return result
+
+    def g_function(self, grid):
+        grid = np.ascontiguousarray(np.asarray(grid, dtype=np.float32).reshape(-1))
+        if not np.isfinite(grid).all():
+            raise ValueError('Link grid must be finite')
+        result = np.empty(len(grid), dtype=np.float32)
+        checked(self._library.nplsi_link(self._handle, grid, len(grid), result))
+        return result
 
 
-def configuration(net, family, batch_size=64, max_epoch=200):
-    if net.n_classes != 1 or any(p.dtype != torch.float32 or p.device.type != 'cpu' for p in parameters(net)):
-        raise ValueError('The cpp backend supports scalar float32 models on CPU')
-    activations = [layer for layer in net.g_network if not isinstance(layer, torch.nn.Linear)]
-    name = type(activations[0]).__name__
-    if name not in ACTIVATIONS or any(type(a).__name__ != name for a in activations):
-        raise ValueError('The cpp backend supports ELU, LeakyReLU, ReLU and Tanh')
-    return np.array([net.x_input.in_features, net.z_input.in_features,
-        net.g_network[0].out_features, len(activations), net.add_intercept,
-        FAMILIES[family], ACTIVATIONS[name], sum(p.numel() for p in parameters(net)),
-        batch_size, max_epoch], dtype=np.int32)
-
-
-def hyperparameters(net, learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5, grad_clip=1.):
-    return np.array([learning_rate, weight_decay, weight_decay_beta, grad_clip,
-                     float(net._index_sign)], dtype=np.float32)
-
-
-def loss_and_gradient(net, X, Z, y, family, anchor=True):
-    """Diagnostic API for numerical checks of the independent gradient code."""
-    arrays = [np.ascontiguousarray(a, dtype=np.float32) for a in (X, Z, y)]
-    weights = pack(net)
+def loss_and_gradient(net, X, Z, y, family=None, anchor=True):
+    """Diagnostic entry point for independent numerical gradient checks."""
+    from ..base import validate_data
+    own_family = next(k for k, v in FAMILIES.items() if v == net.config[5])
+    if family is not None and family != own_family:
+        raise ValueError('Loss family differs from the model')
+    arrays = [np.ascontiguousarray(a) for a in validate_data(X, Z, y, own_family, dtype=np.float32)]
+    if arrays[0].shape[1] != net.config[0] or arrays[1].shape[1] != net.config[1]:
+        raise ValueError('Wrong model dimensions')
+    weights = net.weights
     loss, gradient = np.zeros(1, dtype=np.float64), np.zeros_like(weights)
-    checked(library().nplsi_loss_grad(configuration(net, family), hyperparameters(net), weights,
-                                     *arrays, len(X), int(anchor), loss, gradient))
+    checked(library().nplsi_loss_grad(net.config, net.hyper, weights, *arrays, len(X), int(anchor), loss, gradient))
     return float(loss[0]), gradient
 
 
-def train(net, X, Z, y, family, batch_size=64, max_epoch=200,
-          learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-          grad_clip=1., random_state=0):
-    config = configuration(net, family, batch_size, max_epoch)
-    hyper = hyperparameters(net, learning_rate, weight_decay, weight_decay_beta, grad_clip)
-    tx, vx, tz, vz, ty, vy = train_test_split(X, Z, y, test_size=.2, random_state=random_state)
-    if family == 'cox':
-        if ty[:, 1].sum() == 0 or vy[:, 1].sum() == 0:
-            raise ValueError('Both Cox training and validation partitions need at least one event')
-        order = torch.argsort(torch.from_numpy(vy[:, 0].copy()), descending=True).numpy()
-        vx, vz, vy = vx[order], vz[order], vy[order]
-    arrays = [np.ascontiguousarray(a, dtype=np.float32) for a in (tx, tz, ty, vx, vz, vy)]
-    rng = np.random.RandomState(random_state)
-    permutations = np.array([rng.permutation(len(tx)) for _ in range(max_epoch+min(max_epoch, 50))],
-                            dtype=np.int32).reshape(-1, len(tx))
-    weights, diagnostics = pack(net), np.empty(3, dtype=np.float64)
-    checked(library().nplsi_train(config, hyper, weights, *arrays[:3], len(tx),
-                                  *arrays[3:], len(vx), permutations, diagnostics))
-    unpack(net, weights)
-    net.resolve_sign_ambiguity()
-    net.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_epochs=int(diagnostics[1]),
-                               validation_loss=float(diagnostics[2]))
-    return net
+def outcome_loss_gradient(risk, y, family):
+    risk = np.ascontiguousarray(np.asarray(risk, dtype=np.float32).reshape(-1))
+    y = np.ascontiguousarray(y, dtype=np.float32)
+    shape = (len(risk), 2) if family == 'cox' else (len(risk),)
+    if y.shape != shape or not len(risk) or not np.isfinite(risk).all() or not np.isfinite(y).all():
+        raise ValueError('Invalid loss inputs')
+    loss, gradient = np.empty(1, dtype=np.float64), np.empty_like(risk)
+    checked(library().nplsi_outcome(risk, y, len(risk), FAMILIES[family], loss, gradient))
+    return float(loss[0]), gradient
+
+
+def training_validation_indices(n, random_state=0):
+    """Inspect the native 80/20 split without fitting or changing any RNG state."""
+    if isinstance(n, bool) or not isinstance(n, Integral) or n < 2:
+        raise ValueError('Splitting requires at least two rows')
+    order = np.empty(n, dtype=np.int32)
+    checked(library().nplsi_split(n, seed_value(random_state), order))
+    validation_size = (n+4)//5
+    return order[validation_size:], order[:validation_size]

@@ -1,27 +1,27 @@
 import unittest
-import torch
-from models.NeuralPLSI import CoxCCLoss
+import numpy as np
+from scipy.special import logsumexp
+from models.native import outcome_loss_gradient
 
 
 class CoxRiskSetTest(unittest.TestCase):
-    def test_loss_matches_explicit_breslow_risk_sets(self):
-        for durations in [[4.,3.,2.,1.],[4.,3.,3.,1.]]:
-            with self.subTest(durations=durations):
-                r=torch.tensor([.4,-.3,.8,.1],dtype=torch.float64,requires_grad=True)
-                d=torch.tensor(durations,dtype=torch.float64)
-                e=torch.tensor([1.,1.,1.,0.],dtype=torch.float64)
-                y=torch.column_stack([d,e])
-                reference=-sum(e[i]*(r[i]-torch.logsumexp(r[d>=d[i]],dim=0))
-                               for i in range(len(d)))/e.sum()
-                actual=CoxCCLoss()(r,y)
-                torch.testing.assert_close(actual,reference)
-                ref_grad=torch.autograd.grad(reference,r,retain_graph=True)[0]
-                actual_grad=torch.autograd.grad(actual,r)[0]
-                torch.testing.assert_close(actual_grad,ref_grad)
-                order=torch.tensor([2,0,3,1])
-                torch.testing.assert_close(CoxCCLoss()(r[order],y[order]),reference)
-                torch.testing.assert_close(CoxCCLoss(presorted=True)(r,y),reference)
-
-
-if __name__=='__main__':
-    unittest.main()
+    def test_loss_and_score_match_complete_breslow_risk_sets(self):
+        for times in ([4., 3., 2., 1.], [4., 3., 3., 1.], [1., 1., 1., 1.]):
+            r=np.array([.4, -.3, .8, .1], dtype=np.float32)
+            t=np.array(times); e=np.array([1., 1., 1., 0.])
+            reference, score=0., np.zeros(4)
+            for i in range(4):
+                if not e[i]:
+                    continue
+                mask=t>=t[i]
+                logden=logsumexp(r[mask].astype(float))
+                reference+=logden-r[i]
+                score[mask]+=np.exp(r[mask].astype(float)-logden)
+                score[i]-=1
+            actual, gradient=outcome_loss_gradient(r,np.column_stack([t,e]),'cox')
+            np.testing.assert_allclose(actual,reference/e.sum(),rtol=1e-7)
+            np.testing.assert_allclose(gradient,score/e.sum(),atol=2e-8)
+            order=np.array([2,0,3,1])
+            permuted, pg=outcome_loss_gradient(r[order],np.column_stack([t,e])[order],'cox')
+            self.assertEqual(actual,permuted)
+            np.testing.assert_allclose(pg,gradient[order],atol=1e-8)

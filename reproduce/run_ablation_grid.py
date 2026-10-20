@@ -18,7 +18,7 @@ def main(argv=None):
     parser.add_argument('--workers', type=int, default=1)
     parser.add_argument('--n_replicates', type=int, default=50)
     parser.add_argument('--n_bootstrap', type=int, default=100)
-    parser.add_argument('--nn_backend', choices=['torch', 'cpp'], default='torch')
+    parser.add_argument('--nn_backend', choices=['cpp'], default='cpp')
     parser.add_argument('--out', default='output/ablation_fixed')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)

@@ -4,19 +4,14 @@ from unittest.mock import patch
 
 import numpy as np
 from scipy.special import logsumexp
-import torch
 
 from models import NeuralPLSI, SplinePLSI
-from models.NeuralPLSI import CoxCCLoss, _nPLSInet, _initialize_linear
+from models.native import outcome_loss_gradient, training_validation_indices
 from models.PLSI import _cox_loss_and_grad, _binary_fit
 from simulation import simulate_data
 
 
 class ModelRegressionTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        torch.set_num_threads(1)
-
     def test_extreme_tied_cox_scores_and_gradients(self):
         risk = np.array([-1000., -900., 900., 1000., 999.])
         time, event = np.array([5., 4., 3., 3., 1.]), np.array([1., 1., 0., 1., 1.])
@@ -31,11 +26,9 @@ class ModelRegressionTest(unittest.TestCase):
             f = lambda w: _cox_loss_and_grad(np.eye(5), event, w, 0., group_ends=ends)[0]
             numeric.append((f(risk+shift)-f(risk-shift))/(2*eps))
         np.testing.assert_allclose(grad, numeric, atol=2e-8)
-        value_t = torch.tensor(risk, requires_grad=True)
-        loss = CoxCCLoss()(value_t, torch.tensor(np.column_stack([time, event])))
-        loss.backward()
-        np.testing.assert_allclose(loss.item(), expected/event.sum())
-        np.testing.assert_allclose(value_t.grad.numpy(), grad/event.sum(), atol=1e-12)
+        loss, gradient = outcome_loss_gradient(risk, np.column_stack([time, event]), 'cox')
+        np.testing.assert_allclose(loss, expected/event.sum())
+        np.testing.assert_allclose(gradient, grad/event.sum(), atol=1e-7)
 
     def test_final_spline_components_use_returned_index(self):
         x, z, y, *_ = simulate_data(60, g_type='linear', seed=10)
@@ -62,8 +55,7 @@ class ModelRegressionTest(unittest.TestCase):
 
     def test_serial_parallel_bootstrap_and_refit_clear_uncertainty(self):
         x, z, y, *_ = simulate_data(50, seed=1)
-        for model in (SplinePLSI(max_iter=1), NeuralPLSI(max_epoch=2, hidden_units=4, device='cpu'),
-                      NeuralPLSI(max_epoch=2, hidden_units=4, device='cpu', backend='cpp')):
+        for model in (SplinePLSI(max_iter=1), NeuralPLSI(max_epoch=2, hidden_units=4)):
             with self.subTest(model=type(model).__name__, backend=getattr(model, 'backend', None)):
                 model.fit(x, z, y, random_state=5)
                 serial = model.inference_bootstrap(x, z, y, n_samples=3, n_jobs=1, random_state=13, g_grid=[-1., 1.])
@@ -78,11 +70,57 @@ class ModelRegressionTest(unittest.TestCase):
         from sklearn.linear_model import LinearRegression
         x, z, y, *_ = simulate_data(50, seed=2)
         for intercept in (False, True):
-            net = _nPLSInet(8, 3, add_intercept=intercept)
-            _initialize_linear(net, x, z, y, 'continuous')
-            prediction = net(torch.tensor(x, dtype=torch.float32), torch.tensor(z, dtype=torch.float32)).detach().numpy().ravel()
-            reference = LinearRegression(fit_intercept=intercept).fit(np.column_stack([x, z]), y)
-            np.testing.assert_allclose(prediction, reference.predict(np.column_stack([x, z])), atol=1e-6)
+            model = NeuralPLSI(initial=True, max_epoch=0, add_intercept=intercept).fit(x, z, y, random_state=4)
+            train, _ = training_validation_indices(len(x), 4)
+            design = np.column_stack([x, z]).astype('float32').astype(float)
+            reference = LinearRegression(fit_intercept=intercept).fit(design[train], y[train].astype('float32'))
+            np.testing.assert_allclose(model.predict(x,z), reference.predict(design), rtol=1e-5, atol=2e-6)
+
+    def test_binary_and_cox_initialization_match_independent_optimization(self):
+        from scipy.optimize import minimize
+        from scipy.special import expit
+        rng = np.random.default_rng(24)
+        x, z = rng.normal(size=(160, 3)), rng.normal(size=(160, 2))
+        x, z = x.astype('float32'), z.astype('float32')
+        train, _ = training_validation_indices(len(x), 4)
+        for family, intercept in [('binary', False), ('binary', True), ('cox', False)]:
+            with self.subTest(family=family, intercept=intercept):
+                y = rng.binomial(1, expit(.5*x[:, 0] + .3*z[:, 0]))
+                if family == 'cox':
+                    y = np.column_stack([rng.integers(1, 20, len(x)), rng.binomial(1, .7, len(x))])
+                design = np.column_stack([x, z]).astype(float)
+                if intercept:
+                    design = np.column_stack([design, np.ones(len(x))])
+                d, target = design[train], y[train]
+                penalized = np.ones(design.shape[1])
+                if intercept:
+                    penalized[-1] = 0
+
+                def objective(coefficient):
+                    eta = d @ coefficient
+                    value = .5e-6 * np.dot(penalized * coefficient, coefficient)
+                    score = np.zeros(len(eta))
+                    if family == 'binary':
+                        value += np.sum(np.logaddexp(0., eta) - target*eta)
+                        score = expit(eta) - target
+                    else:
+                        # Direct complete risk sets, independent of the native
+                        # sorted cumulative-moment Newton implementation.
+                        for i in np.flatnonzero(target[:, 1]):
+                            risk = target[:, 0] >= target[i, 0]
+                            denominator = logsumexp(eta[risk])
+                            value += denominator - eta[i]
+                            score[risk] += np.exp(eta[risk] - denominator)
+                            score[i] -= 1.
+                    return value, d.T @ score + 1e-6 * penalized * coefficient
+
+                reference = minimize(objective, np.zeros(design.shape[1]), jac=True,
+                                     method='BFGS', options={'gtol': 1e-7})
+                self.assertLess(np.max(np.abs(objective(reference.x)[1])), 1e-5)
+                model = NeuralPLSI(family=family, initial=True, max_epoch=0,
+                                   add_intercept=intercept).fit(x, z, y, random_state=4)
+                np.testing.assert_allclose(model.predict(x, z), design @ reference.x,
+                                           rtol=1e-5, atol=2e-6)
 
     def test_simulation_does_not_mutate_global_rng(self):
         np.random.seed(123)

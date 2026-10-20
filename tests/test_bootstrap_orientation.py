@@ -1,25 +1,22 @@
 import unittest
 import numpy as np
-import torch
 from models import NeuralPLSI
-from models.NeuralPLSI import _nPLSInet
+from models.native import NativeModel
 
 
 class BootstrapOrientationTest(unittest.TestCase):
     def test_warm_start_preserves_link_for_both_orientations(self):
         """With zero training steps, a bootstrap copy must preserve g exactly."""
-        torch.set_num_threads(1)
         rng=np.random.default_rng(123)
         X,Z,y=rng.normal(size=(50,8)),rng.normal(size=(50,3)),rng.normal(size=50)
         grid=np.linspace(-2,2,21)
         for flipped in [False,True]:
             with self.subTest(flipped=flipped):
-                torch.manual_seed(19)
                 m=NeuralPLSI(max_epoch=0,activation='ELU')
-                m.device=torch.device('cpu')
-                m.net=_nPLSInet(8,3,activation='ELU')
-                with torch.no_grad():
-                    m.net.x_input.weight[0,0]= -1 if flipped else 1
+                m.net=NativeModel(8,3,activation='ELU',max_epoch=0,random_state=19)
+                weights=m.net.weights
+                weights[0]= -1 if flipped else 1
+                m.net.set_weights(weights,sign=1)
                 m.net.resolve_sign_ambiguity()
                 self.assertEqual(m.net.flip_sign,flipped)
                 expected=m.g_function(grid)

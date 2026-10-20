@@ -2,16 +2,16 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-import torch
 
-from models.NeuralPLSI import NeuralPLSI, _nPLSInet
+from models import NeuralPLSI
+from models.native import NativeModel
 
 
 class BootstrapQuantilesTest(unittest.TestCase):
     def test_interpolation_applies_to_all_blocks_without_changing_draws(self):
         """For ordered draws 1..100, endpoints have hand-computable ranks."""
         model = NeuralPLSI(add_intercept=True)
-        model.net = _nPLSInet(2, 1, add_intercept=True).to(model.device)
+        model.net = NativeModel(2, 1, add_intercept=True)
         sample = np.arange(1., 101.)
         draws = [(np.array([v, -v]), np.array([2*v]), np.array([3*v]),
                   np.array([4*v, 5*v])) for v in sample]

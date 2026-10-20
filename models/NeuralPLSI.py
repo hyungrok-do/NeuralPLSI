@@ -1,598 +1,148 @@
+"""Single-index neural model implemented entirely in the native C++ library."""
+import functools
+from numbers import Integral
+from pathlib import Path
+
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression, LinearRegression
+
 from .base import (_SummaryMixin, run_parallel_bootstrap, validate_data,
                    validate_bootstrap, bootstrap_jobs)
-from .utils import SchedulerCallback, EpochSampler
-import functools
-import copy
-
-class CoxCCLoss(nn.Module):
-    """Negative Cox partial log-likelihood (Breslow approximation).
-
-    Sorts by descending duration and computes log-cumsum-exp for
-    numerical stability.  Pass ``presorted=True`` to skip the argsort
-    when data is already ordered (e.g. a fixed validation set).
-    """
-    def __init__(self, presorted=False):
-        super().__init__()
-        self.presorted = presorted
-
-    def forward(self, risk_scores, targets):
-        durations, events = targets[:, 0], targets[:, 1]
-        if risk_scores.dim() > 1:
-            risk_scores = risk_scores.squeeze(1)
-
-        if not self.presorted:
-            idx = torch.argsort(durations, descending=True)
-            r = risk_scores[idx]
-            e = events[idx]
-            d = durations[idx]
-        else:
-            r = risk_scores
-            e = events
-            d = durations
-
-        n_events = e.sum()
-        if n_events == 0:
-            return risk_scores.sum() * 0.0   # grad-safe zero
-
-        log_cumsum_h = torch.logcumsumexp(r, dim=0)
-        # Every event at a tied duration has the same complete risk set.
-        # Pairs bootstrap samples create ties even when original times differ.
-        _, counts = torch.unique_consecutive(d, return_counts=True)
-        group_ends = counts.cumsum(0) - 1
-        log_risk = torch.repeat_interleave(log_cumsum_h[group_ends], counts)
-        return -(r - log_risk).mul(e).sum() / n_events
-
-class _nPLSInet(nn.Module):
-    def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='ELU'):
-        super().__init__()
-        self.x_input = nn.Linear(p, 1, bias=False)
-        self.z_input = nn.Linear(q, n_classes, bias=False)
-        
-        # Linear skip-connection for the g-function to handle unbounded tail extrapolation
-        self.g_skip = nn.Linear(1, n_classes, bias=False)
-        
-        act_cls = getattr(nn, activation)
-
-        layers = []
-        layers.append(nn.Linear(1, hidden_units))
-        layers.append(act_cls())
-        for _ in range(n_hidden_layers - 1):
-            layers.append(nn.Linear(hidden_units, hidden_units))
-            layers.append(act_cls())
-        layers.append(nn.Linear(hidden_units, n_classes))
-        self.g_network = nn.Sequential(*layers)
-        
-        # The link orientation must travel with state_dict checkpoints.
-        self.register_buffer('_index_sign', torch.tensor(1.0))
-        self.n_classes = n_classes
-        self.add_intercept = add_intercept
-        if self.add_intercept:
-            self.intercept = nn.Parameter(torch.zeros(n_classes))
-
-    def forward(self, x, z):
-        w = self.x_input.weight
-        w_norm = w / (w.norm() + 1e-6)
-        xb = F.linear(x, w_norm, self.x_input.bias)
-        xb = xb * self._index_sign
-        # Combine MLP non-linearity with global linear skip-connection
-        out = self.g_network(xb) + self.g_skip(xb) + self.z_input(z)
-        if self.add_intercept:
-            out = out + self.intercept
-        return out
-
-    def g_function(self, x):
-        x = x * self._index_sign
-        return self.g_network(x) + self.g_skip(x)
-
-    def gxb(self, x):
-        w = self.x_input.weight
-        w_norm = w / (w.norm() + 1e-6)
-        xb = F.linear(x, w_norm, self.x_input.bias)
-        xb = xb * self._index_sign
-        return self.g_network(xb) + self.g_skip(xb)
-
-    def resolve_sign_ambiguity(self):
-        with torch.no_grad():
-            w = self.x_input.weight.data[0]
-            if w[0] < 0:
-                self.flip_sign = not self.flip_sign
-                self.x_input.weight.data[0].mul_(-1.)
-                if self.x_input.bias is not None:
-                    self.x_input.bias.data.mul_(-1.)
-
-    @property
-    def flip_sign(self):
-        return self._index_sign.item() < 0
-
-    @flip_sign.setter
-    def flip_sign(self, value):
-        self._index_sign.fill_(-1.0 if value else 1.0)
+from .native import NativeModel, FAMILIES, ACTIVATIONS, seed_value
 
 
-def _initialize_linear(net, X, Z, y, family):
-    """Optional linear-model initialization on the same scale as the network."""
-    design = np.column_stack([X, Z])
-    if family == 'continuous':
-        model = LinearRegression(fit_intercept=net.add_intercept).fit(design, y)
-        coefficient, intercept = model.coef_, model.intercept_
-    elif family == 'binary':
-        model = LogisticRegression(C=1e6, fit_intercept=net.add_intercept,
-                                   max_iter=1000).fit(design, y)
-        coefficient, intercept = model.coef_[0], model.intercept_[0]
+def _refit_nplsi(Xb, Zb, yb, seed, settings, state, do_g, g_grid):
+    model = NeuralPLSI(**settings)
+    if state is None:
+        model.fit(Xb, Zb, yb, random_state=seed)
     else:
-        from .PLSI import _fast_cox_fit
-        coefficient, _ = _fast_cox_fit(design, y[:, 0], y[:, 1], 1e-6)
-        intercept = 0.
-    p = X.shape[1]
-    length = np.linalg.norm(coefficient[:p])
-    if not np.isfinite(length) or length < 1e-10:
-        raise ValueError('Linear initialization produced a zero or nonfinite exposure direction')
-    with torch.no_grad():
-        net.x_input.weight.copy_(torch.as_tensor(coefficient[:p], device=net.x_input.weight.device))
-        net.z_input.weight.copy_(torch.as_tensor(coefficient[p:], device=net.z_input.weight.device))
-        net.g_network[-1].weight.zero_()
-        net.g_network[-1].bias.zero_()
-        net.g_skip.weight.fill_(length+1e-6)
-        if net.add_intercept:
-            net.intercept.fill_(float(intercept))
+        model.net = NativeModel.from_bytes(state)
+        model.net.fit(Xb, Zb, yb, random_state=seed, reset=False)
+    return model.beta, model.gamma, model.intercept_val, model.g_function(g_grid) if do_g else None
 
-
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='LeakyReLU', warmstart=True, warmstart_state=None, warmstart_flip_sign=None, initial=False, backend="torch"):
-    torch.set_num_threads(1)
-    device = torch.device(device_type)
-    p, q = Xb.shape[1], Zb.shape[1]
-
-    torch.manual_seed(seed)
-    net_b = _nPLSInet(p, q, hidden_units=hidden_units, n_hidden_layers=n_hidden_layers, add_intercept=add_intercept, activation=activation).to(device)
-    
-    if warmstart and warmstart_state is not None:
-        net_b.load_state_dict(warmstart_state)
-        if warmstart_flip_sign is not None:
-            net_b.flip_sign = warmstart_flip_sign
-    elif initial:
-        ix, _, iz, _, iy, _ = train_test_split(Xb, Zb, yb, test_size=.2, random_state=seed)
-        _initialize_linear(net_b, ix, iz, iy, family)
-        
-    net_b = NeuralPLSI._train(
-        net_b, Xb, Zb, yb, family, device,
-        batch_size=batch_size, max_epoch=max_epoch,
-        learning_rate=learning_rate, weight_decay=weight_decay,
-        weight_decay_beta=weight_decay_beta,
-        grad_clip=grad_clip, random_state=seed, backend=backend
-    )
-
-    w = net_b.x_input.weight.detach().cpu().flatten()
-    beta_b = (w / (w.norm() + 1e-6)).numpy()
-    gamma_b = net_b.z_input.weight.detach().cpu().flatten().numpy()
-
-    intercept_b = None
-    if add_intercept:
-        intercept_b = net_b.intercept.detach().cpu().flatten().numpy()
-
-    if do_g:
-        net_b.eval()
-        with torch.no_grad():
-            gx_raw = net_b.g_function(torch.from_numpy(g_grid).to(device))
-            gx = gx_raw.view(-1).cpu().numpy()
-        return beta_b, gamma_b, intercept_b, gx
-    return beta_b, gamma_b, intercept_b, None
 
 class NeuralPLSI(_SummaryMixin):
-    """
-    Neural Partial Linear Single Index Model (NeuralPLSI).
-    
-    Fits a model of the form:
-    g(X @ beta) + Z @ gamma
-    
-    where g is a neural network, beta and gamma are learned parameters.
-    Supports continuous, binary, and time-to-event (Cox) outcomes.
+    """Fit g(X @ beta) + Z @ gamma using native C++ minibatch AdamW.
+
+    C++ owns initialization, the network, gradients, optimizer, data splitting,
+    shuffling, prediction and model serialization. Python handles array input,
+    bootstrap orchestration and summary tables. CPU only, with float32 weights.
     """
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, warmstart=True, device='auto', backend='torch'):
-        self.family = family
+                 initial=False, warmstart=True, device='cpu', backend='cpp'):
+        if family not in FAMILIES:
+            raise ValueError('family must be continuous, binary, or cox')
         if family == 'cox' and add_intercept:
             raise ValueError('A Cox partial likelihood cannot identify an intercept')
-        if backend not in ('torch', 'cpp'):
-            raise ValueError("backend must be 'torch' or 'cpp'")
-        if max_epoch < 0 or batch_size < 1 or hidden_units < 1 or n_hidden_layers < 1:
-            raise ValueError('Invalid epoch, batch or hidden layer size')
-        if learning_rate < 0 or weight_decay < 0 or weight_decay_beta < 0:
-            raise ValueError('Learning rate and weight decay must be nonnegative')
-        self.backend = backend
-        if backend == 'cpp' and device == 'auto':
-            device = 'cpu'
-        if backend == 'cpp' and torch.device(device).type != 'cpu':
-            raise ValueError('The cpp backend requires device="cpu" or "auto"')
-        if backend == 'cpp' and activation not in ('ELU', 'LeakyReLU', 'ReLU', 'Tanh'):
-            raise ValueError('The cpp backend supports ELU, LeakyReLU, ReLU and Tanh')
-        if device != 'auto':
-            self.device = torch.device(device)
-        elif torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
-        self.max_epoch = max_epoch
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.weight_decay_beta = weight_decay_beta
-        self.hidden_units = hidden_units
-        self.n_hidden_layers = n_hidden_layers
-        self.grad_clip = grad_clip
-        self.num_workers = num_workers
-        self.add_intercept = add_intercept
-        self.activation = activation
-        self.warmstart = warmstart
-        self.initial = initial
+        if backend != 'cpp' or device not in ('cpu', 'auto'):
+            raise ValueError('NeuralPLSI is C++ only: use backend="cpp" and device="cpu"')
+        if activation not in ACTIVATIONS:
+            raise ValueError('Supported activations: ELU, LeakyReLU, ReLU and Tanh')
+        for name, value, minimum in [('max_epoch', max_epoch, 0), ('batch_size', batch_size, 1),
+                                      ('hidden_units', hidden_units, 1), ('n_hidden_layers', n_hidden_layers, 1)]:
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
+                raise ValueError(f'{name} must be an integer >= {minimum}')
+        for name, value in [('learning_rate', learning_rate), ('weight_decay', weight_decay),
+                            ('weight_decay_beta', weight_decay_beta), ('grad_clip', grad_clip)]:
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f'{name} must be finite and nonnegative')
+        if num_workers != 0:
+            raise ValueError('num_workers is obsolete; use n_jobs for bootstrap parallelism')
+        self.family, self.max_epoch, self.batch_size = family, int(max_epoch), int(batch_size)
+        self.learning_rate, self.weight_decay, self.weight_decay_beta = learning_rate, weight_decay, weight_decay_beta
+        self.hidden_units, self.n_hidden_layers, self.grad_clip = int(hidden_units), int(n_hidden_layers), grad_clip
+        self.num_workers, self.add_intercept, self.activation = 0, bool(add_intercept), activation
+        self.initial, self.warmstart, self.device, self.backend = bool(initial), bool(warmstart), 'cpu', 'cpp'
         self.net = None
-        self._net_infer = None
+
+    def get_params(self, deep=True):
+        names = ('family', 'max_epoch', 'batch_size', 'learning_rate', 'weight_decay', 'weight_decay_beta',
+                 'hidden_units', 'n_hidden_layers', 'grad_clip', 'num_workers', 'add_intercept',
+                 'activation', 'initial', 'warmstart', 'device', 'backend')
+        return {name: getattr(self, name) for name in names}
 
     def fit(self, X, Z, y, random_state=0):
-        """
-        Fit the NeuralPLSI model.
-        
-        Args:
-            X: Exposure matrix (n_samples, p)
-            Z: Covariate matrix (n_samples, q)
-            y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
-            random_state: Seed for reproducibility
-        """
         X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
+        seed_value(random_state)
+        options = {key: value for key, value in self.get_params().items()
+                   if key not in ('device', 'backend', 'num_workers')}
+        candidate = NativeModel(X.shape[1], Z.shape[1], random_state=random_state, **options)
+        candidate.fit(X, Z, y, random_state=random_state)
         self._clear_inference()
-        self._net_infer = None
-        torch.manual_seed(random_state)
-        p, q = X.shape[1], Z.shape[1]
-
-        self.net = _nPLSInet(p, q, hidden_units=self.hidden_units,
-                            n_hidden_layers=self.n_hidden_layers,
-                            add_intercept=self.add_intercept,
-                            activation=self.activation).to(self.device)
-
-        if self.initial:
-            ix, _, iz, _, iy, _ = train_test_split(X, Z, y, test_size=.2, random_state=random_state)
-            _initialize_linear(self.net, ix, iz, iy, self.family)
-
-        self.net = self._train(self.net, X, Z, y, self.family, self.device,                               batch_size=self.batch_size, max_epoch=self.max_epoch,
-                               learning_rate=self.learning_rate, weight_decay=self.weight_decay,
-                               weight_decay_beta=self.weight_decay_beta,
-                               grad_clip=self.grad_clip, random_state=random_state, backend=self.backend)
-        
-        self._net_infer = self.net.eval()
+        self.net = candidate
         return self
 
-    @staticmethod
-    def _train(net, X, Z, y, family, device, batch_size=64, max_epoch=200,
-               learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-               grad_clip=1.0, random_state=0, backend="torch"):
-        X, Z, y = validate_data(X, Z, y, family, dtype=np.float32)
-
-        if backend == 'cpp':
-            from .native import train
-            return train(net, X, Z, y, family, batch_size, max_epoch,
-                         learning_rate, weight_decay, weight_decay_beta, grad_clip, random_state)
-
-        tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
-        if family == 'cox' and (tr_y[:, 1].sum() == 0 or val_y[:, 1].sum() == 0):
-            raise ValueError('Both Cox training and validation partitions need at least one event')
-
-        g_param_groups = [
-            {'params': net.x_input.parameters(), 'weight_decay': weight_decay_beta},
-            {'params': net.g_network.parameters(), 'weight_decay': weight_decay},
-            {'params': net.g_skip.parameters(), 'weight_decay': weight_decay},
-        ]
-        opt_g = torch.optim.AdamW(g_param_groups, lr=learning_rate)
-        z_params = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
-        if net.add_intercept:
-            z_params.append({'params': [net.intercept], 'weight_decay': 0.})
-        opt_z = torch.optim.AdamW(z_params, lr=learning_rate * 50)
-
-        if family == 'continuous':
-            loss_fn = nn.MSELoss()
-        elif family == 'binary':
-            loss_fn = nn.BCEWithLogitsLoss()
-        elif family == 'cox':
-            loss_fn = CoxCCLoss()
-        else:
-            raise ValueError("family must be 'continuous', 'binary', or 'cox'.")
-
-        # Validation loss: presorted for cox to skip argsort every epoch
-        if family == 'cox':
-            sort_idx = torch.argsort(torch.from_numpy(val_y[:, 0]), descending=True)
-            val_x = val_x[sort_idx.numpy()]
-            val_z = val_z[sort_idx.numpy()]
-            val_y = val_y[sort_idx.numpy()]
-            val_loss_fn = CoxCCLoss(presorted=True)
-        else:
-            val_loss_fn = loss_fn
-
-        tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
-        val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
-        tr_loader = DataLoader(tr_ds, batch_size=batch_size,
-                               sampler=EpochSampler(len(tr_ds), random_state), num_workers=0)
-        val_loader = DataLoader(val_ds, batch_size=len(val_x), shuffle=False, num_workers=0)
-
-        mse0 = nn.MSELoss()
-
-        sch_z = SchedulerCallback(opt_z)
-        sch_g = SchedulerCallback(opt_g)
-
-        zero_input = torch.zeros((1, 1), device=device)
-        zero_target = torch.zeros((1, net.n_classes), device=device)
-
-        best_state, best_loss = None, float('inf')
-        joint_epochs = 0
-        for _ in range(max_epoch):
-            joint_epochs += 1
-            net.train()
-            for bx, bz, by in tr_loader:
-                bx = bx.to(device)
-                bz = bz.to(device)
-                by = by.to(device)
-
-                opt_g.zero_grad(set_to_none=True); opt_z.zero_grad(set_to_none=True)
-
-                out = net(bx, bz)
-                if family == 'binary':
-                    loss = loss_fn(out, by.float().view_as(out))
-                elif family == 'cox':
-                    loss = loss_fn(out.view(-1), by)
-                else:
-                    loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
-                loss = loss + mse0(net.g_network(zero_input), zero_target)
-                if not torch.isfinite(loss):
-                    raise FloatingPointError('Nonfinite neural training loss')
-                loss.backward()
-                if family == 'cox':
-                    # Cox data loss is exactly invariant to an output shift.
-                    # Retain only the anchor's bias gradient; Adam otherwise
-                    # amplifies float32 cancellation noise near a linear start.
-                    with torch.no_grad():
-                        net.g_network[-1].bias.grad.copy_(2*net.g_network(zero_input).view(-1))
-                if grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
-                opt_g.step(); opt_z.step()
-
-            net.eval(); val_loss = 0.0
-            with torch.inference_mode():
-                for bx, bz, by in val_loader:
-                    bx = bx.to(device)
-                    bz = bz.to(device)
-                    by = by.to(device)
-                    out = net(bx, bz)
-                    if family == 'binary':
-                        l = val_loss_fn(out, by.float().view_as(out))
-                    elif family == 'cox':
-                        l = val_loss_fn(out.view(-1), by)
-                    else:
-                        l = val_loss_fn(out.view(-1), by.view_as(out.view(-1)))
-                    l = l + mse0(net.g_network(zero_input), zero_target)
-                    val_loss += float(l.item())
-
-            if not np.isfinite(val_loss):
-                raise FloatingPointError('Nonfinite neural validation loss')
-            if val_loss < best_loss:
-                best_loss, best_state = val_loss, copy.deepcopy(net.state_dict())
-            # Both callbacks need every validation value. Short-circuiting
-            # skips updates to the Z callback whenever G has not stopped.
-            stop_g = sch_g(val_loss)
-            stop_z = sch_z(val_loss)
-            if stop_g and stop_z:
-                break
-
-        if best_state is not None:
-            net.load_state_dict(best_state)
-                
-        # --- Gamma Fine-Tuning Phase ---
-        # Freeze X and g network to fit Z against residuals
-        fixed_params = (list(net.x_input.parameters()) +
-                        list(net.g_network.parameters()) +
-                        list(net.g_skip.parameters()))
-        fixed_requires_grad = [param.requires_grad for param in fixed_params]
-        for param in fixed_params:
-            param.requires_grad_(False)
-            param.grad = None
-        
-        # MUST RE-INSTANTIATE GENERATOR FOR Z PARAMS
-        z_params_ft = [{'params': list(net.z_input.parameters()), 'weight_decay': 0.}]
-        if net.add_intercept:
-            z_params_ft.append({'params': [net.intercept], 'weight_decay': 0.})
-        gamma_params = [param for group in z_params_ft for param in group['params']]
-            
-        # Fresh optimizer for Z with 0 weight decay
-        opt_z_ft = torch.optim.AdamW(z_params_ft, lr=learning_rate * 10, weight_decay=0.0)
-        # Increase patience significantly for FT since it's only 3 parameters and convex
-        sch_z_ft = SchedulerCallback(opt_z_ft, patience=20)
-
-        with torch.no_grad():
-            vx, vz, vy = [torch.from_numpy(a).to(device) for a in (val_x, val_z, val_y)]
-            value = net(vx, vz)
-            best_ft_loss = float(val_loss_fn(value.view(-1), vy.view(-1) if family != 'cox' else vy))
-        best_gamma = [param.detach().clone() for param in gamma_params]
-        
-        # Train for a fixed minimum of epochs or until convergence
-        ft_epochs = min(max_epoch, 50)
-        gamma_epochs = 0
-        for epoch in range(ft_epochs):
-            gamma_epochs += 1
-            net.train()
-            for bx, bz, by in tr_loader:
-                bx = bx.to(device)
-                bz = bz.to(device)
-                by = by.to(device)
-                opt_z_ft.zero_grad(set_to_none=True)
-                out = net(bx, bz)
-                if family == 'binary':
-                    loss = loss_fn(out, by.float().view_as(out))
-                elif family == 'cox':
-                    loss = loss_fn(out.view(-1), by)
-                else:
-                    loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
-                if not torch.isfinite(loss):
-                    raise FloatingPointError('Nonfinite gamma fine-tuning loss')
-                loss.backward()
-                if grad_clip > 0:
-                    # Only optimized parameters can contribute to clipping.
-                    torch.nn.utils.clip_grad_norm_(gamma_params, grad_clip)
-                opt_z_ft.step()
-                
-            net.eval(); val_loss = 0.0
-            with torch.inference_mode():
-                for bx, bz, by in val_loader:
-                    bx = bx.to(device)
-                    bz = bz.to(device)
-                    by = by.to(device)
-                    out = net(bx, bz)
-                    if family == 'binary':
-                        l = val_loss_fn(out, by.float().view_as(out))
-                    elif family == 'cox':
-                        l = val_loss_fn(out.view(-1), by)
-                    else:
-                        l = val_loss_fn(out.view(-1), by.view_as(out.view(-1)))
-                    val_loss += float(l.item())
-            if not np.isfinite(val_loss):
-                raise FloatingPointError('Nonfinite gamma validation loss')
-            if val_loss < best_ft_loss:
-                best_ft_loss = val_loss
-                best_gamma = [param.detach().clone() for param in gamma_params]
-            if sch_z_ft(val_loss):
-                break
-
-        with torch.no_grad():
-            for param, value in zip(gamma_params, best_gamma):
-                param.copy_(value)
-                
-        # Unfreeze
-        for param, requires_grad in zip(fixed_params, fixed_requires_grad):
-            param.requires_grad_(requires_grad)
-        # -------------------------------
-        
-        net.resolve_sign_ambiguity()
-        net.fit_diagnostics = dict(joint_epochs=joint_epochs, gamma_epochs=gamma_epochs,
-                                   validation_loss=best_ft_loss)
-        return net
-
-    def _infer_net(self):
+    def _ensure_fitted(self):
         if self.net is None:
             raise ValueError('Call fit() before prediction')
-        if self._net_infer is None:
-            self._net_infer = self.net.eval()
-        return self._net_infer.eval()
+        return self.net
+
+    def _ensure_dimensions(self, X, Z):
+        net = self._ensure_fitted()
+        if X.shape[1] != net.config[0] or Z.shape[1] != net.config[1]:
+            raise ValueError('Input dimensions differ from the fitted model')
 
     @property
     def beta(self):
-        w = self._infer_net().x_input.weight.detach().cpu().flatten()
-        return (w / (w.norm() + 1e-6)).numpy()
+        return self._ensure_fitted().coefficients()[0]
 
     @property
     def gamma(self):
-        return self._infer_net().z_input.weight.detach().cpu().flatten().numpy()
+        return self._ensure_fitted().coefficients()[1]
 
     @property
     def intercept_val(self):
-        if self.net is not None and self.add_intercept:
-            return self.net.intercept.detach().cpu().flatten().numpy()
-        return None
+        return self._ensure_fitted().coefficients()[2] if self.add_intercept else None
+
+    @property
+    def fit_diagnostics(self):
+        return self._ensure_fitted().fit_diagnostics.copy()
 
     def summary(self, include_beta=True, include_gamma=True, include_spline=False):
-        if self.net is None:
-            raise ValueError("Model has not been fitted yet.")
+        self._ensure_fitted()
         blocks = {}
-        if include_beta:
-            blocks['beta'] = dict(coeff=self.beta,
-                                  se=getattr(self, 'beta_se', None),
-                                  lb=getattr(self, 'beta_lb', None),
-                                  ub=getattr(self, 'beta_ub', None))
-        if include_gamma:
-            blocks['gamma'] = dict(coeff=self.gamma,
-                                   se=getattr(self, 'gamma_se', None),
-                                   lb=getattr(self, 'gamma_lb', None),
-                                   ub=getattr(self, 'gamma_ub', None))
+        for name, include in [('beta', include_beta), ('gamma', include_gamma)]:
+            if include:
+                blocks[name] = dict(coeff=getattr(self, name), se=getattr(self, name+'_se', None),
+                                    lb=getattr(self, name+'_lb', None), ub=getattr(self, name+'_ub', None))
         return self._build_summary(blocks, ['beta', 'gamma'])
 
-    def g_function(self, x):
-        """Estimate g(x) for given scalar inputs x."""
-        x = np.asarray(x, dtype=np.float32).reshape(-1, 1)
-        net = self._infer_net()
-        with torch.no_grad():
-            tx = torch.from_numpy(x).to(self.device)
-            result = net.g_function(tx)
-            return result.view(-1).cpu().numpy()
-
-    def predict_gxb(self, X, batch_size=128):
-        """Predict g(X @ beta)."""
-        net = self._infer_net()
-        net.eval()
-        X = np.asarray(X, dtype=np.float32)
-        ds = TensorDataset(torch.from_numpy(X))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
-        outs = []
-        with torch.no_grad():
-            for (bx,) in dl:
-                bx = bx.to(self.device)
-                result = net.gxb(bx)
-                outs.append(result.view(-1).cpu())
-        return torch.cat(outs, 0).numpy()
-
-    def _batched_forward(self, X, Z, transform=None, batch_size=128):
-        """Shared batched inference. transform is applied to each batch output."""
-        net = self._infer_net()
-        X, Z = np.asarray(X, dtype=np.float32), np.asarray(Z, dtype=np.float32)
-        if (X.ndim != 2 or Z.ndim != 2 or len(X) == 0 or len(X) != len(Z) or
-                X.shape[1] != net.x_input.in_features or Z.shape[1] != net.z_input.in_features or
-                not np.isfinite(X).all() or not np.isfinite(Z).all()):
-            raise ValueError('Prediction matrices must be finite and match the fitted dimensions')
-        ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(Z))
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
-        outs = []
-        with torch.no_grad():
-            for bx, bz in dl:
-                out = net(bx.to(self.device), bz.to(self.device)).view(-1)
-                if transform is not None:
-                    out = transform(out)
-                outs.append(out.cpu())
-        return torch.cat(outs, 0).numpy()
-
     def predict(self, X, Z, batch_size=128):
-        """Predict raw output (linear predictor)."""
-        return self._batched_forward(X, Z, batch_size=batch_size)
+        return self._ensure_fitted().predict(X, Z, batch_size, mode=0)
 
     def predict_proba(self, X, Z, batch_size=128):
-        """Predict probabilities (for binary outcome)."""
-        return self._batched_forward(X, Z, transform=torch.sigmoid, batch_size=batch_size)
+        return self._ensure_fitted().predict(X, Z, batch_size, mode=1)
 
     def predict_partial_hazard(self, X, Z, batch_size=128):
-        """Predict partial hazard exp(g(Xb) + Zg) (for Cox outcome)."""
-        return self._batched_forward(X, Z, transform=torch.exp, batch_size=batch_size)
+        return self._ensure_fitted().predict(X, Z, batch_size, mode=2)
 
-    def _refit_one(self, Xb, Zb, yb, seed):
-        torch.manual_seed(seed)
-        p, q = Xb.shape[1], Zb.shape[1]
+    def predict_gxb(self, X, batch_size=128):
+        return self._ensure_fitted().predict(X, batch_size=batch_size, mode=3)
 
-        net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers, add_intercept=self.add_intercept, activation=self.activation).to(self.device)
-        if self.initial:
-            ix, _, iz, _, iy, _ = train_test_split(Xb, Zb, yb, test_size=.2, random_state=seed)
-            _initialize_linear(net, ix, iz, iy, self.family)
-        net = self._train(net, Xb, Zb, yb, self.family, self.device,
-                          batch_size=self.batch_size, max_epoch=self.max_epoch,
-                          learning_rate=self.learning_rate, weight_decay=self.weight_decay,
-                          weight_decay_beta=self.weight_decay_beta,
-                          grad_clip=self.grad_clip, random_state=seed, backend=self.backend)
-        w = net.x_input.weight.detach().cpu().flatten()
-        beta = (w / (w.norm() + 1e-6)).numpy()
-        gamma = net.z_input.weight.detach().cpu().flatten().numpy()
-        return beta, gamma, net
+    def g_function(self, x):
+        return self._ensure_fitted().g_function(x)
+
+    def save(self, path):
+        """Save a portable native model, including training settings and orientation.
+
+        Bootstrap samples/intervals are separate inference results and are not
+        part of this prediction-model file.
+        """
+        self._ensure_fitted().save(Path(path))
+
+    @classmethod
+    def load(cls, path):
+        net = NativeModel.load(Path(path))
+        c, h = net.config, net.hyper
+        model = cls(family=next(k for k, v in FAMILIES.items() if v == c[5]),
+            activation=next(k for k, v in ACTIVATIONS.items() if v == c[6]),
+            hidden_units=int(c[2]), n_hidden_layers=int(c[3]), add_intercept=bool(c[4]),
+            batch_size=int(c[8]), max_epoch=int(c[9]), initial=bool(c[10]), warmstart=bool(c[11]),
+            learning_rate=float(h[0]), weight_decay=float(h[1]), weight_decay_beta=float(h[2]), grad_clip=float(h[3]))
+        model.net = net
+        return model
 
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs='auto', quantile_method='linear'):
         """
@@ -607,14 +157,12 @@ class NeuralPLSI(_SummaryMixin):
             raise ValueError("quantile_method must be 'linear' or 'weibull'")
         validate_bootstrap(n_samples, ci, random_state)
         X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
-        if self.device.type != 'cpu' and n_jobs not in ('auto', 1):
-            raise ValueError('GPU bootstrap requires n_jobs=1 or auto')
         if self.net is None:
             self.fit(X, Z, y, random_state=random_state)
+        self._ensure_dimensions(X, Z)
         self._clear_inference()
         N, p, q = len(X), X.shape[1], Z.shape[1]
-
-        n_jobs = 1 if self.device.type != 'cpu' else bootstrap_jobs(n_jobs, n_samples)
+        n_jobs = bootstrap_jobs(n_jobs, n_samples)
 
         beta_samples = np.empty((n_samples, p))
         gamma_samples = np.empty((n_samples, q))
@@ -629,30 +177,9 @@ class NeuralPLSI(_SummaryMixin):
         else:
             g_grid = None
 
-        # Extract fitted model state dict for warmstart bootstrap
-        warmstart_state = None
-        if self.warmstart:
-            warmstart_state = {k: v.cpu().clone() for k, v in self.net.state_dict().items()}
-
-        refit_func = functools.partial(_refit_nplsi,
-                                       family=self.family,
-                                       device_type=str(self.device),
-                                       batch_size=self.batch_size,
-                                       max_epoch=self.max_epoch,
-                                       learning_rate=self.learning_rate,
-                                       weight_decay=self.weight_decay,
-                                       weight_decay_beta=self.weight_decay_beta,
-                                       grad_clip=self.grad_clip,
-                                       hidden_units=self.hidden_units,
-                                       n_hidden_layers=self.n_hidden_layers,
-                                       do_g=do_g,
-                                       g_grid=g_grid,
-                                       add_intercept=self.add_intercept,
-                                       activation=self.activation,
-                                       warmstart=self.warmstart,
-                                       warmstart_state=warmstart_state,
-                                       warmstart_flip_sign=self.net.flip_sign,
-                                       initial=self.initial, backend=self.backend)
+        state = self.net.to_bytes() if self.warmstart else None
+        refit_func = functools.partial(_refit_nplsi, settings=self.get_params(), state=state,
+                                       do_g=do_g, g_grid=g_grid)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):
