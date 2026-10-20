@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models import NeuralPLSI
-from models.native import library, RNG_PROTOCOL
+from models.native import library, RNG_PROTOCOL, BOOTSTRAP_RNG_PROTOCOL
 from simulation import simulate_data
 from reproduce.main_simulation import atomic_json
 
@@ -22,10 +22,14 @@ def main(argv=None):
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--bootstrap', type=int, default=3)
+    parser.add_argument('--jobs', type=int, default=1, help='Native C++ bootstrap threads (-1: available CPUs)')
+    parser.add_argument('--bootstrap_seed', type=int, default=None, help='Defaults to each dataset seed')
+    parser.add_argument('--g_grid_n', type=int, default=0, help='Optional link-grid size on [-3, 3]')
     parser.add_argument('--out', default='output/benchmark_native.json')
     args = parser.parse_args(argv)
-    if args.repeats < 1 or args.bootstrap < 2 or args.n < 10 or args.epochs < 1:
-        parser.error('Require positive repeats/epochs, n >= 10, bootstrap >= 2')
+    if (args.repeats < 1 or args.bootstrap < 2 or args.n < 10 or args.epochs < 1 or
+            args.jobs == 0 or args.g_grid_n < 0 or (args.bootstrap_seed is not None and args.bootstrap_seed < 0)):
+        parser.error('Require positive repeats/epochs, n >= 10, bootstrap >= 2, nonzero jobs and nonnegative grid size/seed')
     start = perf_counter()
     library()
     load_seconds = perf_counter()-start
@@ -40,10 +44,15 @@ def main(argv=None):
             start = perf_counter()
             prediction = model.predict(x, z)
             predict_seconds = perf_counter()-start
+            bootstrap_seed = seed if args.bootstrap_seed is None else args.bootstrap_seed
+            grid = np.linspace(-3, 3, args.g_grid_n) if args.g_grid_n else None
             start = perf_counter()
-            boot = model.inference_bootstrap(x, z, y, n_samples=args.bootstrap, random_state=seed, n_jobs=1)
+            boot = model.inference_bootstrap(x, z, y, n_samples=args.bootstrap, random_state=bootstrap_seed,
+                                            n_jobs=args.jobs, g_grid=grid)
             row = dict(outcome=family, seed=seed, n=args.n, max_epoch=args.epochs,
                 n_bootstrap=args.bootstrap, native_load_seconds=load_seconds, backend='cpp', native_rng=RNG_PROTOCOL,
+                bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL, bootstrap_workers=boot['n_workers'],
+                bootstrap_seed=bootstrap_seed, g_grid_n=args.g_grid_n,
                 fit_seconds=fit_seconds, prediction_seconds=predict_seconds,
                 bootstrap_seconds=perf_counter()-start, diagnostics=model.fit_diagnostics)
             if not np.isfinite(prediction).all() or not np.isfinite(boot['gamma_samples']).all():

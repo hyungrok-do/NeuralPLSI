@@ -15,6 +15,7 @@ import numpy as np
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
 RNG_PROTOCOL = 'splitmix64_v1'
+BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 
 
 def build_library():
@@ -22,12 +23,12 @@ def build_library():
     import fcntl
     source = Path(__file__).with_name('core.cpp')
     compiler = shlex.split(os.environ.get('CXX', 'g++'))
-    flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-ffp-contract=off']
+    flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-ffp-contract=off', '-pthread']
     try:
         version = subprocess.check_output(compiler+['--version'], stderr=subprocess.STDOUT)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError('NeuralPLSI needs a C++17 compiler. Install one or set CXX.') from exc
-    digest = hashlib.sha256(source.read_bytes()+source.with_suffix('.h').read_bytes()+version+repr(flags).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
+    digest = hashlib.sha256(source.read_bytes()+source.with_suffix('.h').read_bytes()+version+repr((compiler, flags)).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
     cache = Path(os.environ.get('NEURALPLSI_CACHE_DIR', Path.home()/'.cache'/'neuralplsi'))
     cache.mkdir(parents=True, exist_ok=True)
     target = cache/f'core-{digest}.so'
@@ -70,6 +71,11 @@ def library():
         'nplsi_get_weights': ([pointer, fp], integer),
         'nplsi_set_weights': ([pointer, fp, ctypes.c_float], integer),
         'nplsi_canonicalize': ([pointer], integer),
+        'nplsi_bootstrap': ([pointer, fp, fp, fp, integer, integer, seed, integer, integer,
+                             fp, integer, ctypes.c_double, integer, dp, dp, ip], integer),
+        'nplsi_bootstrap_workers': ([integer, integer], integer),
+        'nplsi_bootstrap_indices': ([integer, seed, integer, ip], integer),
+        'nplsi_bootstrap_summary': ([dp, integer, integer, ctypes.c_double, integer, dp], integer),
         'nplsi_state_size': ([pointer], size),
         'nplsi_export_state': ([pointer, pointer, size], integer),
         'nplsi_import_state': ([chars, size], pointer),
@@ -224,6 +230,28 @@ class NativeModel:
         checked(self._library.nplsi_predict(self._handle, X, Z, len(X), int(batch_size), mode, result))
         return result
 
+    def bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=.95,
+                  g_grid=None, n_jobs='auto', warmstart=True, quantile_method='linear'):
+        """One native call for resampling, fitting, threads, SEs and intervals."""
+        from ..base import validate_data
+        family = next(k for k, v in FAMILIES.items() if v == self.config[5])
+        options = bootstrap_options(n_samples, random_state, ci, n_jobs, quantile_method)
+        X, Z, y = [np.ascontiguousarray(a) for a in validate_data(X, Z, y, family, dtype=np.float32)]
+        if X.shape[1] != self.config[0] or Z.shape[1] != self.config[1]:
+            raise ValueError('Bootstrap dimensions differ from the native model')
+        grid = link_grid(g_grid)
+        columns = int(self.config[0])+int(self.config[1])+int(self.config[4])+len(grid)
+        if columns >= 2**31:
+            raise ValueError('Bootstrap output has too many columns')
+        draws = np.empty((n_samples, columns), dtype=np.float64)
+        summary = np.empty((4, columns), dtype=np.float64)
+        workers = np.empty(1, dtype=np.int32)
+        jobs, method = options
+        checked(self._library.nplsi_bootstrap(self._handle, X, Z, y, len(X), n_samples,
+            seed_value(random_state), jobs, int(bool(warmstart)), grid, len(grid), float(ci),
+            method, draws, summary, workers))
+        return draws, summary, int(workers[0])
+
     def g_function(self, grid):
         grid = np.ascontiguousarray(np.asarray(grid, dtype=np.float32).reshape(-1))
         if not np.isfinite(grid).all():
@@ -267,3 +295,55 @@ def training_validation_indices(n, random_state=0):
     checked(library().nplsi_split(n, seed_value(random_state), order))
     validation_size = (n+4)//5
     return order[validation_size:], order[:validation_size]
+
+
+def bootstrap_options(n_samples, random_state, ci, n_jobs, quantile_method):
+    """Check scalar inputs before allocation, fitting or conversion to C integers."""
+    if quantile_method not in ('linear', 'weibull'):
+        raise ValueError("quantile_method must be 'linear' or 'weibull'")
+    if isinstance(n_samples, bool) or not isinstance(n_samples, Integral) or not 2 <= n_samples < 2**31:
+        raise ValueError('n_samples must be an integer in [2, 2**31)')
+    if not 0 < ci < 1:
+        raise ValueError('ci must lie strictly between zero and one')
+    seed = seed_value(random_state)
+    if seed + 1337 + int(n_samples)-1 >= 2**64:
+        raise ValueError('Bootstrap fit seeds would overflow uint64')
+    if n_jobs == 'auto':
+        n_jobs = -1
+    if isinstance(n_jobs, bool) or not isinstance(n_jobs, Integral) or not -2**31 <= n_jobs < 2**31 or n_jobs == 0:
+        raise ValueError('n_jobs must be a nonzero 32-bit integer or auto')
+    return int(n_jobs), int(quantile_method == 'weibull')
+
+
+def link_grid(grid):
+    if grid is None:
+        return np.empty(0, dtype=np.float32)
+    grid = np.ascontiguousarray(np.asarray(grid, dtype=np.float32).reshape(-1))
+    if not grid.size or not np.isfinite(grid).all():
+        raise ValueError('g_grid must be nonempty and finite')
+    return grid
+
+
+def bootstrap_indices(n, random_state=0, replicate=0):
+    """Inspect a native resample for diagnostics; production bootstrap stays in C++."""
+    if isinstance(n, bool) or not isinstance(n, Integral) or not 2 <= n < 2**31:
+        raise ValueError('n must be an integer in [2, 2**31)')
+    if isinstance(replicate, bool) or not isinstance(replicate, Integral) or not 0 <= replicate < 2**31:
+        raise ValueError('replicate must be a nonnegative 32-bit integer')
+    seed = seed_value(random_state)
+    if seed+int(replicate) >= 2**64:
+        raise ValueError('Bootstrap resampling seed would overflow uint64')
+    indices = np.empty(n, dtype=np.int32)
+    checked(library().nplsi_bootstrap_indices(n, seed, replicate, indices))
+    return indices
+
+
+def bootstrap_summary(draws, ci=.95, quantile_method='linear'):
+    """Diagnostic entry point to independently check native summaries."""
+    draws = np.ascontiguousarray(draws, dtype=np.float64)
+    if draws.ndim != 2 or draws.shape[1] < 1 or draws.shape[1] >= 2**31:
+        raise ValueError('draws must be a matrix with at least one column')
+    _, method = bootstrap_options(len(draws), 0, ci, 1, quantile_method)
+    summary = np.empty((4, draws.shape[1]), dtype=np.float64)
+    checked(library().nplsi_bootstrap_summary(draws, *draws.shape, float(ci), method, summary))
+    return summary

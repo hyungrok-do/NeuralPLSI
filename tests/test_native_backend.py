@@ -60,6 +60,24 @@ class NativeBackendTest(unittest.TestCase):
             checked(library().nplsi_adam_updates(net.config,net.hyper,weights,gradients,len(gradients),int(gamma_only)))
             np.testing.assert_allclose(weights,expected,rtol=2e-6,atol=2e-7)
 
+    def test_backprop_supports_different_depths_and_widths(self):
+        for width, depth in ((1, 1), (5, 3), (7, 4)):
+            for family in ('continuous', 'binary', 'cox'):
+                with self.subTest(width=width, depth=depth, family=family):
+                    x, z, y = self.data(family, n=16)
+                    net = NativeModel(3, 2, hidden_units=width, n_hidden_layers=depth,
+                                      family=family, activation='Tanh', random_state=9)
+                    value, gradient = loss_and_gradient(net, x, z, y)
+                    weights = net.weights.astype(float)
+                    np.testing.assert_allclose(value, loss(net.config, weights, x, z, y), atol=2e-6)
+                    numeric = np.empty(len(weights))
+                    for j in range(len(weights)):
+                        plus, minus = weights.copy(), weights.copy()
+                        plus[j] += 1e-5
+                        minus[j] -= 1e-5
+                        numeric[j] = (loss(net.config, plus, x, z, y)-loss(net.config, minus, x, z, y))/2e-5
+                    np.testing.assert_allclose(gradient, numeric, rtol=3e-4, atol=3e-6)
+
     def test_all_families_fit_bootstrap_and_round_trip(self):
         for family in ('continuous','binary','cox'):
             with self.subTest(family=family):

@@ -1,31 +1,21 @@
 """Single-index neural model implemented entirely in the native C++ library."""
-import functools
 from numbers import Integral
 from pathlib import Path
 
 import numpy as np
 
-from .base import (_SummaryMixin, run_parallel_bootstrap, validate_data,
-                   validate_bootstrap, bootstrap_jobs)
-from .native import NativeModel, FAMILIES, ACTIVATIONS, seed_value
+from .base import _SummaryMixin, validate_data
+from .native import (NativeModel, FAMILIES, ACTIVATIONS, seed_value,
+                     bootstrap_options, link_grid, BOOTSTRAP_RNG_PROTOCOL)
 
-
-def _refit_nplsi(Xb, Zb, yb, seed, settings, state, do_g, g_grid):
-    model = NeuralPLSI(**settings)
-    if state is None:
-        model.fit(Xb, Zb, yb, random_state=seed)
-    else:
-        model.net = NativeModel.from_bytes(state)
-        model.net.fit(Xb, Zb, yb, random_state=seed, reset=False)
-    return model.beta, model.gamma, model.intercept_val, model.g_function(g_grid) if do_g else None
 
 
 class NeuralPLSI(_SummaryMixin):
     """Fit g(X @ beta) + Z @ gamma using native C++ minibatch AdamW.
 
     C++ owns initialization, the network, gradients, optimizer, data splitting,
-    shuffling, prediction and model serialization. Python handles array input,
-    bootstrap orchestration and summary tables. CPU only, with float32 weights.
+    shuffling, prediction, serialization and the entire bootstrap workflow.
+    Python handles array input and summary tables. CPU only, with float32 weights.
     """
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
@@ -144,91 +134,54 @@ class NeuralPLSI(_SummaryMixin):
         model.net = net
         return model
 
-    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs='auto', quantile_method='linear'):
-        """
-        Perform bootstrap inference to estimate SE and CI for beta, gamma, and g(x).
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95,
+                            g_grid=None, n_jobs='auto', quantile_method='linear'):
+        """Pairs bootstrap performed entirely in C++ with native worker threads.
 
-        quantile_method selects NumPy's percentile interpolation: 'linear'
-        preserves historical results, while 'weibull' uses order-statistic
-        plotting positions k/(B+1). At small B this changes tail endpoints
-        materially. It does not correct estimator bias or guarantee coverage.
+        Resampling, independent model copies, refits, link evaluation, sample
+        SDs and percentile intervals use one native call. n_jobs limits C++
+        threads, capped by CPU affinity, cgroup quota, SLURM allocation and B.
+        Replicate seeds are independent of worker scheduling. A failed draw
+        raises an error and invalidates the whole bootstrap result.
+
+        'linear' and 'weibull' choose percentile interpolation. They do not
+        change the draws or correct estimator bias. The native bootstrap RNG
+        differs from the former NumPy resampling protocol.
         """
-        if quantile_method not in ('linear', 'weibull'):
-            raise ValueError("quantile_method must be 'linear' or 'weibull'")
-        validate_bootstrap(n_samples, ci, random_state)
+        bootstrap_options(n_samples, random_state, ci, n_jobs, quantile_method)
+        grid = link_grid(g_grid)
         X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
         if self.net is None:
             self.fit(X, Z, y, random_state=random_state)
         self._ensure_dimensions(X, Z)
         self._clear_inference()
-        N, p, q = len(X), X.shape[1], Z.shape[1]
-        n_jobs = bootstrap_jobs(n_jobs, n_samples)
-
-        beta_samples = np.empty((n_samples, p))
-        gamma_samples = np.empty((n_samples, q))
-        intercept_samples = np.empty((n_samples, 1)) if self.add_intercept else None
-
-        do_g = g_grid is not None
-        if do_g:
-            g_grid = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
-            if not g_grid.size or not np.isfinite(g_grid).all():
-                raise ValueError('g_grid must be nonempty and finite')
-            g_samples = np.empty((n_samples, g_grid.shape[0]))
-        else:
-            g_grid = None
-
-        state = self.net.to_bytes() if self.warmstart else None
-        refit_func = functools.partial(_refit_nplsi, settings=self.get_params(), state=state,
-                                       do_g=do_g, g_grid=g_grid)
-
-        results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
-        for b, result in enumerate(results):
-            beta_res, gamma_res, intercept_res, g_res = result
-            beta_samples[b] = beta_res
-            gamma_samples[b] = gamma_res
-            if self.add_intercept and intercept_res is not None:
-                intercept_samples[b] = intercept_res
-            if do_g and g_res is not None:
-                g_samples[b] = g_res
-
-        arrays = [beta_samples, gamma_samples]
+        draws, summary, workers = self.net.bootstrap(X, Z, y, n_samples=n_samples,
+            random_state=random_state, ci=ci, g_grid=grid if g_grid is not None else None,
+            n_jobs=n_jobs, warmstart=self.warmstart, quantile_method=quantile_method)
+        out = dict(beta_hat=self.beta, gamma_hat=self.gamma,
+                   quantile_method=quantile_method, ci=ci, n_bootstrap=n_samples,
+                   bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL,
+                   n_workers=workers)
+        blocks = [('beta', X.shape[1]), ('gamma', Z.shape[1])]
         if self.add_intercept:
-            arrays.append(intercept_samples)
-        if do_g:
-            arrays.append(g_samples)
-        if not all(np.isfinite(a).all() for a in arrays):
-            raise FloatingPointError('Nonfinite bootstrap coefficient estimates')
-
-        beta_hat, gamma_hat = self.beta, self.gamma
-        intercept_hat = self.intercept_val
-
-        self.beta_se = beta_samples.std(axis=0, ddof=1)
-        self.gamma_se = gamma_samples.std(axis=0, ddof=1)
-        self.beta_lb, self.beta_ub = self._percentile_ci(beta_samples, ci, method=quantile_method)
-        self.gamma_lb, self.gamma_ub = self._percentile_ci(gamma_samples, ci, method=quantile_method)
-        
-        out = {
-            "beta_hat": beta_hat, "beta_se": self.beta_se, "beta_lb": self.beta_lb, "beta_ub": self.beta_ub,
-            "gamma_hat": gamma_hat, "gamma_se": self.gamma_se, "gamma_lb": self.gamma_lb, "gamma_ub": self.gamma_ub,
-            "beta_samples": beta_samples, "gamma_samples": gamma_samples,
-            "quantile_method": quantile_method, "ci": ci, "n_bootstrap": n_samples
-        }
-        
-        if self.add_intercept:
-            self.intercept_se = intercept_samples.std(axis=0, ddof=1)
-            self.intercept_lb, self.intercept_ub = self._percentile_ci(intercept_samples, ci, method=quantile_method)
-            out.update({
-                "intercept_hat": intercept_hat, "intercept_se": self.intercept_se,
-                "intercept_lb": self.intercept_lb, "intercept_ub": self.intercept_ub,
-                "intercept_samples": intercept_samples
-            })
-
-        if do_g:
-            g_mean = g_samples.mean(axis=0); g_se = g_samples.std(axis=0, ddof=1)
-            g_lb, g_ub = self._percentile_ci(g_samples, ci, method=quantile_method)
-            self.g_grid = g_grid.ravel(); self.g_grid_mean = g_mean; self.g_grid_se = g_se
-            self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
-            out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub,
-                        "g_samples": g_samples})
+            blocks.append(('intercept', 1))
+            out['intercept_hat'] = self.intercept_val
+        if g_grid is not None:
+            blocks.append(('g', len(grid)))
+        position = 0
+        for block, count in blocks:
+            columns = slice(position, position+count)
+            out[block+'_samples'] = draws[:, columns]
+            for row, name in enumerate(('mean', 'se', 'lb', 'ub')):
+                values = summary[row, columns]
+                out[block+'_'+name] = values
+                if block == 'g':
+                    setattr(self, 'g_grid_'+name, values)
+                elif name != 'mean':
+                    setattr(self, block+'_'+name, values)
+            position += count
+        if g_grid is not None:
+            self.g_grid = grid
+            self._g_samples = out['g_samples']
+            out['g_grid'] = grid
         return out
-

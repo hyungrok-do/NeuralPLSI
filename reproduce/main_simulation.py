@@ -32,6 +32,7 @@ if ROOT not in sys.path:
 
 from models import SplinePLSI, NeuralPLSI
 from models.base import bootstrap_jobs
+from models.native import BOOTSTRAP_RNG_PROTOCOL
 from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 
@@ -113,7 +114,7 @@ def run_configuration(args, model):
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if model == 'NeuralPLSI' else 'cpu')
-    return dict(protocol_version=3, model=model, n=args.n_instances,
+    return dict(protocol_version=4, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
                 activation=args.activation if model == 'NeuralPLSI' else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
@@ -125,6 +126,8 @@ def run_configuration(args, model):
                 backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
                 device=resolved_device, native_build=native_build,
                 normalization='l2', native_rng='splitmix64_v1' if model == 'NeuralPLSI' else None,
+                bootstrap_engine='cpp' if model == 'NeuralPLSI' else 'joblib',
+                bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL if model == 'NeuralPLSI' else 'numpy_pcg64',
                 g_grid=[args.g_grid_min, args.g_grid_max, args.g_grid_n],
                 source_sha256=digest.hexdigest(), numpy=np.__version__,
                 sklearn=sklearn.__version__, scipy=scipy.__version__)
@@ -218,14 +221,16 @@ def run_replicate(args, mname, seed, configuration):
         if samples.shape != (args.n_bootstrap, len(target)) or not np.isfinite(samples).all():
             raise FloatingPointError(f'Incomplete or nonfinite {block} bootstrap draws')
         lower, upper = boot[block+'_lb'], boot[block+'_ub']
+        bootstrap_mean = boot[block+'_mean'] if block+'_mean' in boot else samples.mean(axis=0)
         row.update({block+'_bias': estimate-target, block+'_se': boot[block+'_se'],
                     block+'_lb': lower, block+'_ub': upper,
                     block+'_cov': ((lower <= target) & (target <= upper)).astype(int),
-                    block+'_bootstrap_mean': samples.mean(axis=0),
-                    block+'_bootstrap_bias': samples.mean(axis=0)-estimate})
+                    block+'_bootstrap_mean': bootstrap_mean,
+                    block+'_bootstrap_bias': bootstrap_mean-estimate})
     if mname == 'NeuralPLSI':
         row['fit_diagnostics'] = model.fit_diagnostics
         row['device'] = str(model.device)
+        row['bootstrap_workers'] = boot['n_workers']
     else:
         row['fit_diagnostics'] = dict(converged=bool(model.converged_), iterations=model.n_iter_)
     if args.outcome == 'cox':

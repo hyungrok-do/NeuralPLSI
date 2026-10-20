@@ -13,11 +13,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 namespace {
 thread_local std::string last_error;
@@ -731,6 +737,201 @@ int nplsi_outcome(const float* risks,const float* y,int n,int family,double* los
         if(n<1 || family<0 || family>2) throw std::invalid_argument("Invalid loss input");
         Vec r(risks,risks+n),g; *loss=outcome(r,y,n,family,g); finite(*loss,g);
         std::copy(g.begin(),g.end(),gradient); return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+}
+
+namespace {
+// Bootstrap RNG is separate from initialization/split/minibatch streams.
+// Version: splitmix64_bootstrap_v1. Replicate b uses seed+b for resampling
+// and seed+1337+b for its fit, independent of thread assignment or total B.
+void bootstrap_indices(int n,uint64_t seed,int replicate,int32_t* indices) {
+    if(n<2 || replicate<0 || !indices || seed>UINT64_MAX-uint64_t(replicate))
+        throw std::invalid_argument("Invalid bootstrap index request");
+    Random rng((seed+uint64_t(replicate))^UINT64_C(0x424f4f5453545241));
+    for(int i=0;i<n;++i) indices[i]=int32_t(rng.below(uint64_t(n)));
+}
+int available_cpus() {
+    int available=int(std::max(1u,std::thread::hardware_concurrency()));
+#ifdef __linux__
+    cpu_set_t affinity;
+    CPU_ZERO(&affinity);
+    if(sched_getaffinity(0,sizeof(affinity),&affinity)==0 && CPU_COUNT(&affinity)>0)
+        available=std::min(available,CPU_COUNT(&affinity));
+    auto quota_limit=[&](const std::filesystem::path& path) {
+        std::ifstream v2(path/"cpu.max");
+        std::string quota; double period=0.;
+        if(v2>>quota>>period && quota!="max" && period>0.) {
+            try {
+                double value=std::stod(quota);
+                if(value>0.) available=int(std::min(double(available),std::ceil(value/period)));
+            } catch(const std::exception&) { /* Unreadable quota: retain other limits. */ }
+        }
+        std::ifstream qfile(path/"cpu.cfs_quota_us"),pfile(path/"cpu.cfs_period_us");
+        double value=0.;
+        if(qfile>>value && pfile>>period && value>0. && period>0.)
+            available=int(std::min(double(available),std::ceil(value/period)));
+    };
+    // Include inherited quotas, including on hosts whose root cgroup is unlimited.
+    std::vector<std::filesystem::path> roots={"/sys/fs/cgroup","/sys/fs/cgroup/cpu","/sys/fs/cgroup/cpu,cpuacct"};
+    for(const auto& root:roots) quota_limit(root);
+    std::ifstream groups("/proc/self/cgroup"); std::string line;
+    while(std::getline(groups,line)) {
+        auto first=line.find(':'),last=line.rfind(':');
+        if(first==std::string::npos || first==last) continue;
+        auto controllers=line.substr(first+1,last-first-1);
+        if(!controllers.empty() && controllers.find("cpu")==std::string::npos) continue;
+        for(const auto& root:roots) {
+            auto current=(root/std::filesystem::path(line.substr(last+1)).relative_path()).lexically_normal();
+            const std::string prefix=root.string()+"/";
+            while(current!=root && current.string().compare(0,prefix.size(),prefix)==0) {
+                quota_limit(current); current=current.parent_path();
+            }
+        }
+    }
+#endif
+    if(const char* value=std::getenv("SLURM_CPUS_PER_TASK")) {
+        std::string text(value); size_t end=0;
+        long long limit=std::stoll(text,&end);
+        if(end!=text.size() || limit<1) throw std::invalid_argument("Invalid SLURM_CPUS_PER_TASK");
+        available=int(std::min(int64_t(available),int64_t(limit)));
+    }
+    return std::max(1,available);
+}
+int bootstrap_workers(int jobs,int B) {
+    if(jobs==0 || B<2) throw std::invalid_argument("Bootstrap needs B>=2 and nonzero n_jobs");
+    int available=available_cpus();
+    int64_t requested=jobs>0 ? jobs : std::max(INT64_C(1),int64_t(available)+1+jobs);
+    return int(std::min({requested,int64_t(available),int64_t(B)}));
+}
+void validate_summary(int B,int D,double ci,int method) {
+    if(B<2 || D<1 || !(ci>0. && ci<1.) || (method!=0 && method!=1))
+        throw std::invalid_argument("Invalid bootstrap interval configuration");
+}
+double percentile(const std::vector<double>& sorted,double p,int method) {
+    double position=method==0 ? (sorted.size()-1)*p : (sorted.size()+1)*p-1.;
+    position=std::max(0.,std::min(position,double(sorted.size()-1)));
+    size_t left=size_t(std::floor(position)),right=std::min(left+1,sorted.size()-1);
+    return sorted[left]+(position-double(left))*(sorted[right]-sorted[left]);
+}
+void summarize_bootstrap(const double* draws,int B,int D,double ci,int method,double* summary) {
+    validate_summary(B,D,ci,method);
+    if(!draws || !summary) throw std::invalid_argument("Missing bootstrap summary buffers");
+    std::vector<double> column(B);
+    for(int j=0;j<D;++j) {
+        // Center before summing so an exactly constant column has zero SD,
+        // even when its magnitude is large enough to round sum/B differently.
+        double origin=draws[j],sum=0.,compensation=0.;
+        for(int b=0;b<B;++b) {
+            double value=draws[size_t(b)*D+j];
+            if(!std::isfinite(value)) throw std::runtime_error("Nonfinite bootstrap draw");
+            column[b]=value;
+            double adjusted=(value-origin)-compensation,next=sum+adjusted;
+            compensation=(next-sum)-adjusted; sum=next;
+        }
+        double centered_mean=sum/B,mean=origin+centered_mean,ss=0.;
+        for(double value:column) { double delta=(value-origin)-centered_mean; ss+=delta*delta; }
+        double sd=std::sqrt(ss/(B-1));
+        if(!std::isfinite(mean) || !std::isfinite(sd)) throw std::runtime_error("Nonfinite bootstrap summary");
+        std::sort(column.begin(),column.end());
+        summary[j]=mean; summary[size_t(D)+j]=sd;
+        summary[size_t(2)*D+j]=percentile(column,(1.-ci)/2.,method);
+        summary[size_t(3)*D+j]=percentile(column,(1.+ci)/2.,method);
+    }
+}
+// Join even if constructing a later worker throws (e.g. a system thread limit).
+struct JoinThreads {
+    std::vector<std::thread>& threads;
+    ~JoinThreads() { for(auto& thread:threads) if(thread.joinable()) thread.join(); }
+};
+}
+extern "C" {
+int nplsi_bootstrap_workers(int jobs,int B) {
+    try {return bootstrap_workers(jobs,B);} catch(const std::exception& e) {last_error=e.what();return 0;}
+}
+int nplsi_bootstrap_indices(int n,uint64_t seed,int replicate,int32_t* indices) {
+    try {bootstrap_indices(n,seed,replicate,indices);return 0;}
+    catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+int nplsi_bootstrap_summary(const double* draws,int B,int D,double ci,int method,double* summary) {
+    try {summarize_bootstrap(draws,B,D,ci,method,summary);return 0;}
+    catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+int nplsi_bootstrap(void* handle,const float* x,const float* z,const float* y,
+                    int n,int B,uint64_t seed,int jobs,int warmstart,const float* grid,
+                    int ng,double ci,int method,double* draws,double* summary,int32_t* workers_used) {
+    try {
+        const State source(state(handle));
+        Model model(source.config.data(),source.hyper[4]);
+        if(n<2 || ng<0 || (warmstart!=0 && warmstart!=1) || !draws || !summary || !workers_used ||
+           (ng && !grid) || int64_t(model.p)+model.q+model.intercept+ng>INT32_MAX)
+            throw std::invalid_argument("Invalid bootstrap configuration or output buffers");
+        const int D=model.p+model.q+model.intercept+ng;
+        validate_summary(B,D,ci,method);
+        if(seed>UINT64_MAX-uint64_t(B-1)-1337)
+            throw std::invalid_argument("Bootstrap fit seeds would overflow uint64");
+        validate_arrays(model,x,z,y,n,true);
+        for(int i=0;i<ng;++i) if(!std::isfinite(grid[i])) throw std::invalid_argument("Nonfinite bootstrap link grid");
+        const int workers=bootstrap_workers(jobs,B),yd=model.family==2 ? 2:1;
+        *workers_used=workers;
+        std::atomic<size_t> next{0}; std::atomic<bool> failed{false};
+        std::mutex error_mutex; std::string error;
+        auto worker=[&]() {
+            int replicate=-1;
+            try {
+                State fitted(source);
+                Vec bx(size_t(n)*model.p),bz(size_t(n)*model.q),by(size_t(n)*yd);
+                Vec beta(model.p),gamma(model.q),link(ng); float intercept=0.f;
+                std::vector<int32_t> indices(n);
+                while(!failed.load()) {
+                    size_t index=next.fetch_add(1);
+                    if(index>=size_t(B)) break;
+                    replicate=int(index);
+                    bootstrap_indices(n,seed,replicate,indices.data());
+                    for(int i=0;i<n;++i) {
+                        size_t row=size_t(indices[i]);
+                        std::copy_n(x+row*model.p,model.p,bx.data()+size_t(i)*model.p);
+                        if(model.q) std::copy_n(z+row*model.q,model.q,bz.data()+size_t(i)*model.q);
+                        std::copy_n(y+row*yd,yd,by.data()+size_t(i)*yd);
+                    }
+                    // Every draw starts from the original fit (or a fresh seeded
+                    // initialization), never from the preceding bootstrap draw.
+                    fitted=source;
+                    uint64_t fit_seed=seed+1337+uint64_t(replicate);
+                    if(nplsi_fit(&fitted,bx.data(),bz.data(),by.data(),n,fit_seed,!warmstart))
+                        throw std::runtime_error(last_error);
+                    if(nplsi_coefficients(&fitted,beta.data(),gamma.data(),&intercept))
+                        throw std::runtime_error(last_error);
+                    if(ng && nplsi_link(&fitted,grid,ng,link.data())) throw std::runtime_error(last_error);
+                    double* row=draws+index*D;
+                    for(float value:beta) *row++=value;
+                    for(float value:gamma) *row++=value;
+                    if(model.intercept) *row++=intercept;
+                    for(float value:link) *row++=value;
+                }
+            } catch(const std::exception& e) {
+                std::lock_guard<std::mutex> lock(error_mutex);
+                if(error.empty()) error="Bootstrap replicate "+std::to_string(replicate)+
+                    (replicate>=0 ? " (fit seed "+std::to_string(seed+1337+uint64_t(replicate))+")" : "")+
+                    " failed: "+e.what();
+                failed.store(true);
+            } catch(...) {
+                std::lock_guard<std::mutex> lock(error_mutex);
+                if(error.empty()) error="Unknown native bootstrap worker failure";
+                failed.store(true);
+            }
+        };
+        {
+            std::vector<std::thread> pool; pool.reserve(size_t(workers-1));
+            JoinThreads join{pool};
+            try {
+                for(int i=1;i<workers;++i) pool.emplace_back(worker);
+                worker();
+            } catch(...) {failed.store(true);throw;}
+        }
+        if(!error.empty()) throw std::runtime_error(error);
+        summarize_bootstrap(draws,B,D,ci,method,summary);
+        return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
 }

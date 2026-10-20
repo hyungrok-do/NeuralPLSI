@@ -87,10 +87,12 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 
 NeuralPLSI is implemented entirely in C++17. Initialization, the network, analytic
 backpropagation, AdamW, data splitting, minibatch shuffling, early stopping,
-prediction and model serialization all run in C++. There is **no Torch or
+prediction, model serialization and the entire bootstrap workflow all run in
+C++. There is **no Torch or
 LibTorch dependency**, including in the Python examples and tests. The Python API
-uses NumPy arrays and handles bootstrap orchestration and reporting. The separate
-SplinePLSI comparator continues to use NumPy/SciPy.
+passes NumPy arrays to a single native bootstrap call and formats the returned
+results. The separate SplinePLSI comparator continues to use NumPy/SciPy and its
+existing Python bootstrap implementation.
 
 ```python
 from models import NeuralPLSI
@@ -110,8 +112,8 @@ they are not included in these prediction-model files.
 
 The Python binding supports Linux/macOS with a C++17 compiler. `CXX` selects the
 compiler (default `g++`). The shared library is built once, cached by source,
-compiler and platform, and loaded through `ctypes`. A process lock coordinates
-bootstrap workers. No Eigen, pybind11 or external numerical library is needed
+compiler and platform, and loaded through `ctypes`. A file lock coordinates
+compilation across independent jobs; bootstrap threads share the loaded library. No Eigen, pybind11 or external numerical library is needed
 by the C++ model. To prebuild inside your HPC environment:
 
 ```bash
@@ -120,7 +122,10 @@ python -m models.native
 
 Use `NEURALPLSI_CACHE_DIR` to select a writable cache directory. The implementation
 supports continuous, binary and Cox outcomes, ELU, LeakyReLU, ReLU and Tanh, and
-optional intercepts for continuous/binary outcomes. It uses float32 network
+optional intercepts for continuous/binary outcomes. `n_hidden_layers` and
+`hidden_units` configure the network depth and common hidden width; backpropagation
+loops over those layers and is not restricted to the default two layers of 32 units.
+It uses float32 network
 parameters and double precision for Cox risk-set accumulation and the optional
 linear initialization. `backend="cpp"` and `device="cpu"` are the defaults and
 only supported execution modes (`device="auto"` is a CPU alias).
@@ -157,13 +162,43 @@ index normalization, linear skip and sign canonicalization are retained.
 `initial=True` optionally starts from a native linear/logistic/Cox regression
 fit to the training partition; it is off by default.
 
+### Native bootstrap
+
+`inference_bootstrap(..., n_jobs=8)` uses up to eight C++ worker threads in the
+calling process. There are no Python worker processes, per-replicate Python calls,
+model serialization between workers, or Python RNG calls. C++ handles:
+
+- Paired row resampling of exposures, covariates and outcomes.
+- Independent copies of the original fitted model for warm starts, or fresh
+  seeded initialization for cold starts.
+- Refitting, sign canonicalization and evaluation of the requested link grid.
+- Bootstrap means, sample SDs (`ddof=1`) and percentile endpoints in double precision.
+
+The source model stays unchanged. Each replicate writes to its own output row,
+so scheduling and worker count do not change the draws or summaries. If a fit
+fails, all threads are joined and the call raises an error identifying the
+replicate and fit seed. Failed draws are never silently discarded or retried.
+
+`n_jobs='auto'` or `-1` uses available CPUs; `-2` leaves one available CPU unused.
+Worker counts are capped by the number of draws, CPU affinity, detected Linux
+cgroup quotas and `SLURM_CPUS_PER_TASK`. Each individual fit is single-threaded.
+The result records `bootstrap_engine`, `bootstrap_rng` and `n_workers`.
+
+Resampling now uses `splitmix64_bootstrap_v1`. Replicate `b` resamples with a
+separate stream keyed by `random_state+b` and fits with `random_state+1337+b`.
+This preserves reproducibility across thread counts and when extending B, but
+changes the draws relative to the former NumPy RNG. Use a fresh simulation output
+directory. Point-fit initialization, optimizer and stopping rules are unchanged.
+
 ### Use without Python
 
 The C API is declared in `models/native/core.h`. The example trains a nonlinear
-model and checks a native save/load round trip using only the C++ standard library:
+model, runs serial and threaded bootstrap with SEs and intervals, checks that the
+draws match exactly, and verifies a save/load round trip. It uses only the C++
+standard library:
 
 ```bash
-g++ -O3 -ffp-contract=off -std=c++17 -I models/native \
+g++ -O3 -pthread -ffp-contract=off -std=c++17 -I models/native \
   models/native/core.cpp examples/native_neuralplsi.cpp -o /tmp/neuralplsi_demo
 /tmp/neuralplsi_demo /tmp/example.nplsi
 ```
@@ -184,28 +219,32 @@ without changing NumPy's global RNG state. The new protocol changes initializati
 and splitting relative to the former Torch implementation, so old and new fits
 need separate simulation directories. Simulation data generation itself is unchanged.
 
-For a small timing check, including fit, prediction and serial bootstrap refits:
+For a small timing check, including fit, prediction and native bootstrap refits (`--jobs 1` for serial):
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-  python reproduce/benchmark_backends.py --n 2000 --repeats 3
+  python reproduce/benchmark_backends.py --n 2000 --repeats 3 --bootstrap 24 --jobs 4
 ```
 
 Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
 
-A local single-thread check with n=2,000, p=8, q=3, the `sfun` scenario,
-two hidden layers of 32 ELU units, and seeds 0–2 gave these median wall times:
+A local check used n=2,000, the `sfun` scenario, data/fit seed 0, bootstrap seed 11,
+24 warm-start refits and a 1,000-point link grid. Timings include resampling,
+refits, grid evaluations, SEs and intervals, and exclude compilation and the
+original point fit:
 
-| Outcome | Fit | Predict 2,000 rows | Three warm-start bootstrap refits |
+| Outcome | One C++ worker | Four C++ workers | Speedup |
 |---|---:|---:|---:|
-| Continuous | 0.079 s | 0.0020 s | 0.143 s |
-| Binary | 0.111 s | 0.0020 s | 0.134 s |
-| Cox | 0.097 s | 0.0020 s | 0.114 s |
+| Continuous | 1.136 s | 0.366 s | 3.10x |
+| Binary | 0.933 s | 0.290 s | 3.22x |
+| Cox | 1.755 s | 0.456 s | 3.85x |
 
-These measurements exclude compilation/loading and are specific to this machine
-and early-stopping behavior. They are not a comparison against the old RNG protocol.
+All draws and summaries matched exactly across worker counts. These are single
+local timing checks, not comparisons against the previous Python process pool.
+Use `--bootstrap 24 --repeats 1 --bootstrap_seed 11 --g_grid_n 1000 --jobs 1`
+and then `--jobs 4` with the timing script to repeat the configuration.
 
 ## Corrected simulation and HPC workflow
 
@@ -219,7 +258,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_native_v3_b999
+export OUT_DIR=output/simulation_native_v4_b999
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -236,8 +275,9 @@ export NPLSI_PYTHON=/ext3/miniconda3/bin/python
 ```
 
 The C++ compiler must be available **inside** that container. Worker counts
-respect the SLURM CPU allocation and BLAS/OpenMP threads are limited to one per
-worker. `BOOTSTRAP_JOBS` can reduce worker count when memory is limited.
+respect the SLURM CPU allocation. `BOOTSTRAP_JOBS` controls native threads for
+NeuralPLSI and process workers for the spline comparator. BLAS/OpenMP threads are
+limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
@@ -247,7 +287,7 @@ For a local run:
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v3_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v4_b999
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -258,8 +298,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_native_v3_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_native_v3_b999
+python reproduce/visualize_simulation.py --input output/simulation_native_v4_b999
+python reproduce/table_simulation_comparison.py --input output/simulation_native_v4_b999
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage
@@ -292,7 +332,7 @@ replicates, not a bootstrap confidence band.
   intervals include their joint bootstrap uncertainty. Plots preserve actual
   interval endpoints even when the point estimate lies outside the interval.
 
-The default percentile interpolation remains NumPy's `linear` method.
+The default percentile interpolation remains `linear` (NumPy-compatible, now calculated in C++ for NeuralPLSI).
 `--nn_bootstrap_quantile weibull` is available for a separate sensitivity run;
 it changes endpoints, not point-estimator bias, and is not a coverage repair.
 No graph penalty, score recalibration or experimental spline correction is
@@ -303,8 +343,11 @@ inference on the common link-function scale.
 Run the regression tests with the command below. They independently verify
 forward values and analytic gradients for every outcome/activation combination,
 multi-step AdamW updates, linear initialization, stopping/checkpoint behavior,
-bootstrap orientation, serial/parallel reproducibility, and native serialization.
-A separate subprocess also blocks every Torch import during fitting and inference.
+bootstrap orientation, serial/threaded reproducibility, native summaries and
+serialization. Gradient checks include different layer depths and widths.
+A bootstrap test blocks Python refits, RNG calls, process/thread creation and
+percentile functions while asserting that exactly one native call completes the
+whole operation. A separate subprocess blocks every Torch import.
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \

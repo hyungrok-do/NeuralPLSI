@@ -30,6 +30,24 @@ int nplsi_get_config(void* handle, int32_t* config, float* hyper, double* diagno
 int nplsi_get_weights(void* handle, float* weights);
 int nplsi_set_weights(void* handle, const float* weights, float sign);
 int nplsi_canonicalize(void* handle);
+/* Entire pairs-bootstrap workflow, with native threads and no callbacks.
+   Each replicate has its own model and RNG stream. The source model is unchanged.
+   n_jobs: -1=all available CPUs, -2=all but one, positive=worker limit.
+   draws: caller-owned B x D doubles, ordered by replicate, where
+          D=p+q+intercept+grid_size and columns are beta, gamma, intercept, g(grid).
+   summary: caller-owned 4 x D doubles: mean, sample SD (ddof=1), lower, upper.
+   quantile_method: 0=linear (type 7), 1=weibull (type 6).
+   grid may be NULL if grid_size=0. On failure all outputs must be discarded.
+   workers_used reports the actual thread count, capped by CPU allocation and B. */
+int nplsi_bootstrap(void* handle, const float* x, const float* z, const float* y,
+                    int n, int B, uint64_t seed, int n_jobs, int warmstart,
+                    const float* grid, int grid_size, double ci, int quantile_method,
+                    double* draws, double* summary, int32_t* workers_used);
+/* Diagnostics and resource planning. workers returns 0 on invalid input. */
+int nplsi_bootstrap_workers(int n_jobs, int B);
+int nplsi_bootstrap_indices(int n, uint64_t seed, int replicate, int32_t* indices);
+int nplsi_bootstrap_summary(const double* draws, int B, int D, double ci,
+                            int quantile_method, double* summary);
 /* Versioned portable text serialization, with exact float32 round trips. */
 size_t nplsi_state_size(void* handle);
 int nplsi_export_state(void* handle, char* buffer, size_t size);

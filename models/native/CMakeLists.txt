@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(NeuralPLSI LANGUAGES CXX)
+find_package(Threads REQUIRED)
 add_library(neuralplsi SHARED core.cpp)
+target_link_libraries(neuralplsi PRIVATE Threads::Threads)
 target_compile_features(neuralplsi PUBLIC cxx_std_17)
 target_include_directories(neuralplsi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
