@@ -1,4 +1,5 @@
-import torch
+import numpy as np
+from torch.utils.data import Sampler
 
 class SchedulerCallback:
     def __init__(self, optimizer, patience=5, higher_is_better=False, factor=0.1, max_reductions=0):
@@ -26,3 +27,16 @@ class SchedulerCallback:
                 else:
                     return True
         return False
+
+
+class EpochSampler(Sampler):
+    """Local, reproducible permutations shared by the Torch and C++ trainers."""
+    def __init__(self, size, seed):
+        self.size = size
+        self.rng = np.random.RandomState(seed)
+
+    def __iter__(self):
+        return iter(self.rng.permutation(self.size).tolist())
+
+    def __len__(self):
+        return self.size

@@ -5,9 +5,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression, LinearRegression
-from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
-from .utils import SchedulerCallback
+from .base import (_SummaryMixin, run_parallel_bootstrap, validate_data,
+                   validate_bootstrap, bootstrap_jobs)
+from .utils import SchedulerCallback, EpochSampler
 import functools
+import copy
 
 class CoxCCLoss(nn.Module):
     """Negative Cox partial log-likelihood (Breslow approximation).
@@ -29,17 +31,23 @@ class CoxCCLoss(nn.Module):
             idx = torch.argsort(durations, descending=True)
             r = risk_scores[idx]
             e = events[idx]
+            d = durations[idx]
         else:
             r = risk_scores
             e = events
+            d = durations
 
         n_events = e.sum()
         if n_events == 0:
             return risk_scores.sum() * 0.0   # grad-safe zero
 
-        gamma = r.max()
-        log_cumsum_h = (r - gamma).exp().cumsum(0).log().add(gamma)
-        return -(r - log_cumsum_h).mul(e).sum() / n_events
+        log_cumsum_h = torch.logcumsumexp(r, dim=0)
+        # Every event at a tied duration has the same complete risk set.
+        # Pairs bootstrap samples create ties even when original times differ.
+        _, counts = torch.unique_consecutive(d, return_counts=True)
+        group_ends = counts.cumsum(0) - 1
+        log_risk = torch.repeat_interleave(log_cumsum_h[group_ends], counts)
+        return -(r - log_risk).mul(e).sum() / n_events
 
 class _nPLSInet(nn.Module):
     def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, n_classes=1, add_intercept=False, activation='ELU'):
@@ -61,7 +69,8 @@ class _nPLSInet(nn.Module):
         layers.append(nn.Linear(hidden_units, n_classes))
         self.g_network = nn.Sequential(*layers)
         
-        self.flip_sign = False
+        # The link orientation must travel with state_dict checkpoints.
+        self.register_buffer('_index_sign', torch.tensor(1.0))
         self.n_classes = n_classes
         self.add_intercept = add_intercept
         if self.add_intercept:
@@ -71,7 +80,7 @@ class _nPLSInet(nn.Module):
         w = self.x_input.weight
         w_norm = w / (w.norm() + 1e-6)
         xb = F.linear(x, w_norm, self.x_input.bias)
-        if self.flip_sign: xb = -xb
+        xb = xb * self._index_sign
         # Combine MLP non-linearity with global linear skip-connection
         out = self.g_network(xb) + self.g_skip(xb) + self.z_input(z)
         if self.add_intercept:
@@ -79,14 +88,14 @@ class _nPLSInet(nn.Module):
         return out
 
     def g_function(self, x):
-        if self.flip_sign: x = -x
+        x = x * self._index_sign
         return self.g_network(x) + self.g_skip(x)
 
     def gxb(self, x):
         w = self.x_input.weight
         w_norm = w / (w.norm() + 1e-6)
         xb = F.linear(x, w_norm, self.x_input.bias)
-        if self.flip_sign: xb = -xb
+        xb = xb * self._index_sign
         return self.g_network(xb) + self.g_skip(xb)
 
     def resolve_sign_ambiguity(self):
@@ -98,8 +107,44 @@ class _nPLSInet(nn.Module):
                 if self.x_input.bias is not None:
                     self.x_input.bias.data.mul_(-1.)
 
+    @property
+    def flip_sign(self):
+        return self._index_sign.item() < 0
 
-def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='LeakyReLU', warmstart=True, warmstart_state=None):
+    @flip_sign.setter
+    def flip_sign(self, value):
+        self._index_sign.fill_(-1.0 if value else 1.0)
+
+
+def _initialize_linear(net, X, Z, y, family):
+    """Optional linear-model initialization on the same scale as the network."""
+    design = np.column_stack([X, Z])
+    if family == 'continuous':
+        model = LinearRegression(fit_intercept=net.add_intercept).fit(design, y)
+        coefficient, intercept = model.coef_, model.intercept_
+    elif family == 'binary':
+        model = LogisticRegression(C=1e6, fit_intercept=net.add_intercept,
+                                   max_iter=1000).fit(design, y)
+        coefficient, intercept = model.coef_[0], model.intercept_[0]
+    else:
+        from .PLSI import _fast_cox_fit
+        coefficient, _ = _fast_cox_fit(design, y[:, 0], y[:, 1], 1e-6)
+        intercept = 0.
+    p = X.shape[1]
+    length = np.linalg.norm(coefficient[:p])
+    if not np.isfinite(length) or length < 1e-10:
+        raise ValueError('Linear initialization produced a zero or nonfinite exposure direction')
+    with torch.no_grad():
+        net.x_input.weight.copy_(torch.as_tensor(coefficient[:p], device=net.x_input.weight.device))
+        net.z_input.weight.copy_(torch.as_tensor(coefficient[p:], device=net.z_input.weight.device))
+        net.g_network[-1].weight.zero_()
+        net.g_network[-1].bias.zero_()
+        net.g_skip.weight.fill_(length+1e-6)
+        if net.add_intercept:
+            net.intercept.fill_(float(intercept))
+
+
+def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, learning_rate, weight_decay, weight_decay_beta, grad_clip, hidden_units, n_hidden_layers, do_g, g_grid, add_intercept=False, activation='LeakyReLU', warmstart=True, warmstart_state=None, warmstart_flip_sign=None, initial=False, backend="torch"):
     torch.set_num_threads(1)
     device = torch.device(device_type)
     p, q = Xb.shape[1], Zb.shape[1]
@@ -109,13 +154,18 @@ def _refit_nplsi(Xb, Zb, yb, seed, family, device_type, batch_size, max_epoch, l
     
     if warmstart and warmstart_state is not None:
         net_b.load_state_dict(warmstart_state)
+        if warmstart_flip_sign is not None:
+            net_b.flip_sign = warmstart_flip_sign
+    elif initial:
+        ix, _, iz, _, iy, _ = train_test_split(Xb, Zb, yb, test_size=.2, random_state=seed)
+        _initialize_linear(net_b, ix, iz, iy, family)
         
     net_b = NeuralPLSI._train(
         net_b, Xb, Zb, yb, family, device,
         batch_size=batch_size, max_epoch=max_epoch,
         learning_rate=learning_rate, weight_decay=weight_decay,
         weight_decay_beta=weight_decay_beta,
-        grad_clip=grad_clip, random_state=seed
+        grad_clip=grad_clip, random_state=seed, backend=backend
     )
 
     w = net_b.x_input.weight.detach().cpu().flatten()
@@ -148,9 +198,26 @@ class NeuralPLSI(_SummaryMixin):
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, warmstart=True):
+                 initial=False, warmstart=True, device='auto', backend='torch'):
         self.family = family
-        if torch.cuda.is_available():
+        if family == 'cox' and add_intercept:
+            raise ValueError('A Cox partial likelihood cannot identify an intercept')
+        if backend not in ('torch', 'cpp'):
+            raise ValueError("backend must be 'torch' or 'cpp'")
+        if max_epoch < 0 or batch_size < 1 or hidden_units < 1 or n_hidden_layers < 1:
+            raise ValueError('Invalid epoch, batch or hidden layer size')
+        if learning_rate < 0 or weight_decay < 0 or weight_decay_beta < 0:
+            raise ValueError('Learning rate and weight decay must be nonnegative')
+        self.backend = backend
+        if backend == 'cpp' and device == 'auto':
+            device = 'cpu'
+        if backend == 'cpp' and torch.device(device).type != 'cpu':
+            raise ValueError('The cpp backend requires device="cpu" or "auto"')
+        if backend == 'cpp' and activation not in ('ELU', 'LeakyReLU', 'ReLU', 'Tanh'):
+            raise ValueError('The cpp backend supports ELU, LeakyReLU, ReLU and Tanh')
+        if device != 'auto':
+            self.device = torch.device(device)
+        elif torch.cuda.is_available():
             self.device = torch.device('cuda')
         elif torch.backends.mps.is_available():
             self.device = torch.device('mps')
@@ -182,6 +249,9 @@ class NeuralPLSI(_SummaryMixin):
             y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
             random_state: Seed for reproducibility
         """
+        X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
+        self._clear_inference()
+        self._net_infer = None
         torch.manual_seed(random_state)
         p, q = X.shape[1], Z.shape[1]
 
@@ -190,22 +260,32 @@ class NeuralPLSI(_SummaryMixin):
                             add_intercept=self.add_intercept,
                             activation=self.activation).to(self.device)
 
+        if self.initial:
+            ix, _, iz, _, iy, _ = train_test_split(X, Z, y, test_size=.2, random_state=random_state)
+            _initialize_linear(self.net, ix, iz, iy, self.family)
+
         self.net = self._train(self.net, X, Z, y, self.family, self.device,                               batch_size=self.batch_size, max_epoch=self.max_epoch,
                                learning_rate=self.learning_rate, weight_decay=self.weight_decay,
                                weight_decay_beta=self.weight_decay_beta,
-                               grad_clip=self.grad_clip, random_state=random_state)
+                               grad_clip=self.grad_clip, random_state=random_state, backend=self.backend)
         
         self._net_infer = self.net.eval()
+        return self
 
     @staticmethod
     def _train(net, X, Z, y, family, device, batch_size=64, max_epoch=200,
                learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-               grad_clip=1.0, random_state=0):
-        X = np.asarray(X, dtype=np.float32)
-        Z = np.asarray(Z, dtype=np.float32)
-        y = np.asarray(y, dtype=np.float32)
+               grad_clip=1.0, random_state=0, backend="torch"):
+        X, Z, y = validate_data(X, Z, y, family, dtype=np.float32)
+
+        if backend == 'cpp':
+            from .native import train
+            return train(net, X, Z, y, family, batch_size, max_epoch,
+                         learning_rate, weight_decay, weight_decay_beta, grad_clip, random_state)
 
         tr_x, val_x, tr_z, val_z, tr_y, val_y = train_test_split(X, Z, y, test_size=0.2, random_state=random_state)
+        if family == 'cox' and (tr_y[:, 1].sum() == 0 or val_y[:, 1].sum() == 0):
+            raise ValueError('Both Cox training and validation partitions need at least one event')
 
         g_param_groups = [
             {'params': net.x_input.parameters(), 'weight_decay': weight_decay_beta},
@@ -239,7 +319,8 @@ class NeuralPLSI(_SummaryMixin):
 
         tr_ds = TensorDataset(torch.from_numpy(tr_x), torch.from_numpy(tr_z), torch.from_numpy(tr_y))
         val_ds = TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_z), torch.from_numpy(val_y))
-        tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+        tr_loader = DataLoader(tr_ds, batch_size=batch_size,
+                               sampler=EpochSampler(len(tr_ds), random_state), num_workers=0)
         val_loader = DataLoader(val_ds, batch_size=len(val_x), shuffle=False, num_workers=0)
 
         mse0 = nn.MSELoss()
@@ -250,7 +331,10 @@ class NeuralPLSI(_SummaryMixin):
         zero_input = torch.zeros((1, 1), device=device)
         zero_target = torch.zeros((1, net.n_classes), device=device)
 
+        best_state, best_loss = None, float('inf')
+        joint_epochs = 0
         for _ in range(max_epoch):
+            joint_epochs += 1
             net.train()
             for bx, bz, by in tr_loader:
                 bx = bx.to(device)
@@ -267,7 +351,15 @@ class NeuralPLSI(_SummaryMixin):
                 else:
                     loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
                 loss = loss + mse0(net.g_network(zero_input), zero_target)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError('Nonfinite neural training loss')
                 loss.backward()
+                if family == 'cox':
+                    # Cox data loss is exactly invariant to an output shift.
+                    # Retain only the anchor's bias gradient; Adam otherwise
+                    # amplifies float32 cancellation noise near a linear start.
+                    with torch.no_grad():
+                        net.g_network[-1].bias.grad.copy_(2*net.g_network(zero_input).view(-1))
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
                 opt_g.step(); opt_z.step()
@@ -288,30 +380,52 @@ class NeuralPLSI(_SummaryMixin):
                     l = l + mse0(net.g_network(zero_input), zero_target)
                     val_loss += float(l.item())
 
-            if sch_g(val_loss) and sch_z(val_loss):
+            if not np.isfinite(val_loss):
+                raise FloatingPointError('Nonfinite neural validation loss')
+            if val_loss < best_loss:
+                best_loss, best_state = val_loss, copy.deepcopy(net.state_dict())
+            # Both callbacks need every validation value. Short-circuiting
+            # skips updates to the Z callback whenever G has not stopped.
+            stop_g = sch_g(val_loss)
+            stop_z = sch_z(val_loss)
+            if stop_g and stop_z:
                 break
+
+        if best_state is not None:
+            net.load_state_dict(best_state)
                 
         # --- Gamma Fine-Tuning Phase ---
-        # --- Gamma Fine-Tuning Phase ---
         # Freeze X and g network to fit Z against residuals
-        for param in net.x_input.parameters():
-            param.requires_grad = False
-        for param in net.g_network.parameters():
-            param.requires_grad = False
+        fixed_params = (list(net.x_input.parameters()) +
+                        list(net.g_network.parameters()) +
+                        list(net.g_skip.parameters()))
+        fixed_requires_grad = [param.requires_grad for param in fixed_params]
+        for param in fixed_params:
+            param.requires_grad_(False)
+            param.grad = None
         
         # MUST RE-INSTANTIATE GENERATOR FOR Z PARAMS
-        z_params_ft = [{'params': net.z_input.parameters(), 'weight_decay': 0.}]
+        z_params_ft = [{'params': list(net.z_input.parameters()), 'weight_decay': 0.}]
         if net.add_intercept:
             z_params_ft.append({'params': [net.intercept], 'weight_decay': 0.})
+        gamma_params = [param for group in z_params_ft for param in group['params']]
             
         # Fresh optimizer for Z with 0 weight decay
         opt_z_ft = torch.optim.AdamW(z_params_ft, lr=learning_rate * 10, weight_decay=0.0)
         # Increase patience significantly for FT since it's only 3 parameters and convex
         sch_z_ft = SchedulerCallback(opt_z_ft, patience=20)
+
+        with torch.no_grad():
+            vx, vz, vy = [torch.from_numpy(a).to(device) for a in (val_x, val_z, val_y)]
+            value = net(vx, vz)
+            best_ft_loss = float(val_loss_fn(value.view(-1), vy.view(-1) if family != 'cox' else vy))
+        best_gamma = [param.detach().clone() for param in gamma_params]
         
         # Train for a fixed minimum of epochs or until convergence
         ft_epochs = min(max_epoch, 50)
+        gamma_epochs = 0
         for epoch in range(ft_epochs):
+            gamma_epochs += 1
             net.train()
             for bx, bz, by in tr_loader:
                 bx = bx.to(device)
@@ -325,9 +439,12 @@ class NeuralPLSI(_SummaryMixin):
                     loss = loss_fn(out.view(-1), by)
                 else:
                     loss = loss_fn(out.view(-1), by.view_as(out.view(-1)))
+                if not torch.isfinite(loss):
+                    raise FloatingPointError('Nonfinite gamma fine-tuning loss')
                 loss.backward()
                 if grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
+                    # Only optimized parameters can contribute to clipping.
+                    torch.nn.utils.clip_grad_norm_(gamma_params, grad_clip)
                 opt_z_ft.step()
                 
             net.eval(); val_loss = 0.0
@@ -344,32 +461,43 @@ class NeuralPLSI(_SummaryMixin):
                     else:
                         l = val_loss_fn(out.view(-1), by.view_as(out.view(-1)))
                     val_loss += float(l.item())
+            if not np.isfinite(val_loss):
+                raise FloatingPointError('Nonfinite gamma validation loss')
+            if val_loss < best_ft_loss:
+                best_ft_loss = val_loss
+                best_gamma = [param.detach().clone() for param in gamma_params]
             if sch_z_ft(val_loss):
                 break
+
+        with torch.no_grad():
+            for param, value in zip(gamma_params, best_gamma):
+                param.copy_(value)
                 
         # Unfreeze
-        for param in net.x_input.parameters():
-            param.requires_grad = True
-        for param in net.g_network.parameters():
-            param.requires_grad = True
+        for param, requires_grad in zip(fixed_params, fixed_requires_grad):
+            param.requires_grad_(requires_grad)
         # -------------------------------
         
         net.resolve_sign_ambiguity()
+        net.fit_diagnostics = dict(joint_epochs=joint_epochs, gamma_epochs=gamma_epochs,
+                                   validation_loss=best_ft_loss)
         return net
 
     def _infer_net(self):
+        if self.net is None:
+            raise ValueError('Call fit() before prediction')
         if self._net_infer is None:
             self._net_infer = self.net.eval()
         return self._net_infer.eval()
 
     @property
     def beta(self):
-        w = self.net.x_input.weight.detach().cpu().flatten()
+        w = self._infer_net().x_input.weight.detach().cpu().flatten()
         return (w / (w.norm() + 1e-6)).numpy()
 
     @property
     def gamma(self):
-        return self.net.z_input.weight.detach().cpu().flatten().numpy()
+        return self._infer_net().z_input.weight.detach().cpu().flatten().numpy()
 
     @property
     def intercept_val(self):
@@ -420,7 +548,12 @@ class NeuralPLSI(_SummaryMixin):
     def _batched_forward(self, X, Z, transform=None, batch_size=128):
         """Shared batched inference. transform is applied to each batch output."""
         net = self._infer_net()
-        ds = TensorDataset(torch.from_numpy(X.astype(np.float32)), torch.from_numpy(Z.astype(np.float32)))
+        X, Z = np.asarray(X, dtype=np.float32), np.asarray(Z, dtype=np.float32)
+        if (X.ndim != 2 or Z.ndim != 2 or len(X) == 0 or len(X) != len(Z) or
+                X.shape[1] != net.x_input.in_features or Z.shape[1] != net.z_input.in_features or
+                not np.isfinite(X).all() or not np.isfinite(Z).all()):
+            raise ValueError('Prediction matrices must be finite and match the fitted dimensions')
+        ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(Z))
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
         outs = []
         with torch.no_grad():
@@ -448,36 +581,40 @@ class NeuralPLSI(_SummaryMixin):
         p, q = Xb.shape[1], Zb.shape[1]
 
         net = _nPLSInet(p, q, hidden_units=self.hidden_units, n_hidden_layers=self.n_hidden_layers, add_intercept=self.add_intercept, activation=self.activation).to(self.device)
+        if self.initial:
+            ix, _, iz, _, iy, _ = train_test_split(Xb, Zb, yb, test_size=.2, random_state=seed)
+            _initialize_linear(net, ix, iz, iy, self.family)
         net = self._train(net, Xb, Zb, yb, self.family, self.device,
                           batch_size=self.batch_size, max_epoch=self.max_epoch,
                           learning_rate=self.learning_rate, weight_decay=self.weight_decay,
                           weight_decay_beta=self.weight_decay_beta,
-                          grad_clip=self.grad_clip, random_state=seed)
-        beta = net.x_input.weight.detach().cpu().flatten().numpy()
+                          grad_clip=self.grad_clip, random_state=seed, backend=self.backend)
+        w = net.x_input.weight.detach().cpu().flatten()
+        beta = (w / (w.norm() + 1e-6)).numpy()
         gamma = net.z_input.weight.detach().cpu().flatten().numpy()
         return beta, gamma, net
 
-    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs='auto'):
+    def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs='auto', quantile_method='linear'):
         """
         Perform bootstrap inference to estimate SE and CI for beta, gamma, and g(x).
+
+        quantile_method selects NumPy's percentile interpolation: 'linear'
+        preserves historical results, while 'weibull' uses order-statistic
+        plotting positions k/(B+1). At small B this changes tail endpoints
+        materially. It does not correct estimator bias or guarantee coverage.
         """
-        X = np.asarray(X, dtype=np.float32); Z = np.asarray(Z, dtype=np.float32); y = np.asarray(y, dtype=np.float32)
+        if quantile_method not in ('linear', 'weibull'):
+            raise ValueError("quantile_method must be 'linear' or 'weibull'")
+        validate_bootstrap(n_samples, ci, random_state)
+        X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
+        if self.device.type != 'cpu' and n_jobs not in ('auto', 1):
+            raise ValueError('GPU bootstrap requires n_jobs=1 or auto')
         if self.net is None:
-            self.fit(X, Z, y)
+            self.fit(X, Z, y, random_state=random_state)
+        self._clear_inference()
         N, p, q = len(X), X.shape[1], Z.shape[1]
 
-        if n_jobs == 'auto':
-            if self.device.type == 'cpu':
-                n_jobs = -1
-                print(f"Auto-detected CPU device: using parallel bootstrap with all cores (n_jobs=-1)")
-            else:
-                n_jobs = 1
-                print(f"Auto-detected GPU device: using sequential bootstrap (n_jobs=1)")
-
-        if n_jobs != 1:
-            import os
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
+        n_jobs = 1 if self.device.type != 'cpu' else bootstrap_jobs(n_jobs, n_samples)
 
         beta_samples = np.empty((n_samples, p))
         gamma_samples = np.empty((n_samples, q))
@@ -486,6 +623,8 @@ class NeuralPLSI(_SummaryMixin):
         do_g = g_grid is not None
         if do_g:
             g_grid = np.asarray(g_grid, dtype=np.float32).reshape(-1, 1)
+            if not g_grid.size or not np.isfinite(g_grid).all():
+                raise ValueError('g_grid must be nonempty and finite')
             g_samples = np.empty((n_samples, g_grid.shape[0]))
         else:
             g_grid = None
@@ -497,7 +636,7 @@ class NeuralPLSI(_SummaryMixin):
 
         refit_func = functools.partial(_refit_nplsi,
                                        family=self.family,
-                                       device_type=self.device.type,
+                                       device_type=str(self.device),
                                        batch_size=self.batch_size,
                                        max_epoch=self.max_epoch,
                                        learning_rate=self.learning_rate,
@@ -511,7 +650,9 @@ class NeuralPLSI(_SummaryMixin):
                                        add_intercept=self.add_intercept,
                                        activation=self.activation,
                                        warmstart=self.warmstart,
-                                       warmstart_state=warmstart_state)
+                                       warmstart_state=warmstart_state,
+                                       warmstart_flip_sign=self.net.flip_sign,
+                                       initial=self.initial, backend=self.backend)
 
         results = run_parallel_bootstrap(refit_func, X, Z, y, n_samples, random_state, n_jobs)
         for b, result in enumerate(results):
@@ -523,23 +664,32 @@ class NeuralPLSI(_SummaryMixin):
             if do_g and g_res is not None:
                 g_samples[b] = g_res
 
+        arrays = [beta_samples, gamma_samples]
+        if self.add_intercept:
+            arrays.append(intercept_samples)
+        if do_g:
+            arrays.append(g_samples)
+        if not all(np.isfinite(a).all() for a in arrays):
+            raise FloatingPointError('Nonfinite bootstrap coefficient estimates')
+
         beta_hat, gamma_hat = self.beta, self.gamma
         intercept_hat = self.intercept_val
 
         self.beta_se = beta_samples.std(axis=0, ddof=1)
         self.gamma_se = gamma_samples.std(axis=0, ddof=1)
-        self.beta_lb, self.beta_ub = self._percentile_ci(beta_samples, ci)
-        self.gamma_lb, self.gamma_ub = self._percentile_ci(gamma_samples, ci)
+        self.beta_lb, self.beta_ub = self._percentile_ci(beta_samples, ci, method=quantile_method)
+        self.gamma_lb, self.gamma_ub = self._percentile_ci(gamma_samples, ci, method=quantile_method)
         
         out = {
             "beta_hat": beta_hat, "beta_se": self.beta_se, "beta_lb": self.beta_lb, "beta_ub": self.beta_ub,
             "gamma_hat": gamma_hat, "gamma_se": self.gamma_se, "gamma_lb": self.gamma_lb, "gamma_ub": self.gamma_ub,
-            "beta_samples": beta_samples, "gamma_samples": gamma_samples
+            "beta_samples": beta_samples, "gamma_samples": gamma_samples,
+            "quantile_method": quantile_method, "ci": ci, "n_bootstrap": n_samples
         }
         
         if self.add_intercept:
             self.intercept_se = intercept_samples.std(axis=0, ddof=1)
-            self.intercept_lb, self.intercept_ub = self._percentile_ci(intercept_samples, ci)
+            self.intercept_lb, self.intercept_ub = self._percentile_ci(intercept_samples, ci, method=quantile_method)
             out.update({
                 "intercept_hat": intercept_hat, "intercept_se": self.intercept_se,
                 "intercept_lb": self.intercept_lb, "intercept_ub": self.intercept_ub,
@@ -548,9 +698,10 @@ class NeuralPLSI(_SummaryMixin):
 
         if do_g:
             g_mean = g_samples.mean(axis=0); g_se = g_samples.std(axis=0, ddof=1)
-            g_lb, g_ub = self._percentile_ci(g_samples, ci)
+            g_lb, g_ub = self._percentile_ci(g_samples, ci, method=quantile_method)
             self.g_grid = g_grid.ravel(); self.g_grid_mean = g_mean; self.g_grid_se = g_se
             self.g_grid_lb, self.g_grid_ub = g_lb, g_ub; self._g_samples = g_samples
-            out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
+            out.update({"g_grid": self.g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub,
+                        "g_samples": g_samples})
         return out
 

@@ -1,58 +1,49 @@
-import os
+#!/usr/bin/env python3
+"""Initialization ablation using the same checked runner as the main study."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 import itertools
-from joblib import Parallel, delayed
+import os
+from pathlib import Path
+import subprocess
 import sys
 
-# Make sure we can import from the main directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from models.base import bootstrap_jobs
 
-from reproduce.visualize_ablation import run_and_save_simulation
 
-# Grid specifications
-n_values = [500, 2000]
-outcomes = ['continuous', 'binary', 'cox']
-g_fns = ['linear', 'sfun', 'sigmoid']
-init_flags = [False, True]
-model_types = ['NeuralPLSI', 'PLSI']
-n_runs = 50
-
-# Ensure output directory exists
-os.makedirs('reproduce/output', exist_ok=True)
-
-def task(outcome, g_fn, init, model, n, n_runs):
-    # Skip invalid combinations
-    if init and model == 'PLSI':
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--workers', type=int, default=1)
+    parser.add_argument('--n_replicates', type=int, default=50)
+    parser.add_argument('--n_bootstrap', type=int, default=100)
+    parser.add_argument('--nn_backend', choices=['torch', 'cpp'], default='torch')
+    parser.add_argument('--out', default='output/ablation_fixed')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args(argv)
+    commands = []
+    for n, outcome, link in itertools.product([500, 2000], ['continuous', 'binary', 'cox'], ['linear', 'sfun', 'sigmoid']):
+        for model, initial in [('NeuralPLSI', False), ('NeuralPLSI', True), ('PLSI', False)]:
+            command = [sys.executable, str(ROOT/'reproduce/main_simulation.py'),
+                '--n_instances', str(n), '--outcome', outcome, '--g_fn', link, '--models', model,
+                '--n_replicates', str(args.n_replicates), '--n_bootstrap', str(args.n_bootstrap),
+                '--bootstrap_jobs', '1', '--device', 'cpu', '--nn_backend', args.nn_backend,
+                '--out', str(Path(args.out).resolve()/f'{args.nn_backend}_init{int(initial)}')]
+            if initial:
+                command.append('--initial')
+            commands.append(command)
+    if args.dry_run:
+        for command in commands:
+            print(' '.join(command))
         return
-        
-    # The run_and_save_simulation generates a specific metric JSON and prints results. 
-    # Use 1 worker per task since joblib handles overall parallelism.
-    try:
-        run_and_save_simulation(outcome=outcome, g_fn=g_fn, init=init, model=model, 
-                                n=n, n_runs=n_runs, n_jobs=1)
-    except Exception as e:
-        print(f"Error in task: {outcome}, {g_fn}, {init}, {model}, {n} -> {e}")
+    environment = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
+    def run(command):
+        subprocess.run(command, cwd=ROOT, env=environment, check=True)
+    with ThreadPoolExecutor(max_workers=bootstrap_jobs(args.workers, len(commands))) as executor:
+        list(executor.map(run, commands))
+    print(f'Completed {len(commands)} ablation settings')
 
-# Build parameters
-params = []
-for outcome in outcomes:
-    for g_fn in g_fns:
-        for init in init_flags:
-            for model in model_types:
-                for n in n_values:
-                    # Filter out PLSI + init=True
-                    if init and model == 'PLSI':
-                        continue
-                    params.append((outcome, g_fn, init, model, n, n_runs))
 
-print(f"Total configurations to run: {len(params)}")
-
-# Run all combinations in parallel. Use n_jobs matching SLURM cpus-per-task.
-# For HPC, using all available threads is optimal.
-n_cores = int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count()))
-print(f"Running on {n_cores} cores.")
-
-Parallel(n_jobs=n_cores)(
-    delayed(task)(*p) for p in params
-)
-
-print("Ablation grid completed successfully.")
+if __name__ == '__main__':
+    main()

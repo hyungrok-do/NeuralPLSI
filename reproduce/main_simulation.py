@@ -10,22 +10,29 @@ For each replicate the script records:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
+from contextlib import contextmanager
 from time import perf_counter
 
 import numpy as np
+import sklearn
+import scipy
+import torch
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from lifelines.utils import concordance_index
-from joblib import Parallel, delayed
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from models import SplinePLSI, NeuralPLSI
+from models.base import bootstrap_jobs
 from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 
@@ -35,6 +42,8 @@ def to_json(obj):
         return {k: to_json(v) for k, v in obj.items()}
     if isinstance(obj, np.ndarray):
         return obj.tolist()
+    if isinstance(obj, np.bool_):
+        return bool(obj)
     if isinstance(obj, (np.floating, np.integer)):
         return float(obj)
     if isinstance(obj, list):
@@ -51,7 +60,7 @@ def evaluate(model, X_te, Z_te, y_te, outcome):
         preds = model.predict_proba(X_te, Z_te)
         return float(roc_auc_score(y_te, preds))
     elif outcome == 'cox':
-        preds = model.predict_partial_hazard(X_te, Z_te)
+        preds = model.predict(X_te, Z_te)  # Concordance is invariant to exp; avoid overflow.
         return float(concordance_index(y_te[:, 0], -preds, y_te[:, 1]))
     raise ValueError(f"Unknown outcome: {outcome}")
 
@@ -86,153 +95,219 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
 MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI}
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Simulation study: PLSI vs NeuralPLSI inference comparison.")
-    ap.add_argument('--n_instances',    type=int,   default=500)
-    ap.add_argument('--n_replicates',   type=int,   default=500)
-    ap.add_argument('--n_bootstrap',    type=int,   default=100)
-    ap.add_argument('--g_fn',           type=str,   default='sigmoid', choices=['linear', 'sfun', 'sigmoid'])
-    ap.add_argument('--outcome',        type=str,   default='continuous', choices=['continuous', 'binary', 'cox'])
-    ap.add_argument('--exposure_dist',  type=str,   default='normal', choices=['normal', 'uniform', 't'])
-    ap.add_argument('--models',         nargs='+',  default=['all'])
-    ap.add_argument('--seed0',          type=int,   default=0)
-    ap.add_argument('--save_every',     type=int,   default=1)
-    ap.add_argument('--out',            type=str,   default=None)
-    ap.add_argument('--g_grid_min',     type=float, default=-3.0)
-    ap.add_argument('--g_grid_max',     type=float, default=3.0)
-    ap.add_argument('--g_grid_n',       type=int,   default=1000)
-    ap.add_argument('--activation',     type=str,   default='ELU')
-    args = ap.parse_args()
+def run_configuration(args, model):
+    """Record the estimator, inference settings and exact simulation source."""
+    paths = ['reproduce/main_simulation.py', 'simulation/__init__.py',
+             'models/base.py', 'models/utils.py',
+             'models/NeuralPLSI.py' if model == 'NeuralPLSI' else 'models/PLSI.py']
+    if model == 'NeuralPLSI':
+        paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
+                        if p.suffix in ('.py', '.cpp'))
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.encode())
+        with open(os.path.join(ROOT, path), 'rb') as source:
+            digest.update(source.read())
+    native_build = None
+    if model == 'NeuralPLSI' and args.nn_backend == 'cpp':
+        from models.native import build_library
+        native_build = build_library().name
+    resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
+                       if model == 'NeuralPLSI' else 'cpu')
+    return dict(protocol_version=2, model=model, n=args.n_instances,
+                g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
+                activation=args.activation if model == 'NeuralPLSI' else None,
+                n_bootstrap=args.n_bootstrap, ci=0.95,
+                quantile_method=(getattr(args, 'nn_bootstrap_quantile', 'linear')
+                                 if model == 'NeuralPLSI' else 'linear'),
+                fit_random_state=args.fit_seed if model == 'NeuralPLSI' else 'replicate_seed',
+                initial=args.initial if model == 'NeuralPLSI' else None,
+                warmstart=args.warmstart if model == 'NeuralPLSI' else False,
+                backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
+                device=resolved_device, native_build=native_build,
+                normalization='l2',
+                g_grid=[args.g_grid_min, args.g_grid_max, args.g_grid_n],
+                source_sha256=digest.hexdigest(), numpy=np.__version__,
+                sklearn=sklearn.__version__, scipy=scipy.__version__, torch=str(torch.__version__))
 
-    model_list = parse_models(args.models)
-    n          = args.n_instances
-    g_fn       = args.g_fn
-    outcome    = args.outcome
-    x_dist     = args.exposure_dist
-    g_grid     = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
 
-    results     = {m: [] for m in model_list}
-    out_paths   = {m: output_path(args.out, m, n, g_fn, outcome, x_dist) for m in model_list}
+def load_compatible_results(path, configuration):
+    """Never mix unverified legacy outputs with a new simulation run."""
+    if not os.path.exists(path):
+        return []
+    with open(path) as stream:
+        records = json.load(stream)
+    if not isinstance(records, list):
+        raise ValueError(f'Expected a list of replicates in {path}')
+    seeds = set()
+    for row in records:
+        if row.get('run_configuration') != configuration:
+            raise ValueError(
+                f'Cannot resume {path}: its code/settings differ or its run '
+                'configuration is missing. Use a new --out directory for this run.')
+        if row['seed'] in seeds:
+            raise ValueError(f'Duplicate simulation seed {row["seed"]} in {path}')
+        seeds.add(row['seed'])
+    return records
 
-    header = (f"Simulation: n={n}, g_fn={g_fn}, outcome={outcome}, "
-              f"x_dist={x_dist}, models={model_list}")
-    print(header)
-    print("=" * len(header))
 
-    for mname in model_list:
-        def _run_single_rep(rep):
-            seed = args.seed0 + rep
+@contextmanager
+def result_lock(path):
+    import fcntl
+    lock = open(str(path)+'.lock', 'a')
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f'Another job is writing {path}') from exc
+        yield
+    finally:
+        lock.close()
+
+
+def atomic_json(path, records):
+    """A terminated job must not destroy its last complete checkpoint."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
+            temporary = stream.name
+            json.dump(to_json(records), stream, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def run_replicate(args, mname, seed, configuration):
+    n = args.n_instances
+    X, Z, y, *_ = simulate_data(2*n, outcome=args.outcome, g_type=args.g_fn,
+                               seed=seed, x_dist=args.exposure_dist)
+    X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
+    if mname == 'NeuralPLSI':
+        model = NeuralPLSI(family=args.outcome, activation=args.activation,
+            initial=args.initial, warmstart=args.warmstart, device=args.device, backend=args.nn_backend)
+        fit_options = {'random_state': args.fit_seed}
+    else:
+        model = SplinePLSI(family=args.outcome)
+        fit_options = {'random_state': seed}
+    start = perf_counter()
+    model.fit(X_tr, Z_tr, y_tr, **fit_options)
+    time_fit = perf_counter()-start
+    performance = evaluate(model, X_te, Z_te, y_te, args.outcome)
+    if not np.isfinite(performance):
+        raise FloatingPointError('Nonfinite test-set performance')
+    grid = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
+    g_estimate = model.g_function(grid)
+    start = perf_counter()
+    options = {'quantile_method': args.nn_bootstrap_quantile} if mname == 'NeuralPLSI' else {}
+    jobs = args.bootstrap_jobs
+    if mname == 'NeuralPLSI' and model.device.type != 'cpu' and jobs == 'auto':
+        jobs = 1
+    boot = model.inference_bootstrap(X_tr, Z_tr, y_tr, n_samples=args.n_bootstrap,
+        random_state=seed, ci=.95, g_grid=grid, n_jobs=jobs, **options)
+    time_boot = perf_counter()-start
+    beta, gamma = model.beta, model.gamma
+    row = dict(run_configuration=configuration, seed=seed, n=n, g_fn=args.g_fn,
+        x_dist=args.exposure_dist, outcome=args.outcome, model=mname, performance=performance,
+        time_fit=time_fit, time_bootstrap=time_boot, beta_est=beta, gamma_est=gamma,
+        g_grid=grid, g_pred=g_estimate, g_se=boot['g_se'], g_lb=boot['g_lb'], g_ub=boot['g_ub'],
+        n_bootstrap=len(boot['beta_samples']))
+    for block, estimate, target in [('beta', beta, TRUE_BETA), ('gamma', gamma, TRUE_GAMMA)]:
+        samples = boot[block+'_samples']
+        if samples.shape != (args.n_bootstrap, len(target)) or not np.isfinite(samples).all():
+            raise FloatingPointError(f'Incomplete or nonfinite {block} bootstrap draws')
+        lower, upper = boot[block+'_lb'], boot[block+'_ub']
+        row.update({block+'_bias': estimate-target, block+'_se': boot[block+'_se'],
+                    block+'_lb': lower, block+'_ub': upper,
+                    block+'_cov': ((lower <= target) & (target <= upper)).astype(int),
+                    block+'_bootstrap_mean': samples.mean(axis=0),
+                    block+'_bootstrap_bias': samples.mean(axis=0)-estimate})
+    if mname == 'NeuralPLSI':
+        row['fit_diagnostics'] = model.net.fit_diagnostics
+        row['device'] = str(model.device)
+    else:
+        row['fit_diagnostics'] = dict(converged=bool(model.converged_), iterations=model.n_iter_)
+    if args.outcome == 'cox':
+        row['event_fraction'] = float(y_tr[:, 1].mean())
+    if args.save_bootstrap_samples:
+        sample_dir = Path(args.out or 'output/simulation')/'bootstrap_samples'
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        tag = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()[:12]
+        path = sample_dir/f'{mname}_{n}_{args.g_fn}_{args.outcome}_{args.exposure_dist}_{tag}_{seed}.npz'
+        with tempfile.NamedTemporaryFile(dir=sample_dir, delete=False) as stream:
+            temporary = stream.name
+            np.savez_compressed(stream, beta_samples=boot['beta_samples'],
+                                gamma_samples=boot['gamma_samples'])
+        os.replace(temporary, path)
+        row['bootstrap_samples_file'] = str(path)
+    print(f'{mname} seed={seed} performance={performance:.4f} fit={time_fit:.2f}s bootstrap={time_boot:.2f}s', flush=True)
+    return to_json(row)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description='PLSI simulation with reproducible bootstrap inference.')
+    parser.add_argument('--n_instances', type=int, default=500)
+    parser.add_argument('--n_replicates', type=int, default=500)
+    parser.add_argument('--n_bootstrap', type=int, default=100)
+    parser.add_argument('--nn_bootstrap_quantile', choices=['linear','weibull'], default='linear')
+    parser.add_argument('--bootstrap_jobs', default='auto',
+                        type=lambda value: value if value == 'auto' else int(value))
+    parser.add_argument('--g_fn', default='sigmoid', choices=['linear','sfun','sigmoid'])
+    parser.add_argument('--outcome', default='continuous', choices=['continuous','binary','cox'])
+    parser.add_argument('--exposure_dist', default='normal', choices=['normal','uniform','t'])
+    parser.add_argument('--models', nargs='+', default=['all'])
+    parser.add_argument('--seed0', type=int, default=0)
+    parser.add_argument('--fit_seed', type=int, default=0)
+    parser.add_argument('--save_every', type=int, default=1)
+    parser.add_argument('--save_bootstrap_samples', action='store_true')
+    parser.add_argument('--out', default=None)
+    parser.add_argument('--g_grid_min', type=float, default=-3.)
+    parser.add_argument('--g_grid_max', type=float, default=3.)
+    parser.add_argument('--g_grid_n', type=int, default=1000)
+    parser.add_argument('--activation', default='ELU')
+    parser.add_argument('--initial', action='store_true')
+    parser.add_argument('--warmstart', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--device', default='auto', choices=['auto','cpu','cuda','mps'])
+    parser.add_argument('--nn_backend', default='torch', choices=['torch','cpp'])
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if (args.n_instances < 5 or args.n_replicates < 1 or args.n_bootstrap < 2 or
+            args.save_every < 1 or args.g_grid_n < 2 or args.g_grid_max <= args.g_grid_min or
+            args.seed0 < 0 or args.fit_seed < 0):
+        parser.error('Invalid sample, replicate, bootstrap, checkpoint, grid, or seed setting')
+    bootstrap_jobs(args.bootstrap_jobs, args.n_bootstrap)
+    torch.set_num_threads(1)
+    for mname in parse_models(args.models):
+        path = output_path(args.out, mname, args.n_instances, args.g_fn,
+                           args.outcome, args.exposure_dist, args.initial if mname == 'NeuralPLSI' else False)
+        with result_lock(path):
+            configuration = run_configuration(args, mname)
+            records = load_compatible_results(path, configuration)
+            completed = {row['seed'] for row in records}
             try:
-                X, Z, y, _, _, _ = simulate_data(n * 2, outcome=outcome, g_type=g_fn, seed=seed, x_dist=x_dist)
-                X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
-
-                np.random.seed(seed)
-
-                if mname == 'NeuralPLSI':
-                    model = NeuralPLSI(family=outcome, activation=args.activation)
-                else:
-                    model = SplinePLSI(family=outcome)
-
-                # --- Fit ---
-                t0 = perf_counter()
-                model.fit(X_tr, Z_tr, y_tr)
-                time_fit = perf_counter() - t0
-
-                # --- Point estimates ---
-                perf  = evaluate(model, X_te, Z_te, y_te, outcome)
-                g_est = model.g_function(g_grid).tolist()
-
-                # --- Bootstrap inference ---
-                t0 = perf_counter()
-                boot = model.inference_bootstrap(
-                    X_tr, Z_tr, y_tr,
-                    n_samples=args.n_bootstrap,
-                    random_state=seed,
-                    ci=0.95,
-                    g_grid=g_grid,
-                )
-                time_boot = perf_counter() - t0
-
-                # --- Evaluate Metrics Directly ---
-                b_hat = model.beta
-                g_hat = model.gamma
-                
-                b_lb, b_ub = np.array(boot.get('beta_lb', b_hat)), np.array(boot.get('beta_ub', b_hat))
-                g_lb, g_ub = np.array(boot.get('gamma_lb', g_hat)), np.array(boot.get('gamma_ub', g_hat))
-                
-                b_cov = ((b_lb <= TRUE_BETA) & (TRUE_BETA <= b_ub)).astype(int).tolist()
-                g_cov = ((g_lb <= TRUE_GAMMA) & (TRUE_GAMMA <= g_ub)).astype(int).tolist()
-
-                entry = {
-                    'seed':           seed,
-                    'n':              n,
-                    'g_fn':           g_fn,
-                    'x_dist':         x_dist,
-                    'outcome':        outcome,
-                    'model':          mname,
-                    'performance':    perf,
-                    'time_fit':       round(time_fit, 4),
-                    'time_bootstrap': round(time_boot, 4),
-                    
-                    # Direct Metrics
-                    'beta_est':       b_hat.tolist(),
-                    'gamma_est':      g_hat.tolist(),
-                    'beta_bias':      (b_hat - TRUE_BETA).tolist(),
-                    'gamma_bias':     (g_hat - TRUE_GAMMA).tolist(),
-                    'beta_se':        boot.get('beta_se', np.zeros_like(b_hat)).tolist(),
-                    'gamma_se':       boot.get('gamma_se', np.zeros_like(g_hat)).tolist(),
-                    'beta_cov':       b_cov,
-                    'gamma_cov':      g_cov,
-                    
-                    # Used for empirical g-function plots
-                    'g_pred':         g_est,
-                }
-                
-                parts = [f"[{rep+1:4d}/{args.n_replicates}] {mname:12s}",
-                         f"perf={perf:.4f}",
-                         f"fit={time_fit:.2f}s",
-                         f"boot={time_boot:.2f}s"]
-                print(" | ".join(parts))
-                
-                return entry
-            except Exception as e:
-                print(f"[{rep+1:4d}/{args.n_replicates}] ERROR for {mname}: {e}")
-                return None
-
-        # Execute replicates sequentially (model internals handle parallel bootstrapping)
-        print(f"--- Running {args.n_replicates} replicates for {mname} ---")
-        
-        # Load existing progress if file exists to allow resuming
-        rep_results = []
-        if os.path.exists(out_paths[mname]):
-            try:
-                with open(out_paths[mname], 'r') as f:
-                    rep_results = json.load(f)
-                print(f"Loaded {len(rep_results)} existing results for {mname}.")
-            except Exception as e:
-                print(f"Could not load existing file {out_paths[mname]}: {e}")
-
-        completed_seeds = {r['seed'] for r in rep_results}
-        
-        for rep in range(args.n_replicates):
-            seed = args.seed0 + rep
-            if seed in completed_seeds:
-                continue
-                
-            res = _run_single_rep(rep)
-            if res is not None:
-                rep_results.append(res)
-                
-                # Checkpointing
-                if len(rep_results) % args.save_every == 0:
-                    with open(out_paths[mname], 'w') as f:
-                        json.dump(rep_results, f)
-        
-        # Final flush
-        with open(out_paths[mname], 'w') as f:
-            json.dump(rep_results, f)
-        print(f"Saved {len(rep_results)} entries → {out_paths[mname]}")
+                for seed in range(args.seed0, args.seed0+args.n_replicates):
+                    if seed in completed:
+                        continue
+                    try:
+                        records.append(run_replicate(args, mname, seed, configuration))
+                    except Exception as exc:
+                        # Fail the scheduler job instead of reporting coverage conditional
+                        # on successful fits. Earlier completed replicates are preserved.
+                        raise RuntimeError(f'{mname} simulation failed at seed {seed}') from exc
+                    if len(records) % args.save_every == 0:
+                        atomic_json(path, records)
+            finally:
+                atomic_json(path, records)
+            print(f'Saved {len(records)} replicates to {path}', flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

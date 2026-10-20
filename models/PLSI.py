@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.optimize as opt
-from sklearn.linear_model import Ridge, LogisticRegression
-from .base import _SummaryMixin, draw_bootstrap_indices, run_parallel_bootstrap
+from .base import (_SummaryMixin, run_parallel_bootstrap, validate_data,
+                   validate_bootstrap)
 
 try:
     from numba import njit
@@ -14,181 +14,84 @@ except ImportError:
 
 
 def _fast_ridge_loss(Xd, y, alpha):
-    """Solve ridge regression and return RSS (closed-form)."""
+    """Solve ridge regression and return the penalized RSS."""
     d = Xd.shape[1]
     A = Xd.T @ Xd + alpha * np.eye(d)
     w = np.linalg.solve(A, Xd.T @ y)
     resid = y - Xd @ w
-    return float(resid @ resid)
+    return float(resid @ resid + alpha*(w @ w))
 
 
-def _irls_binary_core(Xd, y, alpha, max_iter=25):
-    """IRLS logistic regression returning neg log-lik + L2 penalty."""
-    n, d = Xd.shape
-    w = np.zeros(d)
-    for _ in range(max_iter):
+def _binary_fit(Xd, y, alpha):
+    """One penalized likelihood for both profiling and the reported fit."""
+    from scipy.special import expit
+
+    def objective(w):
         eta = Xd @ w
-        for i in range(n):
-            if eta[i] > 30.0: eta[i] = 30.0
-            elif eta[i] < -30.0: eta[i] = -30.0
-        mu = np.empty(n)
-        for i in range(n):
-            mu[i] = 1.0 / (1.0 + np.exp(-eta[i]))
-        s = mu * (1.0 - mu) + 1e-6
-        z = eta + (y - mu) / s
-        XtSX = np.zeros((d, d))
-        for i in range(n):
-            for j in range(d):
-                for k in range(d):
-                    XtSX[j, k] += s[i] * Xd[i, j] * Xd[i, k]
-        for j in range(d):
-            XtSX[j, j] += alpha
-        rhs = np.zeros(d)
-        for i in range(n):
-            for j in range(d):
-                rhs[j] += s[i] * z[i] * Xd[i, j]
-        w_new = np.linalg.solve(XtSX, rhs)
-        diff = 0.0
-        for j in range(d):
-            diff += (w_new[j] - w[j]) ** 2
-        w = w_new
-        if diff < 1e-6:
-            break
-    eta = Xd @ w
-    nll = 0.0
-    for i in range(n):
-        e = eta[i]
-        if e > 30.0: e = 30.0
-        elif e < -30.0: e = -30.0
-        p = 1.0 / (1.0 + np.exp(-e))
-        nll -= y[i] * np.log(p + 1e-6) + (1.0 - y[i]) * np.log(1.0 - p + 1e-6)
-    penalty = 0.0
-    for j in range(d):
-        penalty += w[j] * w[j]
-    return nll + 0.5 * alpha * penalty
+        loss = np.logaddexp(0., eta).sum() - y @ eta + .5*alpha*(w @ w)
+        gradient = Xd.T @ (expit(eta)-y) + alpha*w
+        return float(loss), gradient
 
-
-def _cox_nll(Xd_s, E_s, w, alpha, d):
-    """Compute penalized negative partial log-likelihood (log-cumsum-exp stable)."""
-    n = Xd_s.shape[0]
-    risk = Xd_s @ w
-    for i in range(n):
-        if risk[i] > 30.0: risk[i] = 30.0
-        elif risk[i] < -30.0: risk[i] = -30.0
-    max_risk = risk[0]
-    for i in range(1, n):
-        if risk[i] > max_risk:
-            max_risk = risk[i]
-    shifted = np.empty(n)
-    for i in range(n):
-        shifted[i] = risk[i] - max_risk
-    exp_shifted = np.exp(shifted)
-    cum_exp = np.cumsum(exp_shifted)
-    log_cum = np.empty(n)
-    for i in range(n):
-        log_cum[i] = np.log(cum_exp[i] + 1e-6) + max_risk
-    nll = 0.0
-    for i in range(n):
-        nll -= E_s[i] * (risk[i] - log_cum[i])
-    penalty = 0.0
-    for j in range(d):
-        penalty += w[j] * w[j]
-    return nll + 0.5 * alpha * penalty
-
-
-def _cox_loss_and_grad(Xd_s, E_s, w, alpha, d):
-    """Compute penalized negative partial log-likelihood and its gradient."""
-    n = Xd_s.shape[0]
-    risk = Xd_s @ w
-    for i in range(n):
-        if risk[i] > 30.0: risk[i] = 30.0
-        elif risk[i] < -30.0: risk[i] = -30.0
-
-    max_risk = risk[0]
-    for i in range(1, n):
-        if risk[i] > max_risk:
-            max_risk = risk[i]
-
-    shifted = np.empty(n)
-    for i in range(n):
-        shifted[i] = risk[i] - max_risk
-
-    exp_shifted = np.exp(shifted)
-    
-    cur_sum = 0.0
-    cum_exp = np.empty(n)
-    for i in range(n):
-        cur_sum += exp_shifted[i]
-        cum_exp[i] = cur_sum
-
-    log_cum = np.empty(n)
-    for i in range(n):
-        log_cum[i] = np.log(cum_exp[i] + 1e-6) + max_risk
-
-    nll = 0.0
-    for i in range(n):
-        nll -= E_s[i] * (risk[i] - log_cum[i])
-
-    penalty = 0.0
-    for j in range(d):
-        penalty += w[j] * w[j]
-    nll += 0.5 * alpha * penalty
-
-    A = np.empty(n)
-    for i in range(n):
-        A[i] = E_s[i] / (cum_exp[i] + 1e-6)
-
-    B = np.empty(n)
-    B[n - 1] = A[n - 1]
-    for i in range(n - 2, -1, -1):
-        B[i] = B[i + 1] + A[i]
-
-    grad_risk = np.empty(n)
-    for i in range(n):
-        grad_risk[i] = exp_shifted[i] * B[i] - E_s[i]
-
-    grad_w = Xd_s.T @ grad_risk
-    for j in range(d):
-        grad_w[j] += alpha * w[j]
-
-    return nll, grad_w
-
-
-def _cox_core(Xd_s, E_s, alpha, d):
-    """L-BFGS Cox solver with exact gradient."""
-    def fun(w):
-        val, grad = _cox_loss_and_grad(Xd_s, E_s, w, alpha, d)
-        return float(val), grad.astype(np.float64)
-    
-    w0 = np.zeros(d)
-    res = opt.minimize(fun, w0, method='L-BFGS-B', jac=True, options={'maxiter': 500, 'ftol': 1e-6})
-    return res.x, res.fun
-
-
-if _HAVE_NUMBA:
-    _irls_binary_core = njit(cache=False)(_irls_binary_core)
-    _cox_nll = njit(cache=False)(_cox_nll)
-    _cox_loss_and_grad = njit(cache=False)(_cox_loss_and_grad)
+    result = opt.minimize(objective, np.zeros(Xd.shape[1]), jac=True,
+                          method='L-BFGS-B', options={'maxiter': 500, 'ftol': 1e-12, 'gtol': 1e-7})
+    if not np.isfinite(result.fun) or not np.isfinite(result.x).all():
+        raise FloatingPointError('Nonfinite spline logistic fit')
+    return result.x, float(result.fun)
 
 
 def _fast_binary_loss(Xd, y, alpha):
-    return float(_irls_binary_core(Xd, y, alpha))
+    return _binary_fit(Xd, y, alpha)[1]
 
 
-def _fast_cox_loss(Xd, T, E, alpha, sorted_data=False):
-    if not sorted_data:
-        order = np.argsort(-T)
-        Xd, E = Xd[order], E[order]
-    _, val = _cox_core(Xd, E, alpha, Xd.shape[1])
-    return float(val)
+def _cox_loss_and_grad(Xd_s, E_s, w, alpha, d=None, group_ends=None):
+    """Breslow partial likelihood with stable complete tied risk sets.
+
+    Xd_s and E_s are sorted by decreasing duration. group_ends gives the last
+    row of each tied-duration group. Omitting it represents distinct times.
+    """
+    risk = Xd_s @ w
+    n = len(risk)
+    if group_ends is None:
+        group_ends = np.arange(n)
+    starts = np.r_[0, group_ends[:-1]+1]
+    counts = group_ends-starts+1
+    events = np.add.reduceat(E_s, starts)
+    log_risk = np.logaddexp.accumulate(risk)[group_ends]
+    denominator = np.repeat(log_risk, counts)
+    loss = np.sum(E_s*(denominator-risk)) + .5*alpha*(w @ w)
+    log_event = np.full(len(events), -np.inf)
+    active = events > 0
+    log_event[active] = np.log(events[active])-log_risk[active]
+    tail = np.logaddexp.accumulate(log_event[::-1])[::-1]
+    derivative = np.exp(risk+np.repeat(tail, counts))-E_s
+    return float(loss), Xd_s.T @ derivative + alpha*w
+
+
+def _cox_nll(Xd_s, E_s, w, alpha, d=None, group_ends=None):
+    return _cox_loss_and_grad(Xd_s, E_s, w, alpha, d, group_ends)[0]
+
+
+def _cox_core(Xd_s, E_s, alpha, d, group_ends=None):
+    def objective(w):
+        return _cox_loss_and_grad(Xd_s, E_s, w, alpha, d, group_ends)
+    result = opt.minimize(objective, np.zeros(d), method='L-BFGS-B', jac=True,
+                          options={'maxiter': 500, 'ftol': 1e-10, 'gtol': 1e-7})
+    if not np.isfinite(result.fun) or not np.isfinite(result.x).all():
+        raise FloatingPointError('Nonfinite spline Cox fit')
+    return result.x, float(result.fun)
 
 
 def _fast_cox_fit(Xd, T, E, alpha, sorted_data=False):
+    T = np.asarray(T)
     if not sorted_data:
-        order = np.argsort(-T)
-        Xd, E = Xd[order], E[order]
-    w, val = _cox_core(Xd, E, alpha, Xd.shape[1])
-    return w, float(val)
+        order = np.argsort(-T, kind='stable')
+        Xd, T, E = Xd[order], T[order], E[order]
+    ends = np.r_[np.flatnonzero(T[:-1] != T[1:]), len(T)-1]
+    return _cox_core(Xd, E, alpha, Xd.shape[1], ends)
+
+
+def _fast_cox_loss(Xd, T, E, alpha, sorted_data=False):
+    return _fast_cox_fit(Xd, T, E, alpha, sorted_data)[1]
 
 
 class SplinePLSI(_SummaryMixin):
@@ -217,6 +120,8 @@ class SplinePLSI(_SummaryMixin):
     @staticmethod
     def _make_knot_vector(eta, num_knots, degree):
         eta_sorted = np.sort(eta.astype(np.float64))
+        if eta_sorted[-1] <= eta_sorted[0]:
+            raise ValueError('The exposure index must vary to fit a spline')
         
         # Following Wang et al. (2020), knots are placed at equally spaced sample quantiles
         # of the estimated single index to ensure even data distribution across splines.
@@ -287,8 +192,9 @@ class SplinePLSI(_SummaryMixin):
         B = SplinePLSI._bspline_basis_matrix(eta, t, degree)
         return Z @ gamma + B @ spline_coeffs
 
-    def _initialize_params(self, X):
-        beta_init = np.random.randn(X.shape[1])
+    def _initialize_params(self, X, random_state=None):
+        rng = np.random if random_state is None else np.random.RandomState(random_state)
+        beta_init = rng.standard_normal(X.shape[1])
         if beta_init[0] < 0: beta_init = -beta_init
         nrm = np.linalg.norm(beta_init) or 1.0
         return beta_init / nrm
@@ -323,10 +229,10 @@ class SplinePLSI(_SummaryMixin):
                 elif family == 'cox':
                     cox_pen = alpha
                     # Xd is already sorted because X, Z, y are sorted in fit()
-                    val = _fast_cox_loss(Xd, None, y[:, 1], cox_pen, sorted_data=True)
+                    val = _fast_cox_loss(Xd, y[:, 0], y[:, 1], cox_pen, sorted_data=True)
                 else:
                     raise ValueError("Unsupported family")
-            except Exception:
+            except (np.linalg.LinAlgError, FloatingPointError, ValueError):
                 return _BIG
             return val if np.isfinite(val) else _BIG
         return objective
@@ -343,90 +249,62 @@ class SplinePLSI(_SummaryMixin):
         nrm = np.linalg.norm(beta) or 1.0
         return beta / nrm
 
-    def fit(self, X, Z, y, beta_init=None):
-        """
-        Fit the SplinePLSI model.
-        
-        Args:
-            X: Exposure matrix (n_samples, p)
-            Z: Covariate matrix (n_samples, q)
-            y: Outcome vector (n_samples, ) or (n_samples, 2) for Cox
-            beta_init: Optional warm-start for beta (e.g. from a previous fit)
-        """
-        X = np.asarray(X, dtype=np.float64)
-        Z = np.asarray(Z, dtype=np.float64)
+    def _fit_linear_part(self, X, Z, y, beta):
+        B, knots = self._construct_spline_basis(X @ beta)
+        design = np.column_stack([Z, B])
+        if self.family == 'continuous':
+            coefficient = np.linalg.solve(design.T @ design + self.alpha*np.eye(design.shape[1]),
+                                          design.T @ y)
+            residual = y-design @ coefficient
+            loss = float(residual @ residual + self.alpha*(coefficient @ coefficient))
+        elif self.family == 'binary':
+            coefficient, loss = _binary_fit(design, y, self.alpha)
+        else:
+            coefficient, loss = _fast_cox_fit(design, y[:, 0], y[:, 1],
+                                              self.alpha, sorted_data=True)
+        return coefficient[:Z.shape[1]], coefficient[Z.shape[1]:], knots, loss
 
+    def fit(self, X, Z, y, beta_init=None, random_state=None):
+        """Fit a coherent profiled index, spline, and linear component.
+
+        random_state provides local reproducible initialization. None retains
+        compatibility with callers that seed NumPy's global generator.
+        """
+        X, Z, y = validate_data(X, Z, y, self.family)
+        if self.max_iter < 1 or self.alpha < 0 or self.num_knots < 2 or self.spline_degree < 0:
+            raise ValueError('Invalid iteration count, penalty, or spline dimensions')
+        self._clear_inference()
         if self.family == 'cox':
-            # Pre-sort by duration descending to speed up Cox objective and fit
-            order = np.argsort(-y[:, 0])
+            order = np.argsort(-y[:, 0], kind='stable')
             X, Z, y = X[order], Z[order], y[order]
-        
-        self.beta = beta_init.copy() if beta_init is not None else self._initialize_params(X)
-        prev_loss = np.inf
-
-        n_increases = 0
-        for _ in range(self.max_iter):
-            eta = X @ self.beta
-            if not np.all(np.isfinite(eta)):
+        beta = (np.asarray(beta_init, dtype=float).copy() if beta_init is not None
+                else self._initialize_params(X, random_state))
+        if beta.shape != (X.shape[1],) or not np.isfinite(beta).all() or np.linalg.norm(beta) == 0:
+            raise ValueError('beta_init must be a finite nonzero exposure direction')
+        beta /= np.linalg.norm(beta)
+        if beta[0] < 0:
+            beta *= -1
+        gamma, spline, knots, loss = self._fit_linear_part(X, Z, y, beta)
+        self.converged_ = False
+        self.n_iter_ = 0
+        for iteration in range(self.max_iter):
+            candidate = self._optimize_beta(X, Z, y, beta)
+            new_gamma, new_spline, new_knots, new_loss = self._fit_linear_part(X, Z, y, candidate)
+            self.n_iter_ = iteration+1
+            if not np.isfinite(new_loss):
+                raise FloatingPointError('Nonfinite spline profile objective')
+            if new_loss > loss:
+                self.converged_ = abs(new_loss-loss) < self.tol
                 break
-            B, t = self._construct_spline_basis(eta)
-            Xd = np.hstack((Z, B))
-
-            if self.family == 'continuous':
-                model = Ridge(alpha=self.alpha, fit_intercept=False).fit(Xd, y)
-                resid = y - model.predict(Xd)
-                loss = float(np.sum(resid ** 2))
-                coef = np.ravel(model.coef_)
-                gamma_new = coef[:Z.shape[1]]
-                spline_new = coef[Z.shape[1]:]
-
-            elif self.family == 'binary':
-                C_val = min(1.0 / (self.alpha + 1e-12), 100.0)
-                model = LogisticRegression(penalty='l2', C=C_val, fit_intercept=False,
-                                           solver='lbfgs', max_iter=500).fit(Xd, y)
-                p = model.predict_proba(Xd)[:, 1]
-                eps = 1e-6
-                loss = float(-np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps)))
-                coef = model.coef_[0]
-                gamma_new = coef[:Z.shape[1]]
-                spline_new = coef[Z.shape[1]:]
-
-            elif self.family == 'cox':
-                # Xd, y are already sorted
-                cox_pen = self.alpha
-                w, loss = _fast_cox_fit(Xd, None, y[:, 1], cox_pen, sorted_data=True)
-                gamma_new = w[:Z.shape[1]]
-                spline_new = w[Z.shape[1]:]
-                
-            else:
-                raise ValueError("Unsupported family")
-
-            if not np.isfinite(loss):
+            improvement = loss-new_loss
+            beta, gamma, spline, knots, loss = candidate, new_gamma, new_spline, new_knots, new_loss
+            if improvement < self.tol:
+                self.converged_ = True
                 break
-
-            self.gamma = gamma_new
-            self.spline_coeffs = spline_new
-            self.knot_vector = t
-            
-            # Check convergence
-            if abs(prev_loss - loss) < self.tol:
-                break
-
-            if loss > prev_loss:
-                n_increases += 1
-                if n_increases >= 3:
-                    break
-            else:
-                n_increases = 0
-
-            prev_loss = loss
-            
-            # Update beta
-            prev_beta = self.beta.copy()
-            self.beta = self._optimize_beta(X, Z, y, self.beta)
-            if not np.all(np.isfinite(self.beta)):
-                self.beta = prev_beta
-                break
+        # Every reported component belongs to the same final index.
+        self.beta, self.gamma = beta, gamma
+        self.spline_coeffs, self.knot_vector, self.loss_ = spline, knots, loss
+        return self
 
     def _ensure_fitted(self):
         if self.beta is None or self.gamma is None or self.spline_coeffs is None:
@@ -453,7 +331,7 @@ class SplinePLSI(_SummaryMixin):
     def g_function(self, x):
         """Estimate g(x) for given scalar inputs x."""
         self._ensure_fitted()
-        x = np.asarray(x, dtype=np.float64)
+        x = np.asarray(x, dtype=np.float64).reshape(-1)
         t = self.knot_vector
         if t is None:
             t = self._make_knot_vector(x, self.num_knots, self.spline_degree)
@@ -462,17 +340,18 @@ class SplinePLSI(_SummaryMixin):
 
     def _refit_clone(self, Xb, Zb, yb, seed, beta_init=None):
         m = SplinePLSI(self.family, self.num_knots, self.spline_degree, self.alpha, self.max_iter, self.tol)
-        np.random.seed(seed)
-        m.fit(Xb, Zb, yb, beta_init=beta_init)
+        m.fit(Xb, Zb, yb, beta_init=beta_init, random_state=seed)
         return m.beta.copy(), m.gamma.copy(), m.spline_coeffs.copy(), m.knot_vector.copy()
 
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95, g_grid=None, n_jobs=-1):
         """
         Perform bootstrap inference to estimate SE and CI for beta, gamma, and g(x).
         """
-        X = np.asarray(X); Z = np.asarray(Z); y = np.asarray(y)
+        validate_bootstrap(n_samples, ci, random_state)
+        X, Z, y = validate_data(X, Z, y, self.family)
         if self.beta is None:
-            self.fit(X, Z, y)
+            self.fit(X, Z, y, random_state=random_state)
+        self._clear_inference()
         N = len(X)
 
         p, q, s = self.beta.size, self.gamma.size, self.spline_coeffs.size
@@ -483,37 +362,29 @@ class SplinePLSI(_SummaryMixin):
         do_g = g_grid is not None
         if do_g:
             g_grid = np.asarray(g_grid, dtype=float).reshape(-1)
+            if not g_grid.size or not np.isfinite(g_grid).all():
+                raise ValueError('g_grid must be nonempty and finite')
             g_samples = np.empty((n_samples, g_grid.size))
 
         warm_beta = None
 
-        if n_jobs == 1:
-            rng = np.random.default_rng(random_state)
-            for b in range(n_samples):
-                idx = draw_bootstrap_indices(N, rng)
-                Xb, Zb, yb = X[idx], Z[idx], y[idx]
-                b_beta, b_gamma, b_spline, b_knots = self._refit_clone(
-                    Xb, Zb, yb, random_state + 1337 + b, beta_init=warm_beta)
-                beta_samples[b] = b_beta; gamma_samples[b] = b_gamma; spline_samples[b] = b_spline
+        def refit_wrapper(Xb, Zb, yb, seed):
+            b_beta, b_gamma, b_spline, b_knots = self._refit_clone(
+                Xb, Zb, yb, seed, beta_init=warm_beta)
+            g_values = None
+            if do_g:
+                basis = self._bspline_basis_matrix(g_grid, b_knots, self.spline_degree)
+                g_values = basis @ b_spline
+            return b_beta, b_gamma, b_spline, g_values
 
-                if do_g:
-                    B = self._bspline_basis_matrix(g_grid, b_knots, self.spline_degree)
-                    g_samples[b] = B @ b_spline
-        else:
-            def refit_wrapper(Xb, Zb, yb, seed):
-                b_beta, b_gamma, b_spline, b_knots = self._refit_clone(
-                    Xb, Zb, yb, seed, beta_init=warm_beta)
-                if do_g:
-                    B = SplinePLSI._bspline_basis_matrix(g_grid, b_knots, self.spline_degree)
-                    g_vals = B @ b_spline
-                    return b_beta, b_gamma, b_spline, g_vals
-                return b_beta, b_gamma, b_spline, None
-
-            results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, n_jobs)
-            for b, result in enumerate(results):
-                beta_samples[b], gamma_samples[b], spline_samples[b] = result[0], result[1], result[2]
-                if do_g:
-                    g_samples[b] = result[3]
+        results = run_parallel_bootstrap(refit_wrapper, X, Z, y, n_samples, random_state, n_jobs)
+        for b, result in enumerate(results):
+            beta_samples[b], gamma_samples[b], spline_samples[b] = result[:3]
+            if do_g:
+                g_samples[b] = result[3]
+        arrays = [beta_samples, gamma_samples, spline_samples]+([g_samples] if do_g else [])
+        if not all(np.isfinite(a).all() for a in arrays):
+            raise FloatingPointError('Nonfinite spline bootstrap estimates')
 
         # point estimates
         beta_hat, gamma_hat, spline_hat = self.beta, self.gamma, self.spline_coeffs
@@ -530,7 +401,8 @@ class SplinePLSI(_SummaryMixin):
             "beta_hat": beta_hat, "beta_se": self.beta_se, "beta_lb": self.beta_lb, "beta_ub": self.beta_ub,
             "gamma_hat": gamma_hat, "gamma_se": self.gamma_se, "gamma_lb": self.gamma_lb, "gamma_ub": self.gamma_ub,
             "spline_hat": spline_hat, "spline_se": self.spline_se, "spline_lb": self.spline_lb, "spline_ub": self.spline_ub,
-            "beta_samples": beta_samples, "gamma_samples": gamma_samples, "spline_samples": spline_samples
+            "beta_samples": beta_samples, "gamma_samples": gamma_samples, "spline_samples": spline_samples,
+            "quantile_method": "linear", "ci": ci, "n_bootstrap": n_samples
         }
 
         if do_g:
@@ -539,7 +411,7 @@ class SplinePLSI(_SummaryMixin):
             self.g_grid, self.g_grid_mean, self.g_grid_se = g_grid, g_mean, g_se
             self.g_grid_lb, self.g_grid_ub = g_lb, g_ub
             self._g_samples = g_samples
-            out.update({"g_grid": g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub})
+            out.update({"g_grid": g_grid, "g_mean": g_mean, "g_se": g_se, "g_lb": g_lb, "g_ub": g_ub, "g_samples": g_samples})
         return out
 
     def summary(self, include_beta=True, include_gamma=True, include_spline=False):

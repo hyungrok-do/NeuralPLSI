@@ -2,4 +2,10 @@ output/*
 logs/*
 __pycache__/
 *.py[cod]
-*$py.classoutputs/legacy/
+*$py.class
+outputs/legacy/
+reproduce/inference_audit/
+reproduce/neuralplsi_*review.zip
+reproduce/neuralplsi_*audit.zip
+reproduce/neuralplsi_gamma_followup.zip
+*.so

@@ -1,67 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
 #SBATCH --time=12:00:00
 #SBATCH --partition=cpu_short
 #SBATCH --mem=32GB
-#SBATCH --job-name=NPLSI
-#SBATCH --output=output/simulation/simulation_%03a.log
-#SBATCH -a 0-8
+#SBATCH --job-name=NPLSI_1000
+#SBATCH --output=logs/simulation_1000_%A_%a.log
+#SBATCH --array=0-8
 #SBATCH --exclude=cn-00[08-10]
 
-source /etc/profile.d/modules.sh
-module load singularity/3.9.8 2>/dev/null || module load singularity/3.9.8_rhel9 2>/dev/null || module load singularity/3.11.5
-
-# Layout: 18 jobs total
-#   NeuralPLSI: 1n × 3g × 3outcome = 9 jobs  (IDs 0-8)
-#   PLSI:       1n × 3g × 3outcome = 9 jobs  (IDs 9-17)
-
-n_values=(1000)
-g_values=(sigmoid sfun linear)
-outcomes=(continuous binary cox)
-
-ID=$SLURM_ARRAY_TASK_ID
-
-if [ $ID -lt 9 ]; then
-    # --- NeuralPLSI ---
-    model="NeuralPLSI"
-    outcome_idx=$(( ID % 3 ))
-    g_idx=$(( (ID / 3) % 3 ))
-
-    n=${n_values[0]}
-    g_fn=${g_values[$g_idx]}
-    outcome=${outcomes[$outcome_idx]}
-
-    echo "Running NeuralPLSI: n=$n, g_fn=$g_fn, outcome=$outcome"
-
-    SCRATCH=/gpfs/scratch/doh03
-    cd $SCRATCH/NeuralPLSI
-
-    singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
-        $SCRATCH/containers/nvidia-cuda12.9.sif \
-        /ext3/miniconda3/bin/python reproduce/main_simulation.py \
-            --n_instances $n --g_fn $g_fn --outcome $outcome --models NeuralPLSI \
-            --exposure_dist normal --n_bootstrap 100
-else
-    # --- PLSI ---
-    model="PLSI"
-    local_id=$(( ID - 9 ))
-    outcome_idx=$(( local_id % 3 ))
-    g_idx=$(( (local_id / 3) % 3 ))
-
-    n=${n_values[0]}
-    g_fn=${g_values[$g_idx]}
-    outcome=${outcomes[$outcome_idx]}
-
-    echo "Running PLSI: n=$n, g_fn=$g_fn, outcome=$outcome"
-
-    SCRATCH=/gpfs/scratch/doh03
-    cd $SCRATCH/NeuralPLSI
-
-    singularity exec --bind $SCRATCH --overlay $SCRATCH/containers/survmix.ext3:ro \
-        $SCRATCH/containers/nvidia-cuda12.9.sif \
-        /ext3/miniconda3/bin/python reproduce/main_simulation.py \
-            --n_instances $n --g_fn $g_fn --outcome $outcome --models PLSI \
-            --exposure_dist normal --n_bootstrap 100
-fi
+# IDs 0-8: NeuralPLSI. Submit --array=0-17 to include SplinePLSI.
+set -euo pipefail
+cd "${NPLSI_PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the repository root}}"
+bash reproduce/run_simulation_hpc.sh 1000
