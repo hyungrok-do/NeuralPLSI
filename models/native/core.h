@@ -63,6 +63,30 @@ int nplsi_adam_step(const int32_t*, const float*, float*, const float*, int);
 int nplsi_adam_updates(const int32_t*, const float*, float*, const float*, int, int);
 int nplsi_outcome(const float* risks, const float* y, int n, int family,
                   double* loss, float* gradient);
+/* SplinePLSI (spline.cpp): g(x'beta) + z'gamma with a B-spline g, double precision.
+   Config: p, q, family, num_knots, degree, max_iter. Hyper: ridge alpha, tol.
+   Knots sit at num_knots equally spaced order statistics of x'beta, clamped,
+   so there are num_knots+degree-1 spline coefficients and num_knots+2*degree
+   knots. beta is profiled over the unit sphere from a seeded random direction
+   (or beta_init), with beta[0] >= 0. For Cox, g is shifted to g(0)=0.
+   diagnostics: profile loss, BFGS iterations, converged (0/1).
+   Errors from these functions are reported by splsi_error. */
+const char* splsi_error(void);
+int splsi_fit(const int32_t* config, const double* hyper, const double* x, const double* z,
+              const double* y, int n, uint64_t seed, const double* beta_init, double* beta,
+              double* gamma, double* coefficients, double* knots, double* diagnostics);
+/* The linear part and profile loss at a fixed unit beta. */
+int splsi_profile(const int32_t* config, const double* hyper, const double* x, const double* z,
+                  const double* y, int n, const double* beta, double* gamma,
+                  double* coefficients, double* knots, double* loss);
+/* n x (size-degree-1) B-spline basis at x, clipped to the boundary knots. */
+int splsi_basis(const double* knots, int size, int degree, const double* x, int n, double* basis);
+/* Threaded pairs bootstrap on the same resamples as nplsi_bootstrap. draws: B x D,
+   D=p+q+spline coefficients+grid_size, columns beta, gamma, spline, g(grid). */
+int splsi_bootstrap(const int32_t* config, const double* hyper, const double* x, const double* z,
+                    const double* y, int n, int B, uint64_t seed, int n_jobs, const double* grid,
+                    int grid_size, double ci, int quantile_method, double* draws,
+                    double* summary, int32_t* workers_used);
 /* Low-level trainer accepting an explicit order for numerical regression tests.
    Normally use nplsi_fit, which handles splitting, initialization and shuffling. */
 int nplsi_train(const int32_t*, const float*, float*, const float*, const float*,

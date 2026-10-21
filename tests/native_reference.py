@@ -35,3 +35,27 @@ def loss(config, weights, X, Z, y, sign=1., anchor=True):
         result=sum(logsumexp(raw[y[:,0]>=y[i,0]])-raw[i]
                    for i in range(len(raw)) if events[i])/events.sum()
     return result+(g0*g0 if anchor else 0.)
+
+
+def cox_loss_and_grad(Xd_s, E_s, w, alpha, group_ends=None):
+    """Breslow partial likelihood + alpha*|w|^2/2 with complete tied risk sets.
+
+    Xd_s and E_s are sorted by decreasing duration. group_ends gives the last
+    row of each tied-duration group. Omitting it represents distinct times.
+    """
+    risk = Xd_s @ w
+    n = len(risk)
+    if group_ends is None:
+        group_ends = np.arange(n)
+    starts = np.r_[0, group_ends[:-1]+1]
+    counts = group_ends-starts+1
+    events = np.add.reduceat(E_s, starts)
+    log_risk = np.logaddexp.accumulate(risk)[group_ends]
+    denominator = np.repeat(log_risk, counts)
+    value = np.sum(E_s*(denominator-risk)) + .5*alpha*(w @ w)
+    log_event = np.full(len(events), -np.inf)
+    active = events > 0
+    log_event[active] = np.log(events[active])-log_risk[active]
+    tail = np.logaddexp.accumulate(log_event[::-1])[::-1]
+    derivative = np.exp(risk+np.repeat(tail, counts))-E_s
+    return float(value), Xd_s.T @ derivative + alpha*w

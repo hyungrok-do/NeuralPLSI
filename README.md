@@ -91,8 +91,30 @@ prediction, model serialization and the entire bootstrap workflow all run in
 C++. There is **no Torch or
 LibTorch dependency**, including in the Python examples and tests. The Python API
 passes NumPy arrays to a single native bootstrap call and formats the returned
-results. The separate SplinePLSI comparator continues to use NumPy/SciPy and its
-existing Python bootstrap implementation.
+results.
+
+The SplinePLSI comparator is also implemented in C++ (`models/native/spline.cpp`),
+in double precision. For each unit index beta, five knots sit at equally spaced
+order statistics of `x'beta` (Wang et al., 2020), clamped cubic B-splines give
+seven basis functions, and gamma and the spline coefficients are the exact
+ridge-penalized fit on `[Z, B(x'beta)]` (alpha = 1e-6): least squares by
+Cholesky, logistic regression and the Breslow Cox partial likelihood by Newton.
+beta is profiled over the unit sphere by BFGS with central finite differences
+(step 1e-3, which averages over the small kinks that order-statistic knots
+create), followed by a compass search on the profile loss, from a seeded random
+direction; `beta[0] >= 0` identifies its sign. A Cox likelihood cannot identify
+the level of g, so the spline is shifted to `g(0) = 0`, as in NeuralPLSI. Its
+bootstrap uses native threads and the same resampled rows as the NeuralPLSI
+bootstrap for the same seed, so the two estimators are compared on identical
+bootstrap samples.
+
+At the same beta the C++ profile reproduces the former NumPy/SciPy implementation
+(continuous: to machine precision; binary and Cox: equal or lower loss, because
+Newton solves the inner fit exactly). On 20 simulated n = 2,000 datasets per
+outcome, the full fits reached the same beta accuracy as the SciPy version for
+continuous and binary outcomes, and fitted 30-100 times faster for binary and Cox
+outcomes. The SciPy version's SLSQP search stopped early on Cox outcomes (mean
+max |beta error| 0.31 against 0.033), which also inflated its bootstrap SEs.
 
 ```python
 from models import NeuralPLSI
@@ -233,7 +255,8 @@ standard library:
 
 ```bash
 g++ -O3 -pthread -ffp-contract=off -std=c++17 -I models/native \
-  models/native/core.cpp examples/native_neuralplsi.cpp -o /tmp/neuralplsi_demo
+  models/native/core.cpp models/native/spline.cpp examples/native_neuralplsi.cpp \
+  -o /tmp/neuralplsi_demo
 /tmp/neuralplsi_demo /tmp/example.nplsi
 ```
 
@@ -362,7 +385,7 @@ export NPLSI_PYTHON=/ext3/miniconda3/bin/python
 
 The C++ compiler must be available **inside** that container. Worker counts
 respect the SLURM CPU allocation. `BOOTSTRAP_JOBS` controls native threads for
-NeuralPLSI and process workers for the spline comparator. BLAS/OpenMP threads are
+both estimators. BLAS/OpenMP threads are
 limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
@@ -414,9 +437,10 @@ replicates, not a bootstrap confidence band.
   checkpoint without patience-based early termination. Gamma is then fitted
   exactly by Newton iterations with the index and link frozen. Bootstrap refits
   use the same training policy.
-- Spline coefficients and knots now correspond to the returned index. Binary
-  profiling and final fitting use the same penalized objective. Serial and
-  parallel bootstrap draws are reproducible.
+- Spline coefficients and knots correspond to the returned index: the final
+  linear part is exactly the profile fit at that index. Profiling and final
+  fitting use the same penalized objective. Serial and threaded bootstrap draws
+  are identical.
 - `initial=True` now performs linear-model initialization using the training
   partition. It was previously ignored. It is still off by default.
 - Simulation data retain the historical seeded draws without changing the
@@ -427,7 +451,7 @@ replicates, not a bootstrap confidence band.
   intervals include their joint bootstrap uncertainty. Plots preserve actual
   interval endpoints even when the point estimate lies outside the interval.
 
-The default percentile interpolation remains `linear` (NumPy-compatible, now calculated in C++ for NeuralPLSI).
+The default percentile interpolation remains `linear` (NumPy-compatible, now calculated in C++ for both estimators).
 `--nn_bootstrap_quantile weibull` is available for a separate sensitivity run;
 it changes endpoints, not point-estimator bias, and is not a coverage repair.
 No graph penalty, score recalibration or experimental spline correction is

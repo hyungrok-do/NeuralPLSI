@@ -6,9 +6,9 @@ import numpy as np
 from scipy.special import logsumexp
 
 from models import NeuralPLSI, SplinePLSI
-from models.native import outcome_loss_gradient, training_validation_indices
-from models.PLSI import _cox_loss_and_grad, _binary_fit
+from models.native import bootstrap_indices, outcome_loss_gradient, training_validation_indices
 from simulation import simulate_data
+from native_reference import cox_loss_and_grad
 
 
 class ModelRegressionTest(unittest.TestCase):
@@ -17,13 +17,13 @@ class ModelRegressionTest(unittest.TestCase):
         time, event = np.array([5., 4., 3., 3., 1.]), np.array([1., 1., 0., 1., 1.])
         expected = sum(logsumexp(risk[time >= t])-r for t, e, r in zip(time, event, risk) if e)
         ends = np.array([0, 1, 3, 4])
-        value, grad = _cox_loss_and_grad(np.eye(5), event, risk, 0., group_ends=ends)
+        value, grad = cox_loss_and_grad(np.eye(5), event, risk, 0., group_ends=ends)
         np.testing.assert_allclose(value, expected)
         eps = 1e-4
         numeric = []
         for j in range(5):
             shift = np.eye(5)[j]*eps
-            f = lambda w: _cox_loss_and_grad(np.eye(5), event, w, 0., group_ends=ends)[0]
+            f = lambda w: cox_loss_and_grad(np.eye(5), event, w, 0., group_ends=ends)[0]
             numeric.append((f(risk+shift)-f(risk-shift))/(2*eps))
         np.testing.assert_allclose(grad, numeric, atol=2e-8)
         loss, gradient = outcome_loss_gradient(risk, np.column_stack([time, event]), 'cox')
@@ -31,27 +31,106 @@ class ModelRegressionTest(unittest.TestCase):
         np.testing.assert_allclose(gradient, grad/event.sum(), atol=1e-7)
 
     def test_final_spline_components_use_returned_index(self):
-        x, z, y, *_ = simulate_data(60, g_type='linear', seed=10)
-        model = SplinePLSI(max_iter=1)
-        start = np.array([0., 1., 0., 0., 0., 0., 0., 0.])
-        proposed = np.array([1., .7, -.5, .5, .3, -.1, 0., 0.])
-        proposed /= np.linalg.norm(proposed)
-        with patch.object(model, '_optimize_beta', return_value=proposed):
-            model.fit(x, z, y, beta_init=start)
-        np.testing.assert_allclose(model.beta, proposed)
-        gamma, spline, knots, loss = model._fit_linear_part(x, z, y, model.beta)
-        np.testing.assert_allclose(model.gamma, gamma)
-        np.testing.assert_allclose(model.spline_coeffs, spline)
-        np.testing.assert_allclose(model.knot_vector, knots)
-        self.assertAlmostEqual(model.loss_, loss)
+        for family in ('continuous', 'binary', 'cox'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(200, outcome=family, g_type='sfun', seed=10)
+                # A start with beta[0] < 0 exercises the final sign identification.
+                start = -np.array([1., .7, -.5, .5, .3, -.1, 0., 0.])
+                model = SplinePLSI(family=family).fit(x, z, y, beta_init=start)
+                self.assertGreaterEqual(model.beta[0], 0.)
+                self.assertAlmostEqual(np.linalg.norm(model.beta), 1., places=12)
+                gamma, spline, knots, loss = model.profile(x, z, y, model.beta)
+                np.testing.assert_array_equal(model.gamma, gamma)
+                np.testing.assert_array_equal(model.spline_coeffs, spline)
+                np.testing.assert_array_equal(model.knot_vector, knots)
+                self.assertEqual(model.loss_, loss)
 
-    def test_binary_profile_and_final_fit_use_same_penalty(self):
-        x, z, y, *_ = simulate_data(70, outcome='binary', seed=3)
-        model = SplinePLSI(family='binary', max_iter=1, alpha=.003).fit(x, z, y, random_state=3)
-        self.assertAlmostEqual(model._objective_factory(x, z, y)(model.beta), model.loss_, places=8)
-        basis, _ = model._construct_spline_basis(x@model.beta)
-        coefficient, loss = _binary_fit(np.column_stack([z, basis]), y, model.alpha)
-        np.testing.assert_allclose(coefficient, np.r_[model.gamma, model.spline_coeffs])
+    def test_spline_knots_and_basis_match_independent_references(self):
+        from scipy.interpolate import BSpline
+        x, z, y, *_ = simulate_data(101, g_type='sfun', seed=6)
+        model = SplinePLSI().fit(x, z, y, random_state=1)
+        eta = np.sort(x @ model.beta)
+        knots = eta[np.linspace(0, len(eta)-1, 5).astype(np.int64)]
+        np.testing.assert_allclose(model.knot_vector, np.r_[[knots[0]]*3, knots, [knots[-1]]*3],
+                                   rtol=0, atol=1e-12)
+        t = model.knot_vector
+        points = np.r_[np.linspace(t[0]-1, t[-1]+1, 41), t]
+        clipped = np.clip(points, t[0], t[-1])
+        expected = BSpline.design_matrix(clipped, model.knot_vector, 3).toarray()
+        np.testing.assert_allclose(model.basis(points), expected, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(model.basis(points).sum(axis=1), 1., atol=1e-12)
+
+    def test_spline_profile_is_the_exact_penalized_fit(self):
+        from scipy.optimize import minimize
+        for family in ('continuous', 'binary', 'cox'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(300, outcome=family, g_type='sigmoid', seed=8)
+                model = SplinePLSI(family=family, alpha=.003)
+                beta = np.array([1., .7, -.5, .5, .3, -.1, 0., 0.]); beta /= np.linalg.norm(beta)
+                gamma, spline, knots, loss = model.profile(x, z, y, beta)
+                model.beta, model.gamma, model.spline_coeffs, model.knot_vector = beta, gamma, spline, knots
+                design = np.column_stack([z, model.basis(x @ beta)])
+                coefficient = np.r_[gamma, spline]
+                if family == 'continuous':
+                    expected = np.linalg.solve(design.T @ design + model.alpha*np.eye(design.shape[1]), design.T @ y)
+                    np.testing.assert_allclose(coefficient, expected, rtol=1e-9, atol=1e-11)
+                    residual = y - design @ expected
+                    self.assertAlmostEqual(loss, residual @ residual + model.alpha*expected @ expected, places=8)
+                elif family == 'binary':
+                    def objective(w):
+                        eta = design @ w
+                        return (np.logaddexp(0., eta).sum() - y @ eta + .5*model.alpha*w @ w,
+                                design.T @ (1/(1+np.exp(-eta)) - y) + model.alpha*w)
+                    expected = minimize(objective, np.zeros(design.shape[1]), jac=True, method='BFGS',
+                                        options={'gtol': 1e-10}).x
+                    np.testing.assert_allclose(coefficient, expected, rtol=1e-5, atol=1e-6)
+                    self.assertAlmostEqual(loss, objective(expected)[0], places=7)
+                else:
+                    # g is shifted to g(0)=0 after the penalized fit. The basis sums
+                    # to one, so a common shift of the spline coefficients leaves the
+                    # partial likelihood unchanged, and the ridge solution is the
+                    # shift with zero mean spline coefficients.
+                    self.assertAlmostEqual(float(model.g_function([0.])[0]), 0., places=12)
+                    order = np.argsort(-y[:, 0], kind='stable')
+                    times = y[order, 0]
+                    ends = np.r_[np.flatnonzero(times[:-1] != times[1:]), len(times)-1]
+                    ridge = np.r_[gamma, spline-spline.mean()]
+                    value, gradient = cox_loss_and_grad(design[order], y[order, 1], ridge, model.alpha, ends)
+                    self.assertAlmostEqual(loss, value, places=7)
+                    self.assertLess(np.max(np.abs(gradient)), 1e-6)
+
+    def test_spline_index_is_a_local_minimum_of_the_profile_loss(self):
+        rng = np.random.default_rng(0)
+        for family in ('continuous', 'binary', 'cox'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(400, outcome=family, g_type='sfun', seed=12)
+                model = SplinePLSI(family=family).fit(x, z, y, random_state=2)
+                self.assertTrue(model.converged_)
+                for _ in range(6):
+                    u = rng.normal(size=len(model.beta)); u -= (u @ model.beta)*model.beta
+                    u /= np.linalg.norm(u)
+                    for sign in (-1, 1):
+                        moved = model.beta + sign*.05*u; moved /= np.linalg.norm(moved)
+                        self.assertGreater(model.profile(x, z, y, moved)[3], model.loss_)
+
+    def test_spline_bootstrap_draws_match_explicit_refits(self):
+        grid = np.linspace(-2, 2, 7)
+        for family in ('continuous', 'binary', 'cox'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(150, outcome=family, seed=5)
+                if family == 'cox':
+                    y[:, 0] = np.ceil(y[:, 0]*2)  # tied times
+                model = SplinePLSI(family=family).fit(x, z, y, random_state=4)
+                result = model.inference_bootstrap(x, z, y, n_samples=4, random_state=9, n_jobs=3, g_grid=grid)
+                for r in range(4):
+                    rows = bootstrap_indices(len(x), 9, r)
+                    refit = SplinePLSI(family=family).fit(x[rows], z[rows], y[rows], random_state=9+1337+r)
+                    np.testing.assert_array_equal(result['beta_samples'][r], refit.beta)
+                    np.testing.assert_array_equal(result['gamma_samples'][r], refit.gamma)
+                    np.testing.assert_array_equal(result['spline_samples'][r], refit.spline_coeffs)
+                    np.testing.assert_allclose(result['g_samples'][r], refit.g_function(grid),
+                                               rtol=1e-12, atol=1e-12)
+                np.testing.assert_allclose(result['beta_se'], result['beta_samples'].std(axis=0, ddof=1))
 
     def test_serial_parallel_bootstrap_and_refit_clear_uncertainty(self):
         x, z, y, *_ = simulate_data(50, seed=1)

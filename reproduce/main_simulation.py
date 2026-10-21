@@ -100,16 +100,15 @@ def run_configuration(args, model):
     paths = ['reproduce/main_simulation.py', 'simulation/__init__.py',
              'models/base.py',
              'models/NeuralPLSI.py' if model == 'NeuralPLSI' else 'models/PLSI.py']
-    if model == 'NeuralPLSI':
-        paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
-                        if p.suffix in ('.py', '.cpp', '.h'))
+    paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
+                    if p.suffix in ('.py', '.cpp', '.h'))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(path.encode())
         with open(os.path.join(ROOT, path), 'rb') as source:
             digest.update(source.read())
     native_build = None
-    if model == 'NeuralPLSI' and args.nn_backend == 'cpp':
+    if model != 'NeuralPLSI' or args.nn_backend == 'cpp':
         from models.native import build_library
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
@@ -124,11 +123,10 @@ def run_configuration(args, model):
                 initial=args.initial if model == 'NeuralPLSI' else None,
                 training_policy=('full_budget_validation_checkpoint_exact_gamma_v1'
                                  if model == 'NeuralPLSI' else None),
-                backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
+                backend=args.nn_backend if model == 'NeuralPLSI' else 'cpp',
                 device=resolved_device, native_build=native_build,
-                normalization='l2', native_rng='splitmix64_v1' if model == 'NeuralPLSI' else None,
-                bootstrap_engine='cpp' if model == 'NeuralPLSI' else 'joblib',
-                bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL if model == 'NeuralPLSI' else 'numpy_pcg64',
+                normalization='l2', native_rng='splitmix64_v1',
+                bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL,
                 g_grid=[args.g_grid_min, args.g_grid_max, args.g_grid_n],
                 source_sha256=digest.hexdigest(), numpy=np.__version__,
                 sklearn=sklearn.__version__, scipy=scipy.__version__)
@@ -228,12 +226,13 @@ def run_replicate(args, mname, seed, configuration):
                     block+'_cov': ((lower <= target) & (target <= upper)).astype(int),
                     block+'_bootstrap_mean': bootstrap_mean,
                     block+'_bootstrap_bias': bootstrap_mean-estimate})
+    row['bootstrap_workers'] = boot['n_workers']
     if mname == 'NeuralPLSI':
         row['fit_diagnostics'] = model.fit_diagnostics
         row['device'] = str(model.device)
-        row['bootstrap_workers'] = boot['n_workers']
     else:
-        row['fit_diagnostics'] = dict(converged=bool(model.converged_), iterations=model.n_iter_)
+        row['fit_diagnostics'] = dict(converged=bool(model.converged_), iterations=model.n_iter_,
+                                      profile_loss=model.loss_)
     if args.outcome == 'cox':
         row['event_fraction'] = float(y_tr[:, 1].mean())
     if args.save_bootstrap_samples:

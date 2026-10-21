@@ -1,4 +1,4 @@
-"""NumPy/ctypes bindings to the standalone C++ NeuralPLSI implementation."""
+"""NumPy/ctypes bindings to the standalone C++ NeuralPLSI and SplinePLSI implementations."""
 import ctypes
 import functools
 import hashlib
@@ -21,14 +21,15 @@ BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 def build_library():
     """Build once per source/compiler configuration, safely across workers."""
     import fcntl
-    source = Path(__file__).with_name('core.cpp')
+    sources = [Path(__file__).with_name(name) for name in ('core.cpp', 'spline.cpp')]
     compiler = shlex.split(os.environ.get('CXX', 'g++'))
     flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-ffp-contract=off', '-pthread']
     try:
         version = subprocess.check_output(compiler+['--version'], stderr=subprocess.STDOUT)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError('NeuralPLSI needs a C++17 compiler. Install one or set CXX.') from exc
-    digest = hashlib.sha256(source.read_bytes()+source.with_suffix('.h').read_bytes()+version+repr((compiler, flags)).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
+    code = b''.join(path.read_bytes() for path in sources+[Path(__file__).with_name('core.h')])
+    digest = hashlib.sha256(code+version+repr((compiler, flags)).encode()+platform.machine().encode()+platform.system().encode()).hexdigest()[:20]
     cache = Path(os.environ.get('NEURALPLSI_CACHE_DIR', Path.home()/'.cache'/'neuralplsi'))
     cache.mkdir(parents=True, exist_ok=True)
     target = cache/f'core-{digest}.so'
@@ -39,7 +40,7 @@ def build_library():
             try:
                 with tempfile.NamedTemporaryFile(dir=cache, suffix='.so', delete=False) as stream:
                     temporary = stream.name
-                result = subprocess.run(compiler+flags+[str(source), '-o', temporary],
+                result = subprocess.run(compiler+flags+[str(path) for path in sources]+['-o', temporary],
                                         capture_output=True, text=True)
                 if result.returncode:
                     raise RuntimeError('Native compilation failed:\n'+result.stderr)
@@ -57,6 +58,7 @@ def library():
     ip = np.ctypeslib.ndpointer(dtype=np.int32, flags='C_CONTIGUOUS')
     dp = np.ctypeslib.ndpointer(dtype=np.float64, flags='C_CONTIGUOUS')
     pointer, integer, seed = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint64
+    optional_dp = ctypes.POINTER(ctypes.c_double)
     size, chars = ctypes.c_size_t, ctypes.c_char_p
     signatures = {
         'nplsi_error': ([], chars),
@@ -86,6 +88,12 @@ def library():
         'nplsi_adam_updates': ([ip, fp, fp, fp, integer, integer], integer),
         'nplsi_outcome': ([fp, fp, integer, integer, dp, fp], integer),
         'nplsi_train': ([ip, fp, fp, fp, fp, fp, integer, fp, fp, fp, integer, ip, dp], integer),
+        'splsi_error': ([], chars),
+        'splsi_fit': ([ip, dp, dp, dp, dp, integer, seed, optional_dp, dp, dp, dp, dp, dp], integer),
+        'splsi_profile': ([ip, dp, dp, dp, dp, integer, dp, dp, dp, dp, dp], integer),
+        'splsi_basis': ([dp, integer, integer, dp, integer, dp], integer),
+        'splsi_bootstrap': ([ip, dp, dp, dp, dp, integer, integer, seed, integer, dp, integer,
+                             ctypes.c_double, integer, dp, dp, ip], integer),
     }
     for name, (arguments, result) in signatures.items():
         function = getattr(lib, name)
@@ -96,6 +104,11 @@ def library():
 def checked(status):
     if status:
         raise RuntimeError(library().nplsi_error().decode())
+
+
+def spline_checked(status):
+    if status:
+        raise RuntimeError(library().splsi_error().decode())
 
 
 def seed_value(value):
