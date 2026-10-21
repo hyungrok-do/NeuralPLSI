@@ -1,0 +1,61 @@
+\begin{tabular}{lllllllrrrrr}
+\toprule
+ &  &  &  &  &  &  & MAB & Emp_SD & SE & Coverage & N_reps \\
+model & n & g_fn & outcome & x_dist & inference_type & block &  &  &  &  &  \\
+\midrule
+\multirow[t]{36}{*}{NeuralPLSI} & \multirow[t]{18}{*}{1000} & \multirow[t]{6}{*}{linear} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0855 & 0.2173 & 0.0748 & 0.7070 & 500 \\
+ &  &  &  &  &  & gamma & 0.0204 & 0.1025 & 0.0940 & 0.9633 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0154 & 0.0489 & 0.0231 & 0.7980 & 500 \\
+ &  &  &  &  &  & gamma & 0.0018 & 0.0394 & 0.0377 & 0.9753 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0130 & 0.0988 & 0.0264 & 0.7508 & 500 \\
+ &  &  &  &  &  & gamma & 0.0022 & 0.0643 & 0.0518 & 0.9613 & 500 \\
+\cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+ &  & \multirow[t]{6}{*}{sfun} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0144 & 0.0679 & 0.0240 & 0.7652 & 500 \\
+ &  &  &  &  &  & gamma & 0.0069 & 0.1166 & 0.1086 & 0.9540 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0029 & 0.0184 & 0.0141 & 0.9278 & 500 \\
+ &  &  &  &  &  & gamma & 0.0014 & 0.0388 & 0.0381 & 0.9733 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0041 & 0.0317 & 0.0160 & 0.9055 & 500 \\
+ &  &  &  &  &  & gamma & 0.0038 & 0.0572 & 0.0554 & 0.9760 & 500 \\
+\cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+ &  & \multirow[t]{6}{*}{sigmoid} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0195 & 0.0994 & 0.0305 & 0.7358 & 500 \\
+ &  &  &  &  &  & gamma & 0.0053 & 0.1023 & 0.0998 & 0.9547 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0060 & 0.0255 & 0.0172 & 0.8942 & 500 \\
+ &  &  &  &  &  & gamma & 0.0014 & 0.0388 & 0.0378 & 0.9760 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0064 & 0.0439 & 0.0189 & 0.8605 & 500 \\
+ &  &  &  &  &  & gamma & 0.0033 & 0.0573 & 0.0534 & 0.9633 & 500 \\
+\cline{2-12} \cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+ & \multirow[t]{18}{*}{2000} & \multirow[t]{6}{*}{linear} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0337 & 0.0781 & 0.0347 & 0.7525 & 500 \\
+ &  &  &  &  &  & gamma & 0.0036 & 0.0668 & 0.0676 & 0.9713 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0101 & 0.0304 & 0.0205 & 0.9153 & 500 \\
+ &  &  &  &  &  & gamma & 0.0010 & 0.0351 & 0.0349 & 0.9980 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0124 & 0.0376 & 0.0224 & 0.8535 & 500 \\
+ &  &  &  &  &  & gamma & 0.0037 & 0.0419 & 0.0436 & 0.9927 & 500 \\
+\cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+ &  & \multirow[t]{6}{*}{sfun} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0087 & 0.0342 & 0.0203 & 0.8510 & 500 \\
+ &  &  &  &  &  & gamma & 0.0054 & 0.0802 & 0.0787 & 0.9493 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0013 & 0.0126 & 0.0116 & 0.9685 & 500 \\
+ &  &  &  &  &  & gamma & 0.0007 & 0.0360 & 0.0352 & 0.9967 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0018 & 0.0162 & 0.0137 & 0.9517 & 500 \\
+ &  &  &  &  &  & gamma & 0.0039 & 0.0431 & 0.0459 & 0.9933 & 500 \\
+\cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+ &  & \multirow[t]{6}{*}{sigmoid} & \multirow[t]{2}{*}{binary} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0144 & 0.0448 & 0.0246 & 0.8267 & 500 \\
+ &  &  &  &  &  & gamma & 0.0028 & 0.0709 & 0.0723 & 0.9640 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{continuous} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0032 & 0.0177 & 0.0147 & 0.9575 & 500 \\
+ &  &  &  &  &  & gamma & 0.0014 & 0.0348 & 0.0351 & 0.9980 & 500 \\
+\cline{4-12} \cline{5-12} \cline{6-12}
+ &  &  & \multirow[t]{2}{*}{cox} & \multirow[t]{2}{*}{normal} & \multirow[t]{2}{*}{Bootstrap} & beta & 0.0033 & 0.0216 & 0.0166 & 0.9238 & 500 \\
+ &  &  &  &  &  & gamma & 0.0017 & 0.0420 & 0.0447 & 0.9947 & 500 \\
+\cline{1-12} \cline{2-12} \cline{3-12} \cline{4-12} \cline{5-12} \cline{6-12}
+\bottomrule
+\end{tabular}
