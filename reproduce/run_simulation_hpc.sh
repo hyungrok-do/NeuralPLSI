@@ -12,7 +12,7 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 project=${NPLSI_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}
 cd "$project"
 backend=${NN_BACKEND:-cpp}
-out=${OUT_DIR:-output/simulation_native_v4}
+out=${OUT_DIR:-output/simulation_native_v5}
 args=(reproduce/main_simulation.py --n_instances "$n"
       --g_fn "${g_values[$(( (id / 3) % 3 ))]}" --outcome "${outcomes[$(( id % 3 ))]}"
       --models "$model" --exposure_dist normal --n_bootstrap "${N_BOOTSTRAP:-100}"

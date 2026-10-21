@@ -1,6 +1,7 @@
 // Isolated native-process peak memory check. Arguments: n, B, workers, max_epoch.
-// B=0 measures fitting alone. Learning rate zero gives identical stopping times
-// (6 joint / 21 gamma epochs) when max_epoch >= 21, for comparable memory checks.
+// B=0 measures fitting alone. Learning rate zero holds weights fixed while both
+// full epoch budgets run. Older revisions stopped after 6 joint / 21 gamma
+// epochs, so their runtime is not comparable at the same max_epoch setting.
 #include "core.h"
 #include <chrono>
 #include <cmath>

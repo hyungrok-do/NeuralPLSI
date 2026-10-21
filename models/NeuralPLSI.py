@@ -16,6 +16,11 @@ class NeuralPLSI(_SummaryMixin):
     C++ owns initialization, the network, gradients, optimizer, data splitting,
     shuffling, prediction, serialization and the entire bootstrap workflow.
     Python handles array input and summary tables. CPU only, with float32 weights.
+
+    Each fit uses an internal 80/20 training/validation split. Joint training
+    runs max_epoch epochs and restores its best validation checkpoint. Gamma
+    fine-tuning then runs min(max_epoch, 50) epochs and restores its best
+    checkpoint, including its starting state. Neither phase stops early.
     """
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
@@ -143,6 +148,8 @@ class NeuralPLSI(_SummaryMixin):
         threads, capped by CPU affinity, cgroup quota, SLURM allocation and B.
         Replicate seeds are independent of worker scheduling. A failed draw
         raises an error and invalidates the whole bootstrap result.
+        Each refit uses the same full epoch budgets and validation checkpoint
+        selection as the original fit, including with warm starts.
 
         'linear' and 'weibull' choose percentile interpolation. They do not
         change the draws or correct estimator bias. The native bootstrap RNG

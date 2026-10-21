@@ -31,8 +31,37 @@ class TrainingPhasesTest(unittest.TestCase):
         loss=np.mean((model.predict(self.X[valid],self.Z[valid]).astype(float)-self.y[valid])**2)
         self.assertAlmostEqual(loss,model.fit_diagnostics['validation_loss'],places=6)
 
-    def test_constant_validation_stops_after_patience(self):
-        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=1000,learning_rate=0)
-        model.fit(self.X,self.Z,self.y,random_state=19)
-        self.assertEqual(model.fit_diagnostics['joint_epochs'],6)
-        self.assertEqual(model.fit_diagnostics['gamma_epochs'],21)
+    def test_constant_validation_runs_full_budgets(self):
+        for epochs in (0, 1, 40, 80):
+            with self.subTest(epochs=epochs):
+                model=NeuralPLSI(max_epoch=epochs,hidden_units=4,n_hidden_layers=1,
+                                batch_size=1000,learning_rate=0)
+                model.fit(self.X,self.Z,self.y,random_state=19)
+                self.assertEqual(model.fit_diagnostics['joint_epochs'],epochs)
+                self.assertEqual(model.fit_diagnostics['gamma_epochs'],min(epochs,50))
+
+    def test_worsening_validation_restores_checkpoint_after_full_training(self):
+        # Training and validation targets have opposite signs. Learning the
+        # training slope makes validation worse after its first checkpoint.
+        # Exercise the link slope and gamma separately; in the gamma case,
+        # fine-tuning must also retain its starting checkpoint.
+        target=np.tile(np.array([-1.,1.],dtype='float32'),4)
+        for component in ('link','gamma'):
+            with self.subTest(component=component):
+                x=(target[:,None] if component=='link' else np.zeros((8,1),dtype='float32'))
+                z=(np.empty((8,0),dtype='float32') if component=='link' else target[:,None])
+                fits=[]
+                for epochs in (1,40):
+                    net=NativeModel(1,z.shape[1],hidden_units=1,n_hidden_layers=1,
+                        max_epoch=epochs,batch_size=8,weight_decay=0,weight_decay_beta=0)
+                    weights=np.zeros_like(net.weights); weights[0]=1.
+                    orders=np.tile(np.arange(8,dtype='int32'),(2*epochs,1))
+                    diagnostics=np.empty(3)
+                    checked(library().nplsi_train(net.config,net.hyper,weights,
+                        x,z,target,8,x,z,-target,8,orders,diagnostics))
+                    net.set_weights(weights)
+                    self.assertEqual(diagnostics[0],epochs)
+                    self.assertEqual(diagnostics[1],epochs)
+                    fits.append(net)
+                np.testing.assert_array_equal(fits[0].weights,fits[1].weights)
+                self.assertGreater(np.dot(fits[1].predict(x,z),target),0.)

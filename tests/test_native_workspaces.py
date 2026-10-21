@@ -45,7 +45,7 @@ class NativeWorkspacesTest(unittest.TestCase):
             y = np.column_stack([rng.integers(1, 17, n), rng.binomial(1, .75, n)])
         return x, z, y.astype('float32')
 
-    def test_lazy_schedule_matches_explicit_orders_through_early_stopping(self):
+    def test_lazy_schedule_matches_explicit_orders_through_full_budgets(self):
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
                 x, z, y = self.data(family, 113)
@@ -65,18 +65,8 @@ class NativeWorkspacesTest(unittest.TestCase):
                 np.testing.assert_array_equal(actual.weights, expected.weights)
                 np.testing.assert_array_equal(actual.hyper, expected.hyper)
                 np.testing.assert_array_equal(list(actual.fit_diagnostics.values()), diagnostics)
-                self.assertLess(diagnostics[0], 200)
-
-    def test_large_epoch_limit_uses_only_executed_epochs(self):
-        # An upfront schedule would exceed the old 250-million-index limit.
-        # Zero learning rate gives exact, short stopping times for either cap.
-        x, z, y = self.data('continuous', 801)
-        models = [NativeModel(3, 2, hidden_units=2, max_epoch=cap, learning_rate=0.)
-                  .fit(x, z, y, random_state=19) for cap in (40, 1_000_000)]
-        np.testing.assert_array_equal(models[0].weights, models[1].weights)
-        self.assertEqual(models[0].fit_diagnostics, models[1].fit_diagnostics)
-        self.assertEqual(models[1].fit_diagnostics['joint_epochs'], 6)
-        self.assertEqual(models[1].fit_diagnostics['gamma_epochs'], 21)
+                self.assertEqual(diagnostics[0], 200)
+                self.assertEqual(diagnostics[1], 50)
 
     def test_loss_only_validation_matches_full_outcome_including_cox_ties(self):
         for family in ('continuous', 'binary', 'cox'):

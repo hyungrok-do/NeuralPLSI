@@ -114,7 +114,7 @@ def run_configuration(args, model):
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if model == 'NeuralPLSI' else 'cpu')
-    return dict(protocol_version=4, model=model, n=args.n_instances,
+    return dict(protocol_version=5, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
                 activation=args.activation if model == 'NeuralPLSI' else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
@@ -123,6 +123,8 @@ def run_configuration(args, model):
                 fit_random_state=args.fit_seed if model == 'NeuralPLSI' else 'replicate_seed',
                 initial=args.initial if model == 'NeuralPLSI' else None,
                 warmstart=args.warmstart if model == 'NeuralPLSI' else False,
+                training_policy=('full_budget_validation_checkpoint_v1'
+                                 if model == 'NeuralPLSI' else None),
                 backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
                 device=resolved_device, native_build=native_build,
                 normalization='l2', native_rng='splitmix64_v1' if model == 'NeuralPLSI' else None,

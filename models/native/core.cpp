@@ -344,7 +344,8 @@ struct TrainingWorkspace {
     Adam adam,ft_adam;
 };
 // next_order supplies one permutation per executed epoch. Both training phases
-// consume the same stream, including when joint training stops early.
+// run their full budgets and share one stream. Validation selects checkpoints
+// without terminating training when its loss plateaus or worsens.
 template<class NextOrder>
 void train(const int32_t* config,const float* hyper,float* weights,
            const float* tx,const float* tz,const float* ty,int nt,
@@ -360,7 +361,7 @@ void train(const int32_t* config,const float* hyper,float* weights,
     bx.resize(size_t(batch)*m.p); bz.resize(size_t(batch)*m.q); by.resize(size_t(batch)*yd); bg.resize(batch);
     ws.adam.reset(m.size); double best_loss=std::numeric_limits<double>::infinity();
     if(m.family==2) ws.validation.cox.prepare(vy,nv);
-    int wait=0,joint=0,ft=0;
+    int joint=0,ft=0;
     for(int epoch=0;epoch<epochs;++epoch) {
         const int32_t* order=next_order();
         for(int start=0;start<nt;start+=batch) {
@@ -378,15 +379,13 @@ void train(const int32_t* config,const float* hyper,float* weights,
         double value=outcome(ws.validation_prediction,vy,nv,m.family,nullptr,ws.validation,true);
         value+=double(ws.validation_prediction[nv])*ws.validation_prediction[nv];
         finite(value,w); ++joint;
-        if(value<best_loss) {best_loss=value;best=w;wait=0;} else ++wait;
-        if(wait>=5) break;
+        if(value<best_loss) {best_loss=value;best=w;}
     }
     if(joint) w=best;
     net.predict(w,tx,nullptr,nt,false,false,ws.tg,ws.forward);
     net.predict(w,vx,nullptr,nv,false,false,ws.vg,ws.forward);
     best_loss=gamma_loss(m,w,ws.vg,vz,vy,nv,nullptr,ws.gamma,ws.validation,true);
     finite(best_loss,w); best=w;
-    double stop_best=std::numeric_limits<double>::infinity(); wait=0;
     ws.ft_adam.reset(m.q+m.intercept);
     for(int epoch=0;epoch<std::min(epochs,50);++epoch) {
         const int32_t* order=next_order();
@@ -403,8 +402,6 @@ void train(const int32_t* config,const float* hyper,float* weights,
         double value=gamma_loss(m,w,ws.vg,vz,vy,nv,nullptr,ws.gamma,ws.validation,true);
         finite(value,w); ++ft;
         if(value<best_loss) {best_loss=value; best=w;}
-        if(value<stop_best) {stop_best=value;wait=0;} else ++wait;
-        if(wait>=20) break;
     }
     std::copy(best.begin(),best.end(),weights);
     diagnostics[0]=joint; diagnostics[1]=ft; diagnostics[2]=best_loss;

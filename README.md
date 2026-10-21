@@ -86,7 +86,7 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 ## Standalone C++ NeuralPLSI
 
 NeuralPLSI is implemented entirely in C++17. Initialization, the network, analytic
-backpropagation, AdamW, data splitting, minibatch shuffling, early stopping,
+backpropagation, AdamW, data splitting, minibatch shuffling, validation checkpoint selection,
 prediction, model serialization and the entire bootstrap workflow all run in
 C++. There is **no Torch or
 LibTorch dependency**, including in the Python examples and tests. The Python API
@@ -148,11 +148,18 @@ moment coefficients are 0.9 and 0.999, with epsilon 1e-8. The default gradient
 norm limit is 1.0; fine-tuning clips only gamma and the optional intercept.
 
 Each fit uses an 80/20 training/validation split and shuffled minibatches of 64.
-Joint training runs for at most 200 epochs, with patience 5. The best joint
-checkpoint is restored before freezing beta and the entire link. Gamma then
-trains for at most `min(max_epoch, 50)` epochs, with patience 20, and its best
-validation checkpoint is restored. Gamma fine-tuning starts with fresh Adam
-moments. `max_epoch=0` performs initialization only.
+Joint training runs all `max_epoch` epochs (200 by default), evaluating validation
+loss after every epoch. The best joint checkpoint is restored before freezing
+beta and the entire link. Gamma then trains all `min(max_epoch, 50)` epochs, and
+its best validation checkpoint is restored, including the starting checkpoint
+if none of the fine-tuning epochs improves it. Neither phase stops early when
+validation loss plateaus or worsens. Gamma fine-tuning starts with fresh Adam
+moments. `max_epoch=0` performs initialization only. Original fits and all
+warm/cold bootstrap refits use the same epoch budgets and checkpoint selection.
+
+This retains validation-based model selection while allowing later epochs to
+improve after a temporary plateau. It does not establish numerical convergence
+or nominal bootstrap coverage; those require separate diagnostics and simulations.
 
 The objectives are mean squared error, binary cross-entropy, or the negative
 Breslow Cox partial likelihood divided by the event count, plus the identifying
@@ -251,6 +258,9 @@ Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
 
+The historical timings and memory comparisons below used patience-based early
+stopping. They do not measure the current full-budget training procedure.
+
 Before the workspace changes, a local check used n=2,000, the `sfun` scenario,
 data/fit seed 0, bootstrap seed 11,
 24 warm-start refits and a 1,000-point link grid. Timings include resampling,
@@ -268,8 +278,9 @@ local timing checks, not comparisons against the previous Python process pool.
 Use `--bootstrap 24 --repeats 1 --bootstrap_seed 11 --g_grid_n 1000 --jobs 1`
 and then `--jobs 4` with the timing script to repeat the configuration.
 
-For a comparison with the previous native implementation, including exact
-result checks and isolated process memory measurements:
+To reproduce the historical workspace comparison, run the following from a
+checkout of commit `7270f3c`. Both compared revisions must use the same training
+policy for its exact-result checks to be meaningful:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
@@ -325,7 +336,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_native_v4_b999
+export OUT_DIR=output/simulation_native_v5_b999
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -348,13 +359,17 @@ limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
+The default output directory is `output/simulation_native_v5`. Protocol 5 records
+`full_budget_validation_checkpoint_v1`; earlier results used patience-based
+early stopping. Full epoch budgets also increase runtime, especially for warm
+bootstrap refits, so check the cluster wall-time limit before a full run.
 
 For a local run:
 
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v4_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v5_b999
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -365,8 +380,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_native_v4_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_native_v4_b999
+python reproduce/visualize_simulation.py --input output/simulation_native_v5_b999
+python reproduce/table_simulation_comparison.py --input output/simulation_native_v5_b999
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage
@@ -383,9 +398,10 @@ replicates, not a bootstrap confidence band.
   calculations in both estimators. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only
   its identifying g(0) anchor gradient for Cox, avoiding numerical drift.
-- Both stopping callbacks receive every validation loss. Training restores the
-  best validation checkpoint. Gamma fine-tuning freezes the full link and clips
-  only the parameters it updates.
+- Both phases run their full epoch budgets and select the best validation
+  checkpoint without patience-based early termination. Gamma fine-tuning freezes
+  the full link and clips only the parameters it updates. Bootstrap refits use
+  the same training policy.
 - Spline coefficients and knots now correspond to the returned index. Binary
   profiling and final fitting use the same penalized objective. Serial and
   parallel bootstrap draws are reproducible.
@@ -409,12 +425,14 @@ inference on the common link-function scale.
 
 Run the regression tests with the command below. They independently verify
 forward values and analytic gradients for every outcome/activation combination,
-multi-step AdamW updates, linear initialization, stopping/checkpoint behavior,
+multi-step AdamW updates, linear initialization, full-budget/checkpoint behavior,
 bootstrap orientation, serial/threaded reproducibility, native summaries and
 serialization. Gradient checks include different layer depths and widths.
 Workspace regressions compare lazy shuffling with an independently generated
-explicit schedule through early stopping, check chunk boundaries and tied Cox
-validation losses, and fit with a million-epoch limit while stopping early.
+explicit schedule through both full epoch budgets and check chunk boundaries
+and tied Cox validation losses. Training tests cover flat validation losses,
+restoration after worsening validation losses in both phases, and the gamma
+epoch cap.
 A bootstrap test blocks Python refits, RNG calls, process/thread creation and
 percentile functions while asserting that exactly one native call completes the
 whole operation. A separate subprocess blocks every Torch import.
