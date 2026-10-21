@@ -1,7 +1,7 @@
 """Inference figures for a NeuralPLSI-only native simulation run.
 
 Usage:
-    python reproduce/plot_native_inference.py --input output/simulation_native_v7_b999
+    python reproduce/plot_native_inference.py --input output/simulation
 
 Writes <input>/figures/inference.{png,pdf}, one figure with three panels:
   A  95% bootstrap CI coverage of beta and gamma, by n
@@ -197,7 +197,7 @@ def combined(cells, sizes, reps, out):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--input', default='output/simulation_native_v7_b999')
+    parser.add_argument('--input', default='output/simulation')
     parser.add_argument('--out', default=None)
     args = parser.parse_args(argv)
     out = Path(args.out or Path(args.input)/'figures')

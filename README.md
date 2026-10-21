@@ -367,7 +367,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_native_v7_b999
+export OUT_DIR=output/simulation
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -390,19 +390,18 @@ limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
-The default output directory is `output/simulation_native_v7`. Protocol 7 records
-`full_budget_validation_checkpoint_exact_gamma_v1` with cold-start bootstrap refits.
-Protocol 6 warm-started refits from the original fit, protocol 5 also used
-minibatch Adam fine-tuning for gamma, and earlier results used patience-based
-early stopping. Full epoch budgets increase runtime, so check the cluster
-wall-time limit before a full run.
+Results go to `output/simulation`, one file per estimator and scenario. Each
+replicate records its run configuration, including a hash of the source code,
+and a run refuses to resume into a file written by different code or settings;
+remove the old results before rerunning after a code change. Full epoch budgets
+increase runtime, so check the cluster wall-time limit before a full run.
 
 For a local run:
 
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v7_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -413,8 +412,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_native_v7_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_native_v7_b999
+python reproduce/visualize_simulation.py --input output/simulation
+python reproduce/table_simulation_comparison.py --input output/simulation
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage

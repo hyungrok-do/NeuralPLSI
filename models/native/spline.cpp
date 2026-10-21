@@ -190,7 +190,8 @@ double likelihood(const Config& c,const Sample& s,const DVec& w,Workspace& ws,bo
     return loss;
 }
 // Damped Newton from the coefficients in w, until the Newton decrement is
-// negligible relative to the objective. Returns the objective at w.
+// negligible relative to the objective; a final full step then brings the
+// coefficients to working precision. Returns the objective at w.
 double newton(const Config& c,const Sample& s,DVec& w,Workspace& ws) {
     const int d=c.columns();
     double value=likelihood(c,s,w,ws,true);
@@ -199,7 +200,10 @@ double newton(const Config& c,const Sample& s,DVec& w,Workspace& ws) {
         cholesky_solve(ws.matrix,ws.vector,d);
         double decrement=dot(ws.gradient,ws.vector);
         if(!std::isfinite(decrement) || decrement<0.) throw std::runtime_error("Spline coefficient fit failed");
-        if(decrement<1e-12*(1.+std::abs(value))) return value;
+        if(decrement<1e-12*(1.+std::abs(value))) {
+            for(int j=0;j<d;++j) w[j]-=ws.vector[j];
+            return likelihood(c,s,w,ws,false);
+        }
         double step=1.; bool accepted=false;
         for(int search=0;search<50 && !accepted;++search,step*=.5) {
             ws.trial=w;
