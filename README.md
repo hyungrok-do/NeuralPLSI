@@ -162,6 +162,27 @@ index normalization, linear skip and sign canonicalization are retained.
 `initial=True` optionally starts from a native linear/logistic/Cox regression
 fit to the training partition; it is off by default.
 
+Each native worker reuses its training, gradient, optimizer and inference
+buffers across minibatches and bootstrap refits. Shuffling keeps one permutation
+of the training rows and generates the next only when an epoch executes. Gamma
+fine-tuning stores gradients and Adam moments for gamma and the optional
+intercept only. Validation computes loss without unused derivatives, and its
+Cox ordering and tie groups are prepared once per fit.
+
+Validation prediction and link-grid evaluation use chunks of at most 256 rows
+and two reusable layer buffers. Cox validation still evaluates the full
+validation risk sets. Bootstrap workers gather train/validation rows directly
+from the shared original arrays using their sample indices. This removes the
+extra copy of the entire bootstrap sample. Input partitions, cached frozen-link
+values, and Cox risk-set storage still grow with the number of observations;
+per-worker memory therefore still matters when selecting `n_jobs`. The packed
+double-precision bootstrap output uses `8 * B * (p + q + intercept + grid_size)`
+bytes, shared across workers, plus its four-row summary.
+
+These workspace changes preserve the native RNG streams, optimizer, stopping
+rules and bootstrap definition. Same-seed comparisons with commit `4637057`
+matched fitted states, predictions, bootstrap draws and summaries exactly.
+
 ### Native bootstrap
 
 `inference_bootstrap(..., n_jobs=8)` uses up to eight C++ worker threads in the
@@ -230,7 +251,8 @@ Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
 
-A local check used n=2,000, the `sfun` scenario, data/fit seed 0, bootstrap seed 11,
+Before the workspace changes, a local check used n=2,000, the `sfun` scenario,
+data/fit seed 0, bootstrap seed 11,
 24 warm-start refits and a 1,000-point link grid. Timings include resampling,
 refits, grid evaluations, SEs and intervals, and exclude compilation and the
 original point fit:
@@ -245,6 +267,51 @@ All draws and summaries matched exactly across worker counts. These are single
 local timing checks, not comparisons against the previous Python process pool.
 Use `--bootstrap 24 --repeats 1 --bootstrap_seed 11 --g_grid_n 1000 --jobs 1`
 and then `--jobs 4` with the timing script to repeat the configuration.
+
+For a comparison with the previous native implementation, including exact
+result checks and isolated process memory measurements:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  python reproduce/compare_native_revisions.py --bootstrap 96 --repeats 3 --jobs 1 4
+```
+
+The script compiles commit `4637057` from the local git history with the current
+compiler and compares it with the working tree. Compilation and data generation
+are outside the timing intervals. It alternates the execution order and writes
+raw timings and memory measurements to `output/native_revision_comparison.json`.
+The standalone `reproduce/native_memory_check.cpp` measures peak process RSS
+without Python. Its learning rate is zero to hold stopping times at 6 joint and
+21 gamma epochs; it tests allocations rather than estimation or convergence.
+Use `--memory-n 0` to skip this check.
+
+Local medians from three alternating runs used n=2,000, `sfun`, data/fit seed 0,
+bootstrap seed 11, 96 warm-start refits and a 1,000-point grid. Bootstrap times
+include refitting, grid evaluation and summaries, excluding the original fit:
+
+| Outcome | Workers | Before | After | Before / after |
+|---|---:|---:|---:|---:|
+| Continuous | 1 | 3.446 s | 3.498 s | 0.99x |
+| Continuous | 4 | 0.921 s | 0.921 s | 1.00x |
+| Binary | 1 | 2.859 s | 2.724 s | 1.05x |
+| Binary | 4 | 0.908 s | 0.764 s | 1.19x |
+| Cox | 1 | 4.044 s | 3.976 s | 1.02x |
+| Cox | 4 | 1.118 s | 1.102 s | 1.01x |
+
+Runtime gains on this small network are modest and scenario dependent. The
+larger benefit is memory. In the isolated Linux check with n=100,000, p=8,
+q=3, two 32-unit hidden layers, batch size 64 and no link grid:
+
+| Allocation check | Before peak RSS | After peak RSS |
+|---|---:|---:|
+| One point fit | 127.94 MiB | 12.33 MiB |
+| Point fit followed by four bootstrap refits on four workers | 512.36 MiB | 31.43 MiB |
+
+These include the input arrays and the complete native process. Linux RSS is
+read from `/proc/self/status` (`VmHWM`) to exclude inherited pre-exec high-water
+marks from the Python benchmark parent. The fixed-stopping memory check is
+also available separately with `--memory-only`. Actual memory varies with the
+data dimensions, architecture, bootstrap output and worker count.
 
 ## Corrected simulation and HPC workflow
 
@@ -345,6 +412,9 @@ forward values and analytic gradients for every outcome/activation combination,
 multi-step AdamW updates, linear initialization, stopping/checkpoint behavior,
 bootstrap orientation, serial/threaded reproducibility, native summaries and
 serialization. Gradient checks include different layer depths and widths.
+Workspace regressions compare lazy shuffling with an independently generated
+explicit schedule through early stopping, check chunk boundaries and tied Cox
+validation losses, and fit with a million-epoch limit while stopping early.
 A bootstrap test blocks Python refits, RNG calls, process/thread creation and
 percentile functions while asserting that exactly one native call completes the
 whole operation. A separate subprocess blocks every Torch import.

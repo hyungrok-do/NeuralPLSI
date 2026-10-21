@@ -14,6 +14,9 @@ class NativeBootstrapTest(unittest.TestCase):
     def test_draws_match_explicit_refits_and_do_not_depend_on_worker_count(self):
         for family in ('continuous', 'binary', 'cox'):
             x, z, y, *_ = simulate_data(120, outcome=family, seed=5)
+            if family == 'cox':
+                # Different bootstrap splits must rebuild cached tied risk sets.
+                y[:, 0] = np.ceil(y[:, 0]*2)
             for warmstart in (False, True):
                 with self.subTest(family=family, warmstart=warmstart):
                     model = NeuralPLSI(family=family, max_epoch=3, hidden_units=5,
