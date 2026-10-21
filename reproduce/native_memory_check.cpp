@@ -1,7 +1,8 @@
 // Isolated native-process peak memory check. Arguments: n, B, workers, max_epoch.
-// B=0 measures fitting alone. Learning rate zero holds weights fixed while both
-// full epoch budgets run. Older revisions stopped after 6 joint / 21 gamma
-// epochs, so their runtime is not comparable at the same max_epoch setting.
+// B=0 measures fitting alone. Learning rate zero holds weights fixed while the
+// full joint epoch budget runs, followed by the exact gamma fit. Older revisions
+// stopped after 6 joint / 21 gamma epochs, so their runtime is not comparable at
+// the same max_epoch setting.
 #include "core.h"
 #include <chrono>
 #include <cmath>
@@ -65,7 +66,7 @@ int main(int argc,char** argv) {
 #endif
         std::cout<<std::setprecision(10)<<"{\"n\":"<<n<<",\"bootstrap\":"<<B
             <<",\"workers\":"<<workers<<",\"max_epoch\":"<<epochs
-            <<",\"joint_epochs\":"<<diagnostics[0]<<",\"gamma_epochs\":"<<diagnostics[1]
+            <<",\"joint_epochs\":"<<diagnostics[0]<<",\"gamma_iterations\":"<<diagnostics[1]
             <<",\"seconds\":"<<seconds<<",\"peak_rss_mib\":"<<peak_mib<<"}\n";
     } catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

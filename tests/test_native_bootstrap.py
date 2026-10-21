@@ -35,7 +35,7 @@ class NativeBootstrapTest(unittest.TestCase):
                         fitted = NativeModel.from_bytes(before)
                         fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r, reset=not warmstart)
                         self.assertEqual(fitted.fit_diagnostics['joint_epochs'],31)
-                        self.assertEqual(fitted.fit_diagnostics['gamma_epochs'],31)
+                        self.assertGreater(fitted.fit_diagnostics['gamma_iterations'],0)
                         beta, gamma, intercept = fitted.coefficients()
                         np.testing.assert_array_equal(a['beta_samples'][r], beta)
                         np.testing.assert_array_equal(a['gamma_samples'][r], gamma)

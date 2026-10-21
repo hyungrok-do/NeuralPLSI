@@ -141,7 +141,7 @@ class NativeModel:
         self.config, self.hyper = np.empty(12, dtype=np.int32), np.empty(5, dtype=np.float32)
         diagnostics = np.empty(3, dtype=np.float64)
         checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
-        self.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_epochs=int(diagnostics[1]),
+        self.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_iterations=int(diagnostics[1]),
                                    validation_loss=float(diagnostics[2]))
 
     @classmethod

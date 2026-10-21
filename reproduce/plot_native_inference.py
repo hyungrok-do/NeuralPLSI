@@ -1,13 +1,12 @@
 """Inference figures for a NeuralPLSI-only native simulation run.
 
 Usage:
-    python reproduce/plot_native_inference.py --input output/simulation_native_v4_b999
+    python reproduce/plot_native_inference.py --input output/simulation_native_v6_b999
 
-Writes <input>/figures/inference.{png,pdf}, one figure with four panels:
+Writes <input>/figures/inference.{png,pdf}, one figure with three panels:
   A  95% bootstrap CI coverage of beta and gamma, by n
   B  mean bootstrap SE / empirical SD, by n
   C  pointwise coverage of the bootstrap band for g
-  D  joint-phase early-stopping diagnostics
 
 Monte-Carlo error for block coverage is computed across replicates: each
 replicate contributes its mean coverage over the block's coordinates, because
@@ -33,11 +32,8 @@ SHAPES = ['linear', 'sfun', 'sigmoid']
 OUTCOMES = ['continuous', 'binary', 'cox']
 SHAPE_LABEL = {'linear': 'Linear', 'sfun': 'S-shape', 'sigmoid': 'Sigmoid'}
 OUTCOME_LABEL = {'continuous': 'Continuous', 'binary': 'Binary', 'cox': 'Cox'}
-OUTCOME_COLOR = {'continuous': '#0072B2', 'binary': '#D55E00', 'cox': '#009E73'}
 N_COLOR = {1000: '#6baed6', 2000: '#08519c'}
 NOMINAL, Z = 0.95, 1.959964
-# Joint-phase epochs are bimodal: collapsed fits stop at 7-8, the rest at 22+.
-SHORT_FIT = 15
 REF_LINE = dict(color='#333333', lw=1.0, ls=(0, (4, 2.5)))
 MC_SHADE = dict(color='#94a3b8', alpha=0.13, lw=0, zorder=0)
 SPARSE_SHADE = '#e2e8f0'
@@ -63,23 +59,21 @@ def load_cells(directory):
                                     'gamma_est', 'gamma_se', 'gamma_cov', 'gamma_bias',
                                     'g_lb', 'g_ub', 'g_pred']}
         cell['grid'] = np.asarray(rows[0]['g_grid'], dtype=float)
-        cell['epochs'] = np.array([r['fit_diagnostics']['joint_epochs'] for r in rows])
         cells[(int(n), shape, outcome)] = cell
     if not cells:
         raise SystemExit(f'No NeuralPLSI result files in {directory}')
     return cells
 
 
-def block_summary(cell, par, keep=None):
-    keep = np.ones(len(cell['epochs']), bool) if keep is None else keep
-    c = cell[f'{par}_cov'][keep].mean(axis=1)
-    sd = cell[f'{par}_est'][keep].std(axis=0, ddof=1)
+def block_summary(cell, par):
+    c = cell[f'{par}_cov'].mean(axis=1)
+    sd = cell[f'{par}_est'].std(axis=0, ddof=1)
     return dict(cov=c.mean(), mc=Z*c.std(ddof=1)/np.sqrt(len(c)),
-                ratio=(cell[f'{par}_se'][keep].mean(axis=0)/sd).mean())
+                ratio=(cell[f'{par}_se'].mean(axis=0)/sd).mean())
 
 
 def replicate_label(cells):
-    counts = sorted({len(c['epochs']) for c in cells.values()})
+    counts = sorted({len(c['beta_est']) for c in cells.values()})
     return f'{counts[0]} replicates' if len(counts) == 1 else f'{counts[0]}-{counts[-1]} replicates'
 
 
@@ -109,7 +103,7 @@ def save(fig, out, name):
 def draw_forest(container, cells, sizes, key, ref, xlabel, xlim, band=None):
     rows = [(par, s) for par in ('beta', 'gamma') for s in SHAPES]
     yy = np.arange(len(rows))
-    offsets = dict(zip(sizes, np.linspace(-0.17, 0.17, len(sizes))))
+    offsets = dict(zip(sizes, np.linspace(-0.17, 0.17, len(sizes)) if len(sizes) > 1 else [0.]))
     axes = container.subplots(1, 3, sharey=True, sharex=True)
     for ax, outcome in zip(axes, OUTCOMES):
         if band is not None:
@@ -183,76 +177,16 @@ def draw_g_coverage(container, cells, sizes, reps):
     return axes
 
 
-def draw_early_stop(container, cells, sizes):
-    axes = container.subplots(1, 3, gridspec_kw={'width_ratios': [1.1, 1, 0.9]})
-    names = [(s, o) for o in OUTCOMES for s in SHAPES]
-    yy = np.arange(len(names))
-    offsets = dict(zip(sizes, np.linspace(-0.17, 0.17, len(sizes))))
-
-    ax = axes[0]
-    for n in sizes:
-        frac = [np.mean(cells[(n, s, o)]['epochs'] < SHORT_FIT) if (n, s, o) in cells else np.nan
-                for s, o in names]
-        ax.barh(yy+offsets[n], frac, height=0.32, color=N_COLOR[n], label=f'n = {n}')
-    ax.set_yticks(yy)
-    ax.set_yticklabels([f'{SHAPE_LABEL[s]} · {OUTCOME_LABEL[o]}' for s, o in names])
-    ax.invert_yaxis()
-    ax.set_xlabel(f'share of fits stopping before epoch {SHORT_FIT}')
-    ax.set_title('Early-stopped point fits', pad=6)
-    ax.grid(axis='x', alpha=0.16, lw=0.7)
-    ax.set_axisbelow(True)
-    ax.legend(frameon=False, loc='lower right')
-
-    ax = axes[1]
-    for outcome in OUTCOMES:
-        epochs = np.concatenate([c['epochs'] for (n, s, o), c in cells.items() if o == outcome])
-        error = np.concatenate([np.abs(c['beta_bias']).max(axis=1)
-                                for (n, s, o), c in cells.items() if o == outcome])
-        ax.scatter(epochs, error, s=7, alpha=0.35, color=OUTCOME_COLOR[outcome], lw=0,
-                   label=OUTCOME_LABEL[outcome])
-    ax.axvline(SHORT_FIT, **REF_LINE)
-    ax.set_xlabel('joint-phase epochs')
-    ax.set_ylabel(r'max$_j\,|\hat\beta_j-\beta_j|$')
-    ax.set_title(r'$\beta$ error vs. training length', pad=6)
-    ax.legend(frameon=False, markerscale=2.5, loc='center right')
-    ax.grid(alpha=0.16, lw=0.7)
-
-    ax = axes[2]
-    affected = [(n, s, o) for (n, s, o), c in sorted(cells.items())
-                if (c['epochs'] < SHORT_FIT).sum() >= 5]
-    for k, key in enumerate(affected):
-        cell = cells[key]
-        everything = block_summary(cell, 'beta')
-        kept = block_summary(cell, 'beta', cell['epochs'] >= SHORT_FIT)
-        ax.plot([everything['cov'], kept['cov']], [k, k], color='#94a3b8', lw=1.2, zorder=1)
-        ax.scatter(everything['cov'], k, color=N_COLOR[key[0]], s=36, zorder=3)
-        ax.scatter(kept['cov'], k, facecolor='white', edgecolor=N_COLOR[key[0]], lw=1.6, s=36, zorder=3)
-    ax.axvline(NOMINAL, **REF_LINE)
-    ax.set_yticks(np.arange(len(affected)))
-    ax.set_yticklabels([f'{SHAPE_LABEL[s]} · {OUTCOME_LABEL[o]}\n(n = {n})' for n, s, o in affected])
-    ax.invert_yaxis()
-    ax.set_xlabel(r'$\beta$ coverage')
-    ax.set_title(r'$\beta$ coverage with and without them', pad=6)
-    ax.legend(handles=[Line2D([0], [0], marker='o', ls='', color='#475569', label='all fits'),
-                       Line2D([0], [0], marker='o', ls='', mfc='white', color='#475569', mew=1.6,
-                              label='excluding early-stopped')],
-              frameon=False, loc='lower left')
-    ax.grid(axis='x', alpha=0.16, lw=0.7)
-    return axes
-
-
 def combined(cells, sizes, reps, out):
-    fig = plt.figure(figsize=(15, 23), layout='constrained')
-    panels = fig.subfigures(4, 1, height_ratios=[4.2, 4.2, 9.0, 4.6], hspace=0.03)
+    fig = plt.figure(figsize=(15, 18.5), layout='constrained')
+    panels = fig.subfigures(3, 1, height_ratios=[4.2, 4.2, 9.0], hspace=0.03)
     titles = ['Coverage of 95% bootstrap CIs',
               'SE calibration: below 1.0 means the intervals are too narrow',
-              'Pointwise coverage of the 95% bootstrap band for g(u)',
-              f'Early stopping in the joint phase (fits stopping before epoch {SHORT_FIT})']
+              'Pointwise coverage of the 95% bootstrap band for g(u)']
     draw_coverage(panels[0], cells, sizes, reps)
     draw_se_calibration(panels[1], cells, sizes)
     draw_g_coverage(panels[2], cells, sizes, reps)
-    draw_early_stop(panels[3], cells, sizes)
-    for panel, letter, title in zip(panels, 'ABCD', titles):
+    for panel, letter, title in zip(panels, 'ABC', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
     fig.suptitle(f'NeuralPLSI simulation inference, {replicate_label(cells)} per setting',
                  x=0.0, ha='left', fontsize=16)
@@ -263,14 +197,14 @@ def combined(cells, sizes, reps, out):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--input', default='output/simulation_native_v4_b999')
+    parser.add_argument('--input', default='output/simulation_native_v6_b999')
     parser.add_argument('--out', default=None)
     args = parser.parse_args(argv)
     out = Path(args.out or Path(args.input)/'figures')
     out.mkdir(parents=True, exist_ok=True)
     cells = load_cells(args.input)
     sizes = sorted({n for n, _, _ in cells})
-    reps = min(len(c['epochs']) for c in cells.values())
+    reps = min(len(c['beta_est']) for c in cells.values())
     combined(cells, sizes, reps, out)
 
 

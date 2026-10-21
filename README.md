@@ -136,30 +136,33 @@ Training uses **minibatch AdamW**, with explicit C++ backpropagation. It uses
 stochastic minibatches, with Adam's adaptive first and second moments and
 decoupled weight decay. Default settings are:
 
-| Parameter group | Joint training learning rate | Fine-tuning learning rate | Weight decay |
+| Parameter group | Joint training learning rate | Gamma fit | Weight decay |
 |---|---:|---:|---:|
 | Raw index weights, beta | 0.001 | Frozen | 0.00001 |
 | Link network and linear skip | 0.001 | Frozen | 0.0001 |
-| Covariate coefficients, gamma, and optional intercept | 0.05 | 0.01 | 0 |
+| Covariate coefficients, gamma, and optional intercept | 0.05 | Newton | 0 |
 
 The `learning_rate` argument controls the base rate. Gamma uses 50 times that
-rate during joint training and 10 times that rate during fine-tuning. Adam's
-moment coefficients are 0.9 and 0.999, with epsilon 1e-8. The default gradient
-norm limit is 1.0; fine-tuning clips only gamma and the optional intercept.
+rate during joint training. Adam's moment coefficients are 0.9 and 0.999, with
+epsilon 1e-8. The default gradient norm limit is 1.0.
 
 Each fit uses an 80/20 training/validation split and shuffled minibatches of 64.
 Joint training runs all `max_epoch` epochs (200 by default), evaluating validation
-loss after every epoch. The best joint checkpoint is restored before freezing
-beta and the entire link. Gamma then trains all `min(max_epoch, 50)` epochs, and
-its best validation checkpoint is restored, including the starting checkpoint
-if none of the fine-tuning epochs improves it. Neither phase stops early when
-validation loss plateaus or worsens. Gamma fine-tuning starts with fresh Adam
-moments. `max_epoch=0` performs initialization only. Original fits and all
-warm/cold bootstrap refits use the same epoch budgets and checkpoint selection.
+loss after every epoch, and does not stop early when validation loss plateaus
+or worsens. The best joint checkpoint is restored before freezing beta and the
+entire link. Gamma and the optional intercept are then fitted exactly, with
+`g(x'beta)` as a fixed offset, on all rows (training and validation): least
+squares, logistic regression or the Breslow Cox partial likelihood, solved by
+double-precision damped Newton iterations. This step is deterministic, so it adds
+no optimizer noise to gamma; the former 50-epoch minibatch Adam fine-tuning with
+validation checkpoints added fit-to-fit variation of the same size as the
+sampling error at n = 2000. `max_epoch=0` performs initialization only.
+Original fits and all warm/cold bootstrap refits use the same procedure.
 
-This retains validation-based model selection while allowing later epochs to
-improve after a temporary plateau. It does not establish numerical convergence
-or nominal bootstrap coverage; those require separate diagnostics and simulations.
+This retains validation-based model selection for the network while allowing
+later epochs to improve after a temporary plateau. It does not establish
+numerical convergence of the joint phase or nominal bootstrap coverage; those
+require separate diagnostics and simulations.
 
 The objectives are mean squared error, binary cross-entropy, or the negative
 Breslow Cox partial likelihood divided by the event count, plus the identifying
@@ -171,9 +174,9 @@ fit to the training partition; it is off by default.
 
 Each native worker reuses its training, gradient, optimizer and inference
 buffers across minibatches and bootstrap refits. Shuffling keeps one permutation
-of the training rows and generates the next only when an epoch executes. Gamma
-fine-tuning stores gradients and Adam moments for gamma and the optional
-intercept only. Validation computes loss without unused derivatives, and its
+of the training rows and generates the next only when an epoch executes. The
+gamma fit reuses its design, offset and outcome buffers. Validation computes loss
+without unused derivatives, and its
 Cox ordering and tie groups are prepared once per fit.
 
 Validation prediction and link-grid evaluation use chunks of at most 256 rows
@@ -292,8 +295,9 @@ compiler and compares it with the working tree. Compilation and data generation
 are outside the timing intervals. It alternates the execution order and writes
 raw timings and memory measurements to `output/native_revision_comparison.json`.
 The standalone `reproduce/native_memory_check.cpp` measures peak process RSS
-without Python. Its learning rate is zero to hold stopping times at 6 joint and
-21 gamma epochs; it tests allocations rather than estimation or convergence.
+without Python. Its learning rate is zero to hold the weights fixed; it tests
+allocations rather than estimation or convergence. Revisions before `aa80299`
+stopped after 6 joint and 21 gamma epochs.
 Use `--memory-n 0` to skip this check.
 
 Local medians from three alternating runs used n=2,000, `sfun`, data/fit seed 0,
@@ -336,7 +340,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_native_v5_b999
+export OUT_DIR=output/simulation_native_v6_b999
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -359,9 +363,10 @@ limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
-The default output directory is `output/simulation_native_v5`. Protocol 5 records
-`full_budget_validation_checkpoint_v1`; earlier results used patience-based
-early stopping. Full epoch budgets also increase runtime, especially for warm
+The default output directory is `output/simulation_native_v6`. Protocol 6 records
+`full_budget_validation_checkpoint_exact_gamma_v1`. Protocol 5 used minibatch
+Adam fine-tuning for gamma, and earlier results used patience-based early
+stopping. Full epoch budgets also increase runtime, especially for warm
 bootstrap refits, so check the cluster wall-time limit before a full run.
 
 For a local run:
@@ -369,7 +374,7 @@ For a local run:
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v5_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v6_b999
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -380,8 +385,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_native_v5_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_native_v5_b999
+python reproduce/visualize_simulation.py --input output/simulation_native_v6_b999
+python reproduce/table_simulation_comparison.py --input output/simulation_native_v6_b999
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage
@@ -398,10 +403,10 @@ replicates, not a bootstrap confidence band.
   calculations in both estimators. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only
   its identifying g(0) anchor gradient for Cox, avoiding numerical drift.
-- Both phases run their full epoch budgets and select the best validation
-  checkpoint without patience-based early termination. Gamma fine-tuning freezes
-  the full link and clips only the parameters it updates. Bootstrap refits use
-  the same training policy.
+- Joint training runs its full epoch budget and selects the best validation
+  checkpoint without patience-based early termination. Gamma is then fitted
+  exactly by Newton iterations with the index and link frozen. Bootstrap refits
+  use the same training policy.
 - Spline coefficients and knots now correspond to the returned index. Binary
   profiling and final fitting use the same penalized objective. Serial and
   parallel bootstrap draws are reproducible.
@@ -426,13 +431,14 @@ inference on the common link-function scale.
 Run the regression tests with the command below. They independently verify
 forward values and analytic gradients for every outcome/activation combination,
 multi-step AdamW updates, linear initialization, full-budget/checkpoint behavior,
+the exact gamma fit,
 bootstrap orientation, serial/threaded reproducibility, native summaries and
 serialization. Gradient checks include different layer depths and widths.
 Workspace regressions compare lazy shuffling with an independently generated
-explicit schedule through both full epoch budgets and check chunk boundaries
+explicit schedule through the full joint epoch budget and check chunk boundaries
 and tied Cox validation losses. Training tests cover flat validation losses,
-restoration after worsening validation losses in both phases, and the gamma
-epoch cap.
+restoration after worsening validation losses, and the gamma fit: least squares
+for continuous outcomes and a zero full-data gamma gradient for binary and Cox.
 A bootstrap test blocks Python refits, RNG calls, process/thread creation and
 percentile functions while asserting that exactly one native call completes the
 whole operation. A separate subprocess blocks every Torch import.
