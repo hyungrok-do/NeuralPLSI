@@ -157,7 +157,7 @@ double-precision damped Newton iterations. This step is deterministic, so it add
 no optimizer noise to gamma; the former 50-epoch minibatch Adam fine-tuning with
 validation checkpoints added fit-to-fit variation of the same size as the
 sampling error at n = 2000. `max_epoch=0` performs initialization only.
-Original fits and all warm/cold bootstrap refits use the same procedure.
+Original fits and all bootstrap refits use the same procedure.
 
 This retains validation-based model selection for the network while allowing
 later epochs to improve after a temporary plateau. It does not establish
@@ -200,8 +200,11 @@ calling process. There are no Python worker processes, per-replicate Python call
 model serialization between workers, or Python RNG calls. C++ handles:
 
 - Paired row resampling of exposures, covariates and outcomes.
-- Independent copies of the original fitted model for warm starts, or fresh
-  seeded initialization for cold starts.
+- A fresh seeded initialization for every refit (cold start), so each draw
+  re-samples the optimizer noise as well as the rows. Warm starts from the
+  original fit were removed: refits inherited its optimizer error, and at
+  n = 2,000 the bootstrap SE of beta was only 0.69-0.82 of its sampling SD for
+  binary and Cox outcomes (0.95 for continuous), against 1.00-1.04 with cold starts.
 - Refitting, sign canonicalization and evaluation of the requested link grid.
 - Bootstrap means, sample SDs (`ddof=1`) and percentile endpoints in double precision.
 
@@ -262,7 +265,8 @@ writes `output/benchmark_native.json`. Compilation/loading is reported separatel
 These checks do not estimate coverage; run the full scenarios on HPC for that.
 
 The historical timings and memory comparisons below used patience-based early
-stopping. They do not measure the current full-budget training procedure.
+stopping and warm-start bootstrap refits, both since removed. They do not measure
+the current training and bootstrap procedure.
 
 Before the workspace changes, a local check used n=2,000, the `sfun` scenario,
 data/fit seed 0, bootstrap seed 11,
@@ -340,7 +344,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export N_BOOTSTRAP=999
 export N_REPLICATES=500
-export OUT_DIR=output/simulation_native_v6_b999
+export OUT_DIR=output/simulation_native_v7_b999
 sbatch reproduce/run_simulation.slurm
 sbatch reproduce/run_simulation_2000.slurm
 # Include both estimators:
@@ -363,18 +367,19 @@ limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
-The default output directory is `output/simulation_native_v6`. Protocol 6 records
-`full_budget_validation_checkpoint_exact_gamma_v1`. Protocol 5 used minibatch
-Adam fine-tuning for gamma, and earlier results used patience-based early
-stopping. Full epoch budgets also increase runtime, especially for warm
-bootstrap refits, so check the cluster wall-time limit before a full run.
+The default output directory is `output/simulation_native_v7`. Protocol 7 records
+`full_budget_validation_checkpoint_exact_gamma_v1` with cold-start bootstrap refits.
+Protocol 6 warm-started refits from the original fit, protocol 5 also used
+minibatch Adam fine-tuning for gamma, and earlier results used patience-based
+early stopping. Full epoch budgets increase runtime, so check the cluster
+wall-time limit before a full run.
 
 For a local run:
 
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v6_b999
+  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation_native_v7_b999
 ```
 
 Completed replicates are saved atomically. Failed replicates raise an error
@@ -385,8 +390,8 @@ settings. Do not combine old and corrected results. Backend and initialization
 comparisons also belong in separate directories.
 
 ```bash
-python reproduce/visualize_simulation.py --input output/simulation_native_v6_b999
-python reproduce/table_simulation_comparison.py --input output/simulation_native_v6_b999
+python reproduce/visualize_simulation.py --input output/simulation_native_v7_b999
+python reproduce/table_simulation_comparison.py --input output/simulation_native_v7_b999
 ```
 
 Reports preserve sample size and exposure distribution, calculate coverage
@@ -397,8 +402,10 @@ replicates, not a bootstrap confidence band.
 
 ## Correctness changes
 
-- Warm-start checkpoints preserve the index/link orientation. New fits clear
-  uncertainty estimates from previous fits.
+- Bootstrap refits always start from a fresh seeded initialization and are
+  canonicalized to the same index orientation. New fits clear uncertainty
+  estimates from previous fits. Saved model states use format version 2, without
+  the removed warm-start flag; version 1 files are rejected.
 - Cox likelihoods use complete Breslow risk sets for ties and stable log-space
   calculations in both estimators. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only

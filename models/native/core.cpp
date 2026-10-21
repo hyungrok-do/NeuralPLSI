@@ -576,7 +576,7 @@ struct State {
         std::copy_n(c,NPLSI_CONFIG_SIZE,config.begin());
         std::copy_n(h,NPLSI_HYPER_SIZE,hyper.begin());
         Model m(c,h[4]);
-        if(c[8]<1 || c[9]<0 || c[9]>1000000 || (c[10]!=0 && c[10]!=1) || (c[11]!=0 && c[11]!=1))
+        if(c[8]<1 || c[9]<0 || c[9]>1000000 || (c[10]!=0 && c[10]!=1))
             throw std::invalid_argument("Invalid training configuration");
         for(int i=0;i<4;++i) if(!std::isfinite(h[i]) || h[i]<0)
             throw std::invalid_argument("Hyperparameters must be finite and nonnegative");
@@ -602,7 +602,7 @@ struct State {
     }
     std::string serialize() const {
         std::ostringstream out; out.imbue(std::locale::classic());
-        out<<"NEURALPLSI_NATIVE 1\n";
+        out<<"NEURALPLSI_NATIVE 2\n";
         for(int v:config) out<<v<<' ';
         out<<'\n'<<std::setprecision(std::numeric_limits<float>::max_digits10);
         for(float v:hyper) out<<v<<' ';
@@ -620,7 +620,8 @@ std::unique_ptr<State> deserialize(const char* buffer,size_t size) {
     if(!buffer || size>250000000) throw std::invalid_argument("Invalid model state size");
     std::istringstream in(std::string(buffer,size)); in.imbue(std::locale::classic());
     std::string magic; int version=0; in>>magic>>version;
-    if(magic!="NEURALPLSI_NATIVE" || version!=1) throw std::invalid_argument("Unsupported model state format");
+    // Version 1 states carried a warm-start flag in the configuration.
+    if(magic!="NEURALPLSI_NATIVE" || version!=2) throw std::invalid_argument("Unsupported model state format");
     std::array<int32_t,NPLSI_CONFIG_SIZE> c{}; std::array<float,NPLSI_HYPER_SIZE> h{};
     for(auto& v:c) in>>v;
     for(auto& v:h) in>>v;
@@ -680,7 +681,7 @@ struct FitWorkspace {
 // straight into the split avoids retaining a second, fully resampled dataset.
 // The caller validates the original data once before entering this function.
 void fit_state(State& s,const float* x,const float* z,const float* y,int n,
-               uint64_t seed,bool reset,FitWorkspace& work,const int32_t* sample_rows=nullptr) {
+               uint64_t seed,FitWorkspace& work,const int32_t* sample_rows=nullptr) {
     if(n<2) throw std::invalid_argument("Training requires at least two observations");
     Model m(s.config.data(),s.hyper[4]);
     int nv=n/5+int(n%5!=0),nt=n-nv,yd=m.family==2 ? 2:1;
@@ -699,7 +700,8 @@ void fit_state(State& s,const float* x,const float* z,const float* y,int n,
     }
     validate_arrays(m,tx.data(),tz.data(),ty.data(),nt,true);
     validate_arrays(m,vx.data(),vz.data(),vy.data(),nv,true);
-    if(reset) { s.initialize(seed); if(s.config[10]) initialize_linear(s,tx.data(),tz.data(),ty.data(),nt); }
+    s.initialize(seed);
+    if(s.config[10]) initialize_linear(s,tx.data(),tz.data(),ty.data(),nt);
     Random batches(seed^UINT64_C(0x4241544348));
     auto& order=work.permutation; order.resize(nt);
     auto next_order=[&]() {
@@ -758,10 +760,10 @@ int nplsi_split(int n,uint64_t seed,int32_t* indices) {
         auto order=split_indices(n,seed); std::copy(order.begin(),order.end(),indices); return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
-int nplsi_fit(void* handle,const float* x,const float* z,const float* y,int n,uint64_t seed,int reset) {
+int nplsi_fit(void* handle,const float* x,const float* z,const float* y,int n,uint64_t seed) {
     try {
         auto& s=state(handle); Model m(s.config.data(),s.hyper[4]); validate_arrays(m,x,z,y,n,true);
-        FitWorkspace work; fit_state(s,x,z,y,n,seed,reset!=0,work);
+        FitWorkspace work; fit_state(s,x,z,y,n,seed,work);
         return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
@@ -988,12 +990,12 @@ int nplsi_bootstrap_summary(const double* draws,int B,int D,double ci,int method
     catch(const std::exception& e) {last_error=e.what();return 1;}
 }
 int nplsi_bootstrap(void* handle,const float* x,const float* z,const float* y,
-                    int n,int B,uint64_t seed,int jobs,int warmstart,const float* grid,
+                    int n,int B,uint64_t seed,int jobs,const float* grid,
                     int ng,double ci,int method,double* draws,double* summary,int32_t* workers_used) {
     try {
         const State source(state(handle));
         Model model(source.config.data(),source.hyper[4]);
-        if(n<2 || ng<0 || (warmstart!=0 && warmstart!=1) || !draws || !summary || !workers_used ||
+        if(n<2 || ng<0 || !draws || !summary || !workers_used ||
            (ng && !grid) || int64_t(model.p)+model.q+model.intercept+ng>INT32_MAX)
             throw std::invalid_argument("Invalid bootstrap configuration or output buffers");
         const int D=model.p+model.q+model.intercept+ng;
@@ -1018,11 +1020,12 @@ int nplsi_bootstrap(void* handle,const float* x,const float* z,const float* y,
                     if(index>=size_t(B)) break;
                     replicate=int(index);
                     bootstrap_indices(n,seed,replicate,indices.data());
-                    // Every draw starts from the original fit (or a fresh seeded
-                    // initialization), never from the preceding bootstrap draw.
+                    // Every draw refits from a fresh seeded initialization (cold
+                    // start), so it re-samples optimizer noise as well as rows.
+                    // The source supplies only its configuration.
                     fitted=source;
                     uint64_t fit_seed=seed+1337+uint64_t(replicate);
-                    fit_state(fitted,x,z,y,n,fit_seed,!warmstart,work,indices.data());
+                    fit_state(fitted,x,z,y,n,fit_seed,work,indices.data());
                     if(nplsi_coefficients(&fitted,beta.data(),gamma.data(),&intercept))
                         throw std::runtime_error(last_error);
                     if(ng) {

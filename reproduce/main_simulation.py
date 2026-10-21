@@ -114,7 +114,7 @@ def run_configuration(args, model):
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if model == 'NeuralPLSI' else 'cpu')
-    return dict(protocol_version=6, model=model, n=args.n_instances,
+    return dict(protocol_version=7, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
                 activation=args.activation if model == 'NeuralPLSI' else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
@@ -122,7 +122,6 @@ def run_configuration(args, model):
                                  if model == 'NeuralPLSI' else 'linear'),
                 fit_random_state=args.fit_seed if model == 'NeuralPLSI' else 'replicate_seed',
                 initial=args.initial if model == 'NeuralPLSI' else None,
-                warmstart=args.warmstart if model == 'NeuralPLSI' else False,
                 training_policy=('full_budget_validation_checkpoint_exact_gamma_v1'
                                  if model == 'NeuralPLSI' else None),
                 backend=args.nn_backend if model == 'NeuralPLSI' else 'scipy',
@@ -193,7 +192,7 @@ def run_replicate(args, mname, seed, configuration):
     X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
     if mname == 'NeuralPLSI':
         model = NeuralPLSI(family=args.outcome, activation=args.activation,
-            initial=args.initial, warmstart=args.warmstart, device=args.device, backend=args.nn_backend)
+            initial=args.initial, device=args.device, backend=args.nn_backend)
         fit_options = {'random_state': args.fit_seed}
     else:
         model = SplinePLSI(family=args.outcome)
@@ -274,7 +273,6 @@ def build_parser():
     parser.add_argument('--g_grid_n', type=int, default=1000)
     parser.add_argument('--activation', default='ELU')
     parser.add_argument('--initial', action='store_true')
-    parser.add_argument('--warmstart', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--device', default='cpu', choices=['auto','cpu'])
     parser.add_argument('--nn_backend', default='cpp', choices=['cpp'])
     return parser

@@ -8,18 +8,19 @@ extern "C" {
 /* All matrices are contiguous, row-major float32. Outcomes are n scalars,
    or n x 2 [duration, event] for Cox. Each model handle owns its parameters.
    Config: p, q, width, hidden_layers, intercept, family, activation,
-           parameter_count, batch_size, max_epochs, linear_init, warmstart.
+           parameter_count, batch_size, max_epochs, linear_init.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
    Hyper: learning_rate, link_decay, beta_decay, gradient_clip, index_sign. */
-#define NPLSI_CONFIG_SIZE 12
+#define NPLSI_CONFIG_SIZE 11
 #define NPLSI_HYPER_SIZE 5
 const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
 int nplsi_split(int n, uint64_t seed, int32_t* indices);
+/* Every fit starts from a fresh initialization drawn from seed. */
 int nplsi_fit(void* handle, const float* x, const float* z, const float* y,
-              int n, uint64_t seed, int reset);
+              int n, uint64_t seed);
 /* Prediction mode: 0=linear predictor, 1=probability, 2=partial hazard,
    3=g(X beta). z may be NULL for mode 3 or q=0. */
 int nplsi_predict(void* handle, const float* x, const float* z, int n,
@@ -31,7 +32,8 @@ int nplsi_get_weights(void* handle, float* weights);
 int nplsi_set_weights(void* handle, const float* weights, float sign);
 int nplsi_canonicalize(void* handle);
 /* Entire pairs-bootstrap workflow, with native threads and no callbacks.
-   Each replicate has its own model and RNG stream. The source model is unchanged.
+   Each replicate has its own model and RNG stream and refits from a fresh seeded
+   initialization; only the source model's configuration is used, and it is unchanged.
    n_jobs: -1=all available CPUs, -2=all but one, positive=worker limit.
    draws: caller-owned B x D doubles, ordered by replicate, where
           D=p+q+intercept+grid_size and columns are beta, gamma, intercept, g(grid).
@@ -40,8 +42,8 @@ int nplsi_canonicalize(void* handle);
    grid may be NULL if grid_size=0. On failure all outputs must be discarded.
    workers_used reports the actual thread count, capped by CPU allocation and B. */
 int nplsi_bootstrap(void* handle, const float* x, const float* z, const float* y,
-                    int n, int B, uint64_t seed, int n_jobs, int warmstart,
-                    const float* grid, int grid_size, double ci, int quantile_method,
+                    int n, int B, uint64_t seed, int n_jobs, const float* grid,
+                    int grid_size, double ci, int quantile_method,
                     double* draws, double* summary, int32_t* workers_used);
 /* Diagnostics and resource planning. workers returns 0 on invalid input. */
 int nplsi_bootstrap_workers(int n_jobs, int B);

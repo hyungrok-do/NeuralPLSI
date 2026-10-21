@@ -17,10 +17,10 @@ class NativeBootstrapTest(unittest.TestCase):
             if family == 'cox':
                 # Different bootstrap splits must rebuild cached tied risk sets.
                 y[:, 0] = np.ceil(y[:, 0]*2)
-            for warmstart in (False, True):
-                with self.subTest(family=family, warmstart=warmstart):
+            for initial in (False, True):
+                with self.subTest(family=family, initial=initial):
                     model = NeuralPLSI(family=family, max_epoch=31, hidden_units=5,
-                        n_hidden_layers=3, warmstart=warmstart, initial=not warmstart,
+                        n_hidden_layers=3, initial=initial,
                         add_intercept=family!='cox').fit(x, z, y, random_state=4)
                     before = model.net.to_bytes()
                     grid = np.linspace(-2, 2, 7)
@@ -29,11 +29,11 @@ class NativeBootstrapTest(unittest.TestCase):
                     for key in ('beta_samples', 'gamma_samples', 'g_samples', 'beta_se', 'g_lb'):
                         np.testing.assert_array_equal(a[key], b[key])
                     # Independently fit each actual resampled dataset through the
-                    # single-fit API to check seeds, warm/cold reset and orientation.
+                    # single-fit API to check seeds, initialization and orientation.
                     for r in range(4):
                         rows = bootstrap_indices(len(x), 9, r)
                         fitted = NativeModel.from_bytes(before)
-                        fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r, reset=not warmstart)
+                        fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r)
                         self.assertEqual(fitted.fit_diagnostics['joint_epochs'],31)
                         self.assertGreater(fitted.fit_diagnostics['gamma_iterations'],0)
                         beta, gamma, intercept = fitted.coefficients()
@@ -89,8 +89,8 @@ class NativeBootstrapTest(unittest.TestCase):
             with self.assertRaises(ValueError): bootstrap_options(*options)
         # Cold linear initialization cannot identify an exposure direction on
         # all-zero X. Fail visibly inside a worker instead of omitting the draw.
-        model = NeuralPLSI(max_epoch=0, initial=True, warmstart=False)
-        model.net = NativeModel(2, 0, max_epoch=0, initial=True, warmstart=False)
+        model = NeuralPLSI(max_epoch=0, initial=True)
+        model.net = NativeModel(2, 0, max_epoch=0, initial=True)
         state = model.net.to_bytes()
         x, z, y = np.zeros((20, 2)), np.empty((20, 0)), np.arange(20.)
         for jobs in (1, 3):

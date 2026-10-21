@@ -9,8 +9,8 @@
 
 int main(int argc,char** argv) {
     try {
-        // p, q, width, layers, intercept, family, activation, size, batch, epochs, init, warmstart
-        int32_t config[NPLSI_CONFIG_SIZE]={2,1,8,2,0,0,0,101,32,200,0,1};
+        // p, q, width, layers, intercept, family, activation, size, batch, epochs, init
+        int32_t config[NPLSI_CONFIG_SIZE]={2,1,8,2,0,0,0,101,32,200,0};
         float hyper[NPLSI_HYPER_SIZE]={.001f,.0001f,.00001f,1.f,1.f};
         using Model=std::unique_ptr<void,decltype(&nplsi_destroy)>;
         Model model(nplsi_create(config,hyper,19),nplsi_destroy);
@@ -23,7 +23,7 @@ int main(int argc,char** argv) {
         }
         auto check=[](int status) {if(status) throw std::runtime_error(nplsi_error());};
         check(nplsi_predict(model.get(),x.data(),z.data(),n,128,0,before.data()));
-        check(nplsi_fit(model.get(),x.data(),z.data(),y.data(),n,19,1));
+        check(nplsi_fit(model.get(),x.data(),z.data(),y.data(),n,19));
         check(nplsi_predict(model.get(),x.data(),z.data(),n,128,0,after.data()));
         double initial=0.,trained=0.;
         for(int i=0;i<n;++i) {initial+=std::pow(before[i]-y[i],2); trained+=std::pow(after[i]-y[i],2);}
@@ -33,10 +33,10 @@ int main(int argc,char** argv) {
         const int B=8,D=2+1+3; // beta, gamma, three link-grid values
         float grid[3]={-1.f,0.f,1.f}; int32_t workers=0;
         std::vector<double> draws(B*D),summary(4*D),serial(B*D),serial_summary(4*D);
-        check(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,31,2,1,
+        check(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,31,2,
                               grid,3,.95,0,draws.data(),summary.data(),&workers));
         std::cout<<"Native bootstrap: "<<B<<" draws using "<<workers<<" C++ workers\n";
-        check(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,31,1,1,
+        check(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,31,1,
                               grid,3,.95,0,serial.data(),serial_summary.data(),&workers));
         if(draws!=serial || summary!=serial_summary)
             throw std::runtime_error("Bootstrap changed with thread count");

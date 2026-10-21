@@ -27,7 +27,7 @@ class NeuralPLSI(_SummaryMixin):
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, warmstart=True, device='cpu', backend='cpp'):
+                 initial=False, device='cpu', backend='cpp'):
         if family not in FAMILIES:
             raise ValueError('family must be continuous, binary, or cox')
         if family == 'cox' and add_intercept:
@@ -50,13 +50,13 @@ class NeuralPLSI(_SummaryMixin):
         self.learning_rate, self.weight_decay, self.weight_decay_beta = learning_rate, weight_decay, weight_decay_beta
         self.hidden_units, self.n_hidden_layers, self.grad_clip = int(hidden_units), int(n_hidden_layers), grad_clip
         self.num_workers, self.add_intercept, self.activation = 0, bool(add_intercept), activation
-        self.initial, self.warmstart, self.device, self.backend = bool(initial), bool(warmstart), 'cpu', 'cpp'
+        self.initial, self.device, self.backend = bool(initial), 'cpu', 'cpp'
         self.net = None
 
     def get_params(self, deep=True):
         names = ('family', 'max_epoch', 'batch_size', 'learning_rate', 'weight_decay', 'weight_decay_beta',
                  'hidden_units', 'n_hidden_layers', 'grad_clip', 'num_workers', 'add_intercept',
-                 'activation', 'initial', 'warmstart', 'device', 'backend')
+                 'activation', 'initial', 'device', 'backend')
         return {name: getattr(self, name) for name in names}
 
     def fit(self, X, Z, y, random_state=0):
@@ -135,7 +135,7 @@ class NeuralPLSI(_SummaryMixin):
         model = cls(family=next(k for k, v in FAMILIES.items() if v == c[5]),
             activation=next(k for k, v in ACTIVATIONS.items() if v == c[6]),
             hidden_units=int(c[2]), n_hidden_layers=int(c[3]), add_intercept=bool(c[4]),
-            batch_size=int(c[8]), max_epoch=int(c[9]), initial=bool(c[10]), warmstart=bool(c[11]),
+            batch_size=int(c[8]), max_epoch=int(c[9]), initial=bool(c[10]),
             learning_rate=float(h[0]), weight_decay=float(h[1]), weight_decay_beta=float(h[2]), grad_clip=float(h[3]))
         model.net = net
         return model
@@ -149,9 +149,11 @@ class NeuralPLSI(_SummaryMixin):
         threads, capped by CPU affinity, cgroup quota, SLURM allocation and B.
         Replicate seeds are independent of worker scheduling. A failed draw
         raises an error and invalidates the whole bootstrap result.
-        Each refit uses the same full epoch budget, validation checkpoint
-        selection and exact gamma fit as the original fit, including with warm
-        starts.
+        Each refit starts from a fresh seeded initialization (cold start) and
+        uses the same full epoch budget, validation checkpoint selection and
+        exact gamma fit as the original fit. Warm starts from the original fit
+        were removed: refits inherited its optimizer error, so the bootstrap
+        understated the variability of beta.
 
         'linear' and 'weibull' choose percentile interpolation. They do not
         change the draws or correct estimator bias. The native bootstrap RNG
@@ -166,7 +168,7 @@ class NeuralPLSI(_SummaryMixin):
         self._clear_inference()
         draws, summary, workers = self.net.bootstrap(X, Z, y, n_samples=n_samples,
             random_state=random_state, ci=ci, g_grid=grid if g_grid is not None else None,
-            n_jobs=n_jobs, warmstart=self.warmstart, quantile_method=quantile_method)
+            n_jobs=n_jobs, quantile_method=quantile_method)
         out = dict(beta_hat=self.beta, gamma_hat=self.gamma,
                    quantile_method=quantile_method, ci=ci, n_bootstrap=n_samples,
                    bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL,

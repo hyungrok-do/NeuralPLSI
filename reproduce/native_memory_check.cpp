@@ -28,7 +28,7 @@ int main(int argc,char** argv) {
             throw std::invalid_argument("Require n>=10, B=0 or B>=2, nonzero workers and positive epochs");
         constexpr int p=8,q=3,h=32,depth=2;
         int32_t config[NPLSI_CONFIG_SIZE]={p,q,h,depth,0,0,0,
-            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,64,epochs,0,1};
+            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,64,epochs,0};
         float hyper[NPLSI_HYPER_SIZE]={0.f,1e-4f,1e-5f,1.f,1.f};
         std::vector<float> x(size_t(n)*p),z(size_t(n)*q),y(n);
         for(int i=0;i<n;++i) {
@@ -40,11 +40,11 @@ int main(int argc,char** argv) {
         std::unique_ptr<void,decltype(&nplsi_destroy)> model(nplsi_create(config,hyper,0),nplsi_destroy);
         if(!model) throw std::runtime_error(nplsi_error());
         auto start=std::chrono::steady_clock::now();
-        checked(nplsi_fit(model.get(),x.data(),z.data(),y.data(),n,0,1));
+        checked(nplsi_fit(model.get(),x.data(),z.data(),y.data(),n,0));
         int32_t workers=0;
         if(B) {
             std::vector<double> draws(size_t(B)*(p+q)),summary(4*(p+q));
-            checked(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,11,jobs,1,
+            checked(nplsi_bootstrap(model.get(),x.data(),z.data(),y.data(),n,B,11,jobs,
                                     nullptr,0,.95,0,draws.data(),summary.data(),&workers));
         }
         double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();

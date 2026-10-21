@@ -63,7 +63,7 @@ def library():
         'nplsi_create': ([ip, fp, seed], pointer),
         'nplsi_destroy': ([pointer], None),
         'nplsi_split': ([integer, seed, ip], integer),
-        'nplsi_fit': ([pointer, fp, fp, fp, integer, seed, integer], integer),
+        'nplsi_fit': ([pointer, fp, fp, fp, integer, seed], integer),
         'nplsi_predict': ([pointer, fp, fp, integer, integer, integer, fp], integer),
         'nplsi_link': ([pointer, fp, integer, fp], integer),
         'nplsi_coefficients': ([pointer, fp, fp, fp], integer),
@@ -71,7 +71,7 @@ def library():
         'nplsi_get_weights': ([pointer, fp], integer),
         'nplsi_set_weights': ([pointer, fp, ctypes.c_float], integer),
         'nplsi_canonicalize': ([pointer], integer),
-        'nplsi_bootstrap': ([pointer, fp, fp, fp, integer, integer, seed, integer, integer,
+        'nplsi_bootstrap': ([pointer, fp, fp, fp, integer, integer, seed, integer,
                              fp, integer, ctypes.c_double, integer, dp, dp, ip], integer),
         'nplsi_bootstrap_workers': ([integer, integer], integer),
         'nplsi_bootstrap_indices': ([integer, seed, integer, ip], integer),
@@ -113,13 +113,13 @@ class NativeModel:
     def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, add_intercept=False,
                  family='continuous', activation='ELU', batch_size=64, max_epoch=200,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-                 grad_clip=1., initial=False, warmstart=True, random_state=0):
+                 grad_clip=1., initial=False, random_state=0):
         self._library = library()
         self._handle = None
         self.config = np.array([p, q, hidden_units, n_hidden_layers, int(add_intercept),
             FAMILIES[family], ACTIVATIONS[activation],
             parameter_count(p, q, hidden_units, n_hidden_layers, add_intercept),
-            batch_size, max_epoch, int(initial), int(warmstart)], dtype=np.int32)
+            batch_size, max_epoch, int(initial)], dtype=np.int32)
         self.hyper = np.array([learning_rate, weight_decay, weight_decay_beta, grad_clip, 1.], dtype=np.float32)
         self._handle = self._library.nplsi_create(self.config, self.hyper, seed_value(random_state))
         self._check_handle()
@@ -138,7 +138,7 @@ class NativeModel:
         self.close()
 
     def _refresh(self):
-        self.config, self.hyper = np.empty(12, dtype=np.int32), np.empty(5, dtype=np.float32)
+        self.config, self.hyper = np.empty(11, dtype=np.int32), np.empty(5, dtype=np.float32)
         diagnostics = np.empty(3, dtype=np.float64)
         checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
         self.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_iterations=int(diagnostics[1]),
@@ -203,14 +203,14 @@ class NativeModel:
         checked(self._library.nplsi_coefficients(self._handle, beta, gamma, intercept))
         return beta, gamma, intercept if self.config[4] else None
 
-    def fit(self, X, Z, y, random_state=0, reset=True):
+    def fit(self, X, Z, y, random_state=0):
         from ..base import validate_data
         family = next(k for k, v in FAMILIES.items() if v == self.config[5])
         X, Z, y = validate_data(X, Z, y, family, dtype=np.float32)
         X, Z, y = [np.ascontiguousarray(a) for a in (X, Z, y)]
         if X.shape[1] != self.config[0] or Z.shape[1] != self.config[1]:
             raise ValueError('Fit dimensions differ from the native model')
-        checked(self._library.nplsi_fit(self._handle, X, Z, y, len(X), seed_value(random_state), int(reset)))
+        checked(self._library.nplsi_fit(self._handle, X, Z, y, len(X), seed_value(random_state)))
         self._refresh()
         return self
 
@@ -231,7 +231,7 @@ class NativeModel:
         return result
 
     def bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=.95,
-                  g_grid=None, n_jobs='auto', warmstart=True, quantile_method='linear'):
+                  g_grid=None, n_jobs='auto', quantile_method='linear'):
         """One native call for resampling, fitting, threads, SEs and intervals."""
         from ..base import validate_data
         family = next(k for k, v in FAMILIES.items() if v == self.config[5])
@@ -248,7 +248,7 @@ class NativeModel:
         workers = np.empty(1, dtype=np.int32)
         jobs, method = options
         checked(self._library.nplsi_bootstrap(self._handle, X, Z, y, len(X), n_samples,
-            seed_value(random_state), jobs, int(bool(warmstart)), grid, len(grid), float(ci),
+            seed_value(random_state), jobs, grid, len(grid), float(ci),
             method, draws, summary, workers))
         return draws, summary, int(workers[0])
 
