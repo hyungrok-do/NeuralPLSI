@@ -293,8 +293,12 @@ def combined(cells, out):
     size_text = ', '.join(f'n = {n}' for n in sizes)
     fig.suptitle(f'NeuralPLSI and SplinePLSI simulation inference, {size_text}, '
                  f'{replicate_label(cells)} per setting', x=0.0, ha='left', fontsize=16)
-    fig.legend(handles=legend_handles(series, sizes, 'target', 'mc', 'sparse'), loc='outside lower center',
-               ncol=len(series)+3, frameon=False, columnspacing=2.0)
+    handles = legend_handles(series, sizes, 'target', 'mc', 'sparse')
+    rows = 1 if len(series) < 3 else 2
+    ncol = -(-len(handles)//rows)
+    # Legends fill column by column; reorder so each row reads left to right.
+    handles = [handles[r*ncol+c] for c in range(ncol) for r in range(rows) if r*ncol+c < len(handles)]
+    fig.legend(handles=handles, loc='outside lower center', ncol=ncol, frameon=False, columnspacing=2.0)
     save(fig, out, 'inference')
 
 
