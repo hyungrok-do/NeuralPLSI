@@ -6,28 +6,34 @@ import numpy as np
 
 from .base import _SummaryMixin, validate_data
 from .native import (NativeModel, FAMILIES, ACTIVATIONS, seed_value,
-                     bootstrap_options, link_grid, BOOTSTRAP_RNG_PROTOCOL)
+                     bootstrap_options, link_grid, BOOTSTRAP_RNG_PROTOCOL, training_options)
 
 
 
 class NeuralPLSI(_SummaryMixin):
-    """Fit g(X @ beta) + Z @ gamma using native C++ minibatch AdamW.
+    """Fit g(X @ beta) + Z @ gamma using native C++ alternating optimization.
 
     C++ owns initialization, the network, gradients, optimizer, data splitting,
     shuffling, prediction, serialization and the entire bootstrap workflow.
     Python handles array input and summary tables. CPU only, with float32 weights.
 
-    Each fit uses an internal 80/20 training/validation split. Joint training
-    runs max_epoch epochs and restores its best validation checkpoint without
-    stopping early. With beta and the link fixed, gamma and the optional
-    intercept are then fitted exactly by deterministic Newton iterations on all
-    rows, training and validation, with g(X @ beta) as an offset.
+    By default every row is used for fitting. The link receives minibatch AdamW
+    updates with the coefficients fixed. Every link_epochs epochs, a damped
+    full-data Gauss-Newton coefficient step is followed by an exact conditional
+    gamma fit. beta stays on the unit sphere and receives no Adam/decay updates.
+    max_epoch is the total neural epoch budget, with no early stopping.
+    validation_fraction>0 selects a checkpoint at completed block boundaries.
+    optimizer='joint' retains the former algorithm (default 20% holdout),
+    including its final gamma fit on both training and validation rows.
     """
     def __init__(self, family='continuous', max_epoch=200, batch_size=64,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
                  hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, device='cpu', backend='cpp'):
+                 initial=False, device='cpu', backend='cpp', optimizer='alternating',
+                 link_epochs=1, validation_fraction=None):
+        self.optimizer, self.link_epochs, self.validation_fraction = training_options(
+            optimizer, link_epochs, validation_fraction)
         if family not in FAMILIES:
             raise ValueError('family must be continuous, binary, or cox')
         if family == 'cox' and add_intercept:
@@ -56,7 +62,7 @@ class NeuralPLSI(_SummaryMixin):
     def get_params(self, deep=True):
         names = ('family', 'max_epoch', 'batch_size', 'learning_rate', 'weight_decay', 'weight_decay_beta',
                  'hidden_units', 'n_hidden_layers', 'grad_clip', 'num_workers', 'add_intercept',
-                 'activation', 'initial', 'device', 'backend')
+                 'activation', 'initial', 'device', 'backend', 'optimizer', 'link_epochs', 'validation_fraction')
         return {name: getattr(self, name) for name in names}
 
     def fit(self, X, Z, y, random_state=0):
@@ -136,7 +142,8 @@ class NeuralPLSI(_SummaryMixin):
             activation=next(k for k, v in ACTIVATIONS.items() if v == c[6]),
             hidden_units=int(c[2]), n_hidden_layers=int(c[3]), add_intercept=bool(c[4]),
             batch_size=int(c[8]), max_epoch=int(c[9]), initial=bool(c[10]),
-            learning_rate=float(h[0]), weight_decay=float(h[1]), weight_decay_beta=float(h[2]), grad_clip=float(h[3]))
+            learning_rate=float(h[0]), weight_decay=float(h[1]), weight_decay_beta=float(h[2]), grad_clip=float(h[3]),
+            optimizer=net.optimizer, link_epochs=net.link_epochs, validation_fraction=net.validation_fraction)
         model.net = net
         return model
 
@@ -150,8 +157,8 @@ class NeuralPLSI(_SummaryMixin):
         Replicate seeds are independent of worker scheduling. A failed draw
         raises an error and invalidates the whole bootstrap result.
         Each refit starts from a fresh seeded initialization (cold start) and
-        uses the same full epoch budget, validation checkpoint selection and
-        exact gamma fit as the original fit. Warm starts from the original fit
+        uses the same optimizer, epoch budget, holdout policy and conditional
+        gamma fit as the original fit. Warm starts from the original fit
         were removed: refits inherited its optimizer error, so the bootstrap
         understated the variability of beta.
 
@@ -170,6 +177,8 @@ class NeuralPLSI(_SummaryMixin):
             random_state=random_state, ci=ci, g_grid=grid if g_grid is not None else None,
             n_jobs=n_jobs, quantile_method=quantile_method)
         out = dict(beta_hat=self.beta, gamma_hat=self.gamma,
+                   optimizer=self.net.optimizer, link_epochs=self.net.link_epochs,
+                   validation_fraction=self.net.validation_fraction,
                    quantile_method=quantile_method, ci=ci, n_bootstrap=n_samples,
                    bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL,
                    n_workers=workers)

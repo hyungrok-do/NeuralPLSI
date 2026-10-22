@@ -50,7 +50,7 @@ class NativeWorkspacesTest(unittest.TestCase):
             with self.subTest(family=family):
                 x, z, y = self.data(family, 113)
                 options = dict(hidden_units=4, n_hidden_layers=3, max_epoch=200,
-                               batch_size=17, family=family, add_intercept=family!='cox')
+                               batch_size=17, family=family, add_intercept=family!='cox', optimizer='joint')
                 actual = NativeModel(3, 2, **options).fit(x, z, y, random_state=13)
                 expected = NativeModel(3, 2, **options, random_state=13)
                 train, valid = training_validation_indices(len(x), 13)
@@ -64,7 +64,8 @@ class NativeWorkspacesTest(unittest.TestCase):
                 expected.resolve_sign_ambiguity()
                 np.testing.assert_array_equal(actual.weights, expected.weights)
                 np.testing.assert_array_equal(actual.hyper, expected.hyper)
-                np.testing.assert_array_equal(list(actual.fit_diagnostics.values()), diagnostics)
+                np.testing.assert_array_equal([actual.fit_diagnostics[k] for k in
+                    ('epochs', 'gamma_iterations', 'validation_loss')], diagnostics)
                 self.assertEqual(diagnostics[0], 200)
                 self.assertGreater(diagnostics[1], 0)  # gamma Newton iterations
 
@@ -74,7 +75,7 @@ class NativeWorkspacesTest(unittest.TestCase):
                 # Validation crosses the internal 256-row inference boundary.
                 x, z, y = self.data(family, 1303)
                 model = NativeModel(3, 2, hidden_units=5, n_hidden_layers=3,
-                    family=family, max_epoch=8, batch_size=47,
+                    family=family, max_epoch=8, batch_size=47, optimizer='joint',
                     add_intercept=family!='cox').fit(x, z, y, random_state=13)
                 _, valid = training_validation_indices(len(x), 13)
                 risk = model.predict(x[valid], z[valid])

@@ -27,7 +27,7 @@ class TrainingPhasesTest(unittest.TestCase):
         self.assertTrue(np.any(a[active]!=net.weights[active]))
 
     def test_returned_model_matches_recorded_validation_loss(self):
-        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=16).fit(self.X,self.Z,self.y,random_state=19)
+        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=16,optimizer='joint').fit(self.X,self.Z,self.y,random_state=19)
         _,valid=training_validation_indices(len(self.X),19)
         loss=np.mean((model.predict(self.X[valid],self.Z[valid]).astype(float)-self.y[valid])**2)
         self.assertAlmostEqual(loss,model.fit_diagnostics['validation_loss'],places=6)
@@ -36,7 +36,7 @@ class TrainingPhasesTest(unittest.TestCase):
         for epochs in (0, 1, 40, 80):
             with self.subTest(epochs=epochs):
                 model=NeuralPLSI(max_epoch=epochs,hidden_units=4,n_hidden_layers=1,
-                                batch_size=1000,learning_rate=0)
+                                batch_size=1000,learning_rate=0,optimizer='joint')
                 model.fit(self.X,self.Z,self.y,random_state=19)
                 self.assertEqual(model.fit_diagnostics['joint_epochs'],epochs)
                 # max_epoch=0 performs initialization only, without the gamma fit.
