@@ -123,7 +123,7 @@ from models import NeuralPLSI
 
 model = NeuralPLSI(family="binary", activation="ELU")
 model.fit(X, Z, y, random_state=0)
-boot = model.inference_bootstrap(X, Z, y, n_samples=999, n_jobs=8)
+boot = model.inference_bootstrap(X, Z, y, n_samples=1000, n_jobs=8)
 probability = model.predict_proba(X, Z)
 
 model.save("exposure_model.nplsi")
@@ -418,7 +418,7 @@ mkdir -p logs
 export NN_BACKEND=cpp
 export NN_OPTIMIZER=alternating
 export NN_VALIDATION_FRACTION=0
-export N_BOOTSTRAP=999
+export N_BOOTSTRAP=1000
 export N_REPLICATES=500
 export OUT_DIR=output/simulation
 sbatch reproduce/run_simulation.slurm
@@ -455,7 +455,7 @@ For a local run:
 ```bash
 python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
-  --n_bootstrap 999 --bootstrap_jobs 8 --out output/simulation
+  --n_bootstrap 1000 --bootstrap_jobs 8 --out output/simulation
 ```
 
 For a smaller point-estimation diagnostic that separates fitting sample size
