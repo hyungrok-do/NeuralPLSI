@@ -429,7 +429,8 @@ python reproduce/plot_inference.py --input output/simulation
 ```
 
 `plot_inference.py` draws one figure that compares the two estimators:
-interval coverage, SE calibration, RMSE and pointwise coverage of the g band.
+interval coverage, SE calibration and RMSE for each coordinate of β and γ, RMSE
+of g, and pointwise coverage of the g band.
 The summaries of the current n = 2000 run are in `results/simulation`.
 
 Reports preserve sample size and exposure distribution, calculate coverage

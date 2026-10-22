@@ -29,11 +29,11 @@ The `source_sha256` recorded in every result row matches these commits.
 ## Files
 
 - `inference.png` / `.pdf`, one figure with four panels:
-  - A: coverage of the 95% intervals for β and γ. The shaded band is the Monte-Carlo range at exact 0.95 coverage.
-  - B: mean bootstrap SE / empirical SD.
-  - C: RMSE of β, γ and g. g is measured on |u| ≤ 2.
+  - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
+  - B: mean bootstrap SE / empirical SD for each coordinate.
+  - C: RMSE of each coordinate, and of g on |u| ≤ 2.
   - D: pointwise coverage of the 95% band for g.
-- `inference.csv`: the numbers in panels A-C for each block. It also has `rmse_bagged`, the RMSE of the bagged estimate (the mean of the bootstrap refits).
+- `inference.csv`: the numbers in panels A-C for each coordinate, plus block averages (`coordinate` = `all`, used for the ranges below). It also has `rmse_bagged`, the RMSE of the bagged estimate (the mean of the bootstrap refits).
 - `summary_aggregated.csv`: bias (MAB), empirical SD, mean bootstrap SE and coverage for each β/γ block.
 - `summary_table.csv` / `.tex`: the same quantities for each coefficient.
 - `comparison_table_n2000_normal.csv` / `.tex`: per-coefficient bias, SD, SE and coverage, with the two estimators side by side.
@@ -49,6 +49,11 @@ coefficient.
   - NeuralPLSI covers 0.940-0.955; SplinePLSI covers 0.942-0.969.
   - SE/SD is 0.98-1.03 for both. The one exception is SplinePLSI linear-binary at 1.14, which over-covers (0.969), as in the previous run.
   - The previous NeuralPLSI run over-covered (0.967-0.984). That came from optimizer noise in the single fit. The bagged β is now no more accurate than the single fit (RMSE within 0.2%), so that noise is gone.
+- **Per coordinate (panels A-C).**
+  - NeuralPLSI's coverage is 0.922-0.968. Five of its 99 coordinates are below the Monte-Carlo range, about what chance alone gives, and none are above it. SE/SD is 0.91-1.09.
+  - SplinePLSI's coverage is 0.918-0.980, with 12 of 99 outside the range. Five of those are linear-binary β coordinates that over-cover: SE/SD is 1.11-1.21 for all eight β coordinates there. Elsewhere its SE/SD is 0.93-1.09.
+  - The lowest β coordinate for both is sigmoid-binary β7, a true zero, at 0.922. SplinePLSI's lowest γ coordinate is S-shape binary γ1 at 0.918. The two true zeros (β7, β8) otherwise behave like the other coordinates.
+  - The per-coordinate RMSE ratio NeuralPLSI / SplinePLSI is 0.92-1.02. NeuralPLSI's largest gains are 6-8% on the linear-binary β coordinates.
 - **β accuracy.** NeuralPLSI and SplinePLSI have the same RMSE to within 0.4% in 6 settings. NeuralPLSI is about 1% lower for linear-Cox and sigmoid-binary, and 6% lower for linear-binary. (In the previous run SplinePLSI was 11-16% lower.)
 - **γ.**
   - Coverage is 0.933-0.945 for NeuralPLSI and 0.925-0.945 for SplinePLSI. SE/SD is 0.98-1.02 for both.

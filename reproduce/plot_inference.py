@@ -4,18 +4,20 @@ Usage:
     python reproduce/plot_inference.py --input output/simulation
 
 Writes <input>/figures/inference.{png,pdf}, one figure with four panels:
-  A  95% bootstrap CI coverage of beta and gamma
-  B  mean bootstrap SE / empirical SD
-  C  estimation accuracy: RMSE of beta, gamma and g (over |u| <= 2)
+  A  95% bootstrap CI coverage of each coordinate of beta and gamma
+  B  mean bootstrap SE / empirical SD of each coordinate
+  C  estimation accuracy: RMSE of each coordinate, and of g over |u| <= 2
   D  pointwise coverage of the bootstrap band for g
 
-and inference.csv, the block-level numbers shown in panels A-C plus the RMSE
-of the bagged estimate (the mean of the bootstrap refits).
+and inference.csv, the per-coordinate numbers shown in panels A-C, block
+averages (coordinate 'all') and the RMSE of the bagged estimate (the mean of
+the bootstrap refits).
 
 Each estimator (and sample size, when several are present) is one series.
-Monte-Carlo error for block coverage is computed across replicates: each
-replicate contributes its mean coverage over the block's coordinates, because
-coordinates within one fit are dependent.
+The shaded band in panel A is the Monte-Carlo range of one coordinate's
+coverage at exact 0.95. Monte-Carlo error for block coverage is computed
+across replicates: each replicate contributes its mean coverage over the
+block's coordinates, because coordinates within one fit are dependent.
 """
 
 import argparse
@@ -30,6 +32,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import MultipleLocator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from reproduce.result_io import true_g
@@ -96,19 +99,36 @@ def block_summary(cell, par):
                 rmse_bagged=np.sqrt(np.mean((cell[f'{par}_bootstrap_mean']-truth)**2)))
 
 
+def coordinate_summary(cell, par):
+    hit = cell[f'{par}_cov']
+    truth = cell[f'{par}_est'][0]-cell[f'{par}_bias'][0]  # the true coefficients are fixed
+    sd = cell[f'{par}_est'].std(axis=0, ddof=1)
+    return dict(truth=truth, cov=hit.mean(axis=0), mc=Z*hit.std(axis=0, ddof=1)/np.sqrt(len(hit)),
+                ratio=cell[f'{par}_se'].mean(axis=0)/sd,
+                rmse=np.sqrt(np.mean(cell[f'{par}_bias']**2, axis=0)),
+                rmse_bagged=np.sqrt(np.mean((cell[f'{par}_bootstrap_mean']-truth)**2, axis=0)))
+
+
 def write_table(cells, out):
     path = out/'inference.csv'
+    keys = ('cov', 'mc', 'ratio', 'rmse', 'rmse_bagged')
     with open(path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['model', 'n', 'g_fn', 'outcome', 'block', 'coverage', 'coverage_mc',
-                         'se_sd_ratio', 'rmse', 'rmse_bagged', 'n_reps'])
+        writer.writerow(['model', 'n', 'g_fn', 'outcome', 'block', 'coordinate', 'truth', 'coverage',
+                         'coverage_mc', 'se_sd_ratio', 'rmse', 'rmse_bagged', 'n_reps'])
         for (model, n, shape, outcome), cell in sorted(cells.items()):
+            setting = [MODEL_LABEL[model], n, shape, outcome]
+            reps = len(cell['beta_est'])
             for par in ('beta', 'gamma', 'g'):
                 summary = block_summary(cell, par)
-                writer.writerow([MODEL_LABEL[model], n, shape, outcome, par]
-                                + [f'{summary[k]:.6g}' if k in summary else ''
-                                   for k in ('cov', 'mc', 'ratio', 'rmse', 'rmse_bagged')]
-                                + [len(cell['beta_est'])])
+                writer.writerow(setting+[par, 'all', '']
+                                + [f'{summary[k]:.6g}' if k in summary else '' for k in keys]+[reps])
+                if par == 'g':
+                    continue
+                summary = coordinate_summary(cell, par)
+                for j, truth in enumerate(summary['truth']):
+                    writer.writerow(setting+[par, j+1, f'{truth:.6g}']
+                                    + [f'{summary[k][j]:.6g}' for k in keys]+[reps])
     print(f'wrote {path}')
 
 
@@ -150,49 +170,72 @@ def save(fig, out, name):
     print(f'wrote {out/name}.{{png,pdf}}')
 
 
-def draw_forest(container, cells, series, sizes, key, xlabel, parameters=('beta', 'gamma'),
-                ref=None, xlim=None, band=None, log=False):
-    rows = [(par, s) for par in parameters for s in SHAPES]
+def coordinate_rows(cells, with_g):
+    """(block, coordinate, axis label) for each row of panels A-C."""
+    summary = {par: coordinate_summary(next(iter(cells.values())), par) for par in ('beta', 'gamma')}
+    rows = [(par, j, rf'$\{par}_{{{j+1}}} = {truth:.2g}$')
+            for par in ('beta', 'gamma') for j, truth in enumerate(summary[par]['truth'])]
+    return rows+([('g', None, SYMBOL['g'])] if with_g else [])
+
+
+def setting_axes(container, xlabel):
+    """One axes per (outcome, shape), grouped under outcome headings; all share x and y."""
+    # The first group also holds the row labels, so it gets more width.
+    groups = container.subfigures(1, 3, wspace=0.01, width_ratios=[1.2, 1, 1])
+    axes = []
+    for group, outcome in zip(groups, OUTCOMES):
+        group.suptitle(OUTCOME_LABEL[outcome], fontsize=12.5)
+        group.supxlabel(xlabel, fontsize=11)
+        for shape, ax in zip(SHAPES, group.subplots(1, 3)):
+            ax.set_title(SHAPE_LABEL[shape], fontsize=11, pad=4)
+            axes.append((outcome, shape, ax))
+    first = axes[0][2]
+    for _, _, ax in axes[1:]:
+        ax.sharex(first)
+        ax.sharey(first)
+        ax.tick_params(labelleft=False)
+    return axes
+
+
+def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
+                     ref=None, xlim=None, band=None, log=False, step=None):
+    rows = coordinate_rows(cells, with_g)
     yy = np.arange(len(rows))
-    offsets = dict(zip(series, np.linspace(-0.2, 0.2, len(series)) if len(series) > 1 else [0.]))
-    axes = container.subplots(1, 3, sharey=True, sharex=True)
+    offsets = dict(zip(series, np.linspace(-0.22, 0.22, len(series)) if len(series) > 1 else [0.]))
+    axes = setting_axes(container, xlabel)
     shown = []
-    for ax, outcome in zip(axes, OUTCOMES):
+    for outcome, shape, ax in axes:
         if band is not None:
             ax.axvspan(*band, **MC_SHADE)
         if ref is not None:
             ax.axvline(ref, zorder=1, **REF_LINE)
-        for k in range(1, len(parameters)):
-            ax.axhline(k*len(SHAPES)-0.5, color='#cbd5e1', lw=0.9, zorder=1)
+        for k in range(1, len(rows)):
+            if rows[k][0] != rows[k-1][0]:
+                ax.axhline(k-0.5, color='#cbd5e1', lw=0.9, zorder=1)
         for s in series:
-            v, e = [], []
-            for par, shape in rows:
-                cell = cells.get(s+(shape, outcome))
-                summary = block_summary(cell, par) if cell else None
-                v.append(summary[key] if summary else np.nan)
-                e.append(summary['mc'] if summary and key == 'cov' else 0.)
-            shown += [x-d for x, d in zip(v, e)]+[x+d for x, d in zip(v, e)]
-            ax.errorbar(v, yy+offsets[s], xerr=e, fmt='none', ecolor=MODEL_COLOR[s[0]],
-                        elinewidth=1.5, capsize=2.5, zorder=2)
-            ax.plot(v, yy+offsets[s], ls='', ms=5.5, mfc='white', mew=1.6, zorder=3, **style(s, sizes))
-        if log:
-            ax.set_xscale('log')
+            cell = cells.get(s+(shape, outcome))
+            if cell is None:
+                continue
+            summary = {par: coordinate_summary(cell, par) for par in ('beta', 'gamma')}
+            v = [block_summary(cell, 'g')['rmse'] if par == 'g' else summary[par][key][j]
+                 for par, j, _ in rows]
+            shown += v
+            ax.plot(v, yy+offsets[s], ls='', ms=4.5, mfc='white', mew=1.4, zorder=3, **style(s, sizes))
         ax.grid(axis='x', which='both' if log else 'major', alpha=0.16, lw=0.7)
+        ax.grid(axis='y', alpha=0.08, lw=0.7)
         ax.set_axisbelow(True)
-        ax.set_title(OUTCOME_LABEL[outcome], pad=6)
-        ax.set_xlabel(xlabel)
+    first = axes[0][2]  # scale, ticks and limits carry over to the shared axes
+    if log:
+        first.set_xscale('log')
+    elif step is not None:
+        first.xaxis.set_major_locator(MultipleLocator(step))
     if xlim is not None:  # widened to keep every estimate visible
         low, high = np.nanmin(shown), np.nanmax(shown)
         pad = .03*(max(high, xlim[1])-min(low, xlim[0]))
-        axes[0].set_xlim(min(xlim[0], low-pad), max(xlim[1], high+pad))
-    axes[0].set_yticks(yy)
-    axes[0].set_yticklabels([SHAPE_LABEL[s] for _, s in rows])
-    axes[0].invert_yaxis()
-    # y in data coordinates so the labels follow invert_yaxis().
-    for i, par in enumerate(parameters):
-        axes[0].text(-0.30, i*len(SHAPES)+(len(SHAPES)-1)/2, SYMBOL[par], fontsize=15,
-                     transform=axes[0].get_yaxis_transform(), ha='center', va='center',
-                     clip_on=False)
+        first.set_xlim(min(xlim[0], low-pad), max(xlim[1], high+pad))
+    first.set_yticks(yy)
+    first.set_yticklabels([label for _, _, label in rows])
+    first.invert_yaxis()
     return axes
 
 
@@ -229,18 +272,17 @@ def combined(cells, out):
     series = sorted({(model, n) for model, n, _, _ in cells}, key=lambda s: (s[1], s[0] != 'NeuralPLSI'))
     sizes = sorted({n for _, n in series})
     reps = min(len(c['beta_est']) for c in cells.values())
-    fig = plt.figure(figsize=(15, 25), layout='constrained')
-    panels = fig.subfigures(4, 1, height_ratios=[4.2, 4.2, 5.8, 9.0], hspace=0.03)
-    titles = ['Coverage of 95% bootstrap CIs',
-              'SE calibration: below 1.0 means the intervals are too narrow',
-              f'Estimation accuracy: RMSE of the point estimates (g over |u| $\\leq$ {DENSE:g})',
+    fig = plt.figure(figsize=(15, 29), layout='constrained')
+    panels = fig.subfigures(4, 1, height_ratios=[5.6, 5.6, 6.0, 9.0], hspace=0.03)
+    titles = ['Coverage of the 95% bootstrap CI for each coordinate of $\\beta$ and $\\gamma$',
+              'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
+              f'Estimation accuracy: RMSE of each coordinate, and of g over |u| $\\leq$ {DENSE:g}',
               'Pointwise coverage of the 95% bootstrap band for g(u)']
-    draw_forest(panels[0], cells, series, sizes, 'cov', 'bootstrap CI coverage',
-                ref=NOMINAL, xlim=(0.85, 1.01), band=mc_band(reps))
-    draw_forest(panels[1], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
-                ref=1.0, xlim=(0.7, 1.3))
-    draw_forest(panels[2], cells, series, sizes, 'rmse', 'RMSE (log scale)',
-                parameters=('beta', 'gamma', 'g'), log=True)
+    draw_coordinates(panels[0], cells, series, sizes, 'cov', 'bootstrap CI coverage',
+                     ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05)
+    draw_coordinates(panels[1], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
+                     ref=1.0, xlim=(0.8, 1.2), step=0.1)
+    draw_coordinates(panels[2], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
     draw_g_coverage(panels[3], cells, series, sizes, reps)
     for panel, letter, title in zip(panels, 'ABCD', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
