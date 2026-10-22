@@ -175,6 +175,39 @@ class AlternatingOptimizerTest(unittest.TestCase):
             np.testing.assert_array_equal(weights, before)
             self.assertEqual(losses[0], losses[1])
 
+    def test_final_gamma_score_uses_the_current_link_after_accepted_or_skipped_beta(self):
+        # Cross the forward chunk boundary, include tied Cox times, and exercise
+        # the p=1 path where beta is always skipped. A stale/rejected link cache
+        # would leave gamma profiled against the wrong offset.
+        for family in ('continuous', 'binary', 'cox'):
+            x, z, y = self.data(family, n=517)
+            for p in (1, 3):
+                with self.subTest(family=family, p=p):
+                    net = NativeModel(p, 2, hidden_units=5, n_hidden_layers=3,
+                        family=family, activation='ELU', max_epoch=7,
+                        batch_size=73, add_intercept=family!='cox').fit(x[:, :p], z, y)
+                    eta = net.predict(x[:, :p], z).astype(float)
+                    _, gamma, intercept = net.coefficients()
+                    design = z.astype(float)
+                    coefficients = gamma.astype(float)
+                    if intercept is not None:
+                        design = np.column_stack([design, np.ones(len(x))])
+                        coefficients = np.r_[coefficients, intercept]
+                    if family == 'continuous':
+                        score = design.T @ (eta-y)
+                    elif family == 'binary':
+                        score = design.T @ (expit(eta)-y)
+                    else:
+                        score = np.zeros(design.shape[1])
+                        for i in np.flatnonzero(y[:, 1]):
+                            risk = y[:, 0] >= y[i, 0]
+                            score += softmax(eta[risk]) @ design[risk]-design[i]
+                    score[:2] += (1e-10 if family=='continuous' else 1e-6)*coefficients[:2]
+                    np.testing.assert_allclose(score/len(x), 0., atol=1e-6)
+                    self.assertEqual(net.fit_diagnostics['joint_epochs'], 7)
+                    self.assertEqual(net.fit_diagnostics['beta_steps_skipped'] if p==1 else
+                                     net.fit_diagnostics['beta_steps'], 7)
+
 
 if __name__ == '__main__':
     unittest.main()

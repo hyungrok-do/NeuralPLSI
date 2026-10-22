@@ -1,0 +1,1243 @@
+{
+  "baseline_commit": "114133d4a94f77a8b7ee83ac4aee1a1e296beea1",
+  "current_commit": "114133d4a94f77a8b7ee83ac4aee1a1e296beea1",
+  "current_library": "core-72e738e4abdfa203746f.so",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+  "settings": {
+    "baseline_ref": "114133d",
+    "n": 2000,
+    "bootstrap": 4,
+    "bootstrap_seed": 11,
+    "seed": 0,
+    "grid": 301,
+    "epochs": 200,
+    "activation": "ELU",
+    "optimizer": "alternating",
+    "validation_fraction": 0.0,
+    "link_epochs": 1,
+    "repeats": 3,
+    "jobs": [
+      1,
+      4
+    ],
+    "outcomes": [
+      "continuous",
+      "binary",
+      "cox"
+    ],
+    "memory_n": 0,
+    "memory_only": false,
+    "out": "output/coefficient_cache_benchmark.json"
+  },
+  "timings": [
+    {
+      "fit_seconds": 3.3964985359998536,
+      "prediction_seconds": 0.002044945998932235,
+      "bootstrap_seconds": 12.800770478999766,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.9668277370001306,
+      "prediction_seconds": 0.004383771993161645,
+      "bootstrap_seconds": 7.932625737994385,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.1941023170002154,
+      "prediction_seconds": 0.002428649000648875,
+      "bootstrap_seconds": 9.969576087998576,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.3822476959976484,
+      "prediction_seconds": 0.005812002003949601,
+      "bootstrap_seconds": 16.500879967999936,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.5093456149988924,
+      "prediction_seconds": 0.00350591500318842,
+      "bootstrap_seconds": 12.870508781998069,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.8903543740016175,
+      "prediction_seconds": 0.0021123429978615604,
+      "bootstrap_seconds": 7.366584237999632,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.0706628460029606,
+      "prediction_seconds": 0.0020412570011103526,
+      "bootstrap_seconds": 4.361517861005268,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.0866788559942506,
+      "prediction_seconds": 0.0038696759947924875,
+      "bootstrap_seconds": 4.177475665004749,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.381345637004415,
+      "prediction_seconds": 0.0037601180010824464,
+      "bootstrap_seconds": 3.0276039899981697,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.1502716780014453,
+      "prediction_seconds": 0.002111246998538263,
+      "bootstrap_seconds": 5.5392967899970245,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.1207467060012277,
+      "prediction_seconds": 0.003626990997872781,
+      "bootstrap_seconds": 4.968095757998526,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.8180407580002793,
+      "prediction_seconds": 0.0017935779978870414,
+      "bootstrap_seconds": 3.1305117520023487,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 401,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 1.0044705040437891,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.2849735820054775,
+      "prediction_seconds": 0.002048146001470741,
+      "bootstrap_seconds": 12.866051049997623,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.033408013994631,
+      "prediction_seconds": 0.0018966990028275177,
+      "bootstrap_seconds": 8.14956045299914,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.0938842269970337,
+      "prediction_seconds": 0.002381546000833623,
+      "bootstrap_seconds": 8.253722400993865,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.1354279709994444,
+      "prediction_seconds": 0.0019130170039716177,
+      "bootstrap_seconds": 12.710711940002511,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.4317846589983674,
+      "prediction_seconds": 0.004096986005606595,
+      "bootstrap_seconds": 13.02386606499931,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.9541801960003795,
+      "prediction_seconds": 0.0020576850001816638,
+      "bootstrap_seconds": 7.892838831998233,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.2555285159978666,
+      "prediction_seconds": 0.0038849440024932846,
+      "bootstrap_seconds": 5.44352449800499,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.129370418995677,
+      "prediction_seconds": 0.0036384740014909767,
+      "bootstrap_seconds": 3.337577541002247,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.9575653539941413,
+      "prediction_seconds": 0.0018828730026143603,
+      "bootstrap_seconds": 3.2394349620008143,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.4544137449993286,
+      "prediction_seconds": 0.004785807002917863,
+      "bootstrap_seconds": 5.303778235000209,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.2561400900012814,
+      "prediction_seconds": 0.002038035003351979,
+      "bootstrap_seconds": 6.023727088999294,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.387983856999199,
+      "prediction_seconds": 0.002114183000230696,
+      "bootstrap_seconds": 3.4874413209981867,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 581,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 0.37331476035890565,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.344367139005044,
+      "prediction_seconds": 0.0017682990001048893,
+      "bootstrap_seconds": 13.174434648994065,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.9881385999979102,
+      "prediction_seconds": 0.0017817929983721115,
+      "bootstrap_seconds": 8.187910346998251,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.0136563629930606,
+      "prediction_seconds": 0.002046041001449339,
+      "bootstrap_seconds": 8.433528724002826,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.393642777999048,
+      "prediction_seconds": 0.001769883994711563,
+      "bootstrap_seconds": 14.466023809996841,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.6155083070043474,
+      "prediction_seconds": 0.0017356399985146709,
+      "bootstrap_seconds": 13.260020417998021,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.063889085999108,
+      "prediction_seconds": 0.0026952300031553023,
+      "bootstrap_seconds": 8.081885824998608,
+      "workers": 1,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.512554289001855,
+      "prediction_seconds": 0.002616843004943803,
+      "bootstrap_seconds": 6.70493736199569,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.618640811997466,
+      "prediction_seconds": 0.003717430001415778,
+      "bootstrap_seconds": 3.177877387002809,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.093739985000866,
+      "prediction_seconds": 0.002045653003733605,
+      "bootstrap_seconds": 2.3806343620017287,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.473565886997676,
+      "prediction_seconds": 0.0022744250018149614,
+      "bootstrap_seconds": 5.906149495996942,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 3.4693967740022345,
+      "prediction_seconds": 0.0017505669966340065,
+      "bootstrap_seconds": 4.5544158430057,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 2.1363418369946885,
+      "prediction_seconds": 0.0019906579982489347,
+      "bootstrap_seconds": 4.020208882000588,
+      "workers": 4,
+      "diagnostics": {
+        "joint_epochs": 200,
+        "gamma_iterations": 575,
+        "validation_loss": null,
+        "beta_steps": 200,
+        "training_loss": 5.885231612615951,
+        "checkpoint_epoch": null,
+        "checkpoint_loss": null,
+        "training_rows": 2000,
+        "validation_rows": 0,
+        "beta_steps_skipped": 0
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    }
+  ],
+  "memory": [],
+  "working_tree_dirty": true,
+  "compiled_binary_sha256": "93e459bcc803332cda61232432bc0479f822ca75dc3ecd4aa65375b20629031e",
+  "final_library": "core-82780f9c57a1b651e11b.so",
+  "final_core_sha256": "8d9fb3ca4cd17d90e2689543b0bd28f1398c9475acdf4dd70518dbe7ec8533f2",
+  "compatibility_checks": {
+    "baseline": "114133d",
+    "cases": [
+      {
+        "family": "continuous",
+        "activation": "ELU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ELU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ELU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ELU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ELU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "LeakyReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "LeakyReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "LeakyReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "LeakyReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "LeakyReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "ReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "Tanh",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "Tanh",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "Tanh",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "Tanh",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "continuous",
+        "activation": "Tanh",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ELU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ELU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ELU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ELU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ELU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "LeakyReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "LeakyReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "LeakyReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "LeakyReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "LeakyReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "ReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "Tanh",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "Tanh",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "Tanh",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "Tanh",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "activation": "Tanh",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ELU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ELU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ELU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ELU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ELU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "LeakyReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "LeakyReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "LeakyReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "LeakyReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "LeakyReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ReLU",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ReLU",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ReLU",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ReLU",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "ReLU",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "Tanh",
+        "case": "full",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "Tanh",
+        "case": "validation",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "Tanh",
+        "case": "joint_initial",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "Tanh",
+        "case": "single_beta",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "activation": "Tanh",
+        "case": "no_gamma",
+        "exact": true
+      },
+      {
+        "family": "binary",
+        "case": "gamma_backtracking",
+        "exact": true
+      },
+      {
+        "family": "cox",
+        "case": "gamma_backtracking",
+        "exact": true
+      }
+    ]
+  },
+  "unit_tests_passed": 53
+}

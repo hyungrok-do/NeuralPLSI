@@ -174,6 +174,17 @@ Every fit, including a bootstrap refit, follows the same rule:
    across blocks and reset for each new fit. An unsuccessful beta step leaves
    the coefficients unchanged and is recorded, without claiming convergence.
 
+Coefficient updates still run after every neural epoch by default. The C++
+implementation evaluates the link and its input derivative together, reuses the
+link for gamma, and retains accepted beta-candidate link values for the second
+gamma fit. A usual coefficient cycle therefore needs two full-data network
+evaluations instead of five, with additional evaluations only for backtracking.
+The fixed gamma design, continuous-outcome Gram matrix and full-data Cox ordering
+are prepared once per fit. Bootstrap workers rebuild these caches for each
+resample. Newton backtracking avoids derivative calculations on further rejected
+trials after the first rejection. These changes preserve the update sequence,
+losses, tolerances, network size and neural epoch budget.
+
 Beta has no Adam moments, weight decay, or shared gradient clipping. Gamma uses
 double-precision damped Newton for least squares, logistic regression or Breslow
 Cox, with the existing tiny numerical ridge (1e-10 continuous, 1e-6 binary/Cox,
@@ -317,6 +328,15 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
+
+The [coefficient-cache benchmark](results/coefficient_cache_benchmark.md) compares
+the current alternating implementation with `114133d`, retaining coefficient
+updates every epoch. On three repeats at n=2,000 and 200 neural epochs, median
+point-fit time fell 38–42% across continuous, binary and Cox outcomes. Fitted
+states, predictions, bootstrap draws and summaries matched bit-for-bit. The
+report includes serial and four-worker bootstrap timings and the command to
+reproduce them. `compare_native_revisions.py` now defaults to this compatible
+baseline revision and supports explicit optimizer, activation and split controls.
 
 The historical timings and memory comparisons below used patience-based early
 stopping and warm-start bootstrap refits, both since removed. They do not measure

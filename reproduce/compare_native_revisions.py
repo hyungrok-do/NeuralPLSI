@@ -43,7 +43,9 @@ def load_reference(path, prototype):
 def measure(lib, family, x, z, y, args, jobs):
     grid = np.linspace(-3, 3, args.grid) if args.grid else None
     with patch.object(native, 'library', return_value=lib):
-        model = NeuralPLSI(family=family, max_epoch=args.epochs)
+        model = NeuralPLSI(family=family, max_epoch=args.epochs, activation=args.activation,
+            optimizer=args.optimizer, validation_fraction=args.validation_fraction,
+            link_epochs=args.link_epochs)
         start = perf_counter()
         model.fit(x, z, y, random_state=args.seed)
         fit_seconds = perf_counter()-start
@@ -64,13 +66,17 @@ def measure(lib, family, x, z, y, args, jobs):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--baseline-ref', default='46370574d29ff56802923b06dd15ecd18cecbd9e')
+    parser.add_argument('--baseline-ref', default='114133d4a94f77a8b7ee83ac4aee1a1e296beea1')
     parser.add_argument('--n', type=int, default=2000)
     parser.add_argument('--bootstrap', type=int, default=24)
     parser.add_argument('--bootstrap-seed', type=int, default=11)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--grid', type=int, default=1000)
     parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--activation', choices=list(native.ACTIVATIONS), default='ELU')
+    parser.add_argument('--optimizer', choices=list(native.OPTIMIZERS), default='alternating')
+    parser.add_argument('--validation-fraction', type=float, default=0.)
+    parser.add_argument('--link-epochs', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--jobs', nargs='+', type=int, default=[1, 4])
     parser.add_argument('--outcomes', nargs='+', choices=['continuous', 'binary', 'cox'],
@@ -81,7 +87,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if (args.n < 10 or args.bootstrap < 2 or args.repeats < 1 or args.epochs < 1 or
             args.grid < 0 or args.seed < 0 or args.bootstrap_seed < 0 or
-            0 in args.jobs or args.memory_n < 0 or 0 < args.memory_n < 10 or
+            0 in args.jobs or args.link_epochs < 1 or not 0 <= args.validation_fraction < 1 or
+            args.memory_n < 0 or 0 < args.memory_n < 10 or
             (args.memory_only and not args.memory_n)):
         parser.error('Invalid dataset, bootstrap, epoch, worker or memory-check configuration')
     # Resolve to a commit before using the ref in further git commands.
@@ -91,6 +98,7 @@ def main(argv=None):
     flags = ['-O3', '-std=c++17', '-ffp-contract=off', '-pthread']
     current = native.library()
     results = dict(baseline_commit=baseline, current_commit=run(['git', 'rev-parse', 'HEAD']).strip(),
+        working_tree_dirty=bool(run(['git', 'status', '--porcelain']).strip()),
         current_library=native.build_library().name, compiler=run(compiler+['--version']).splitlines()[0],
         settings=vars(args), timings=[], memory=[])
     with tempfile.TemporaryDirectory(prefix='neuralplsi-compare-') as temporary:
@@ -133,8 +141,8 @@ def main(argv=None):
                 for B, jobs in [(0, 1), (4, 4)]:
                     row = json.loads(run([str(target), str(args.memory_n), str(B), str(jobs), '200']))
                     row.update(version=label)
-                    if (row['joint_epochs'], row['gamma_epochs']) != (6, 21):
-                        raise AssertionError('Memory-check stopping times changed')
+                    if row['joint_epochs'] != row['max_epoch'] or row['gamma_iterations'] < 0:
+                        raise AssertionError('Memory check did not complete the neural epoch budget')
                     results['memory'].append(row)
                     print(json.dumps(row), flush=True)
             atomic_json(args.out, results)
