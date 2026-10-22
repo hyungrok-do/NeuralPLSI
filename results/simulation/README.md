@@ -1,17 +1,11 @@
 # Simulation: NeuralPLSI vs SplinePLSI, n = 2000
 
-**Interim snapshot (2026-10-22, 13:07 EDT).** The NeuralPLSI rerun (job
-28702575) is still running. Everything here uses the datasets it has finished,
-and the SplinePLSI numbers are restricted to the same seeds:
+Summaries of the current simulation run. The raw per-replicate results are not
+in git. They are on BigPurple at `/gpfs/scratch/doh03/NeuralPLSI/output/simulation`.
 
-| g \ outcome | continuous | binary | cox |
-|---|---:|---:|---:|
-| linear | 500 | 500 | 500 |
-| sfun (S-shape) | 389 | 500 | 500 |
-| sigmoid | 500 | 500 | 500 |
-
-The raw per-replicate results are not in git. They are on BigPurple at
-`/gpfs/scratch/doh03/NeuralPLSI/output/simulation`.
+A third estimator, the minibatch AdamW baseline for typical neural-network
+training (`NeuralPLSI-Adam`, commit `b3b88cb`), is running as job 28707312 and
+will be added when it finishes.
 
 | Setting | Value |
 |---|---|
@@ -19,7 +13,7 @@ The raw per-replicate results are not in git. They are on BigPurple at
 | Sample size | n = 2000 (training set; the test set has the same size) |
 | g | linear, sfun (S-shape), sigmoid |
 | Outcomes | continuous, binary, cox |
-| Replicates | 500 per setting (seeds 0-499) when complete; see the table above |
+| Replicates | 500 per setting (seeds 0-499) |
 | Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000 for NeuralPLSI; B = 999 for SplinePLSI, which was not rerun |
 | Exposures | normal |
 | Run | NeuralPLSI: 2026-10-22, job 28702575. SplinePLSI: 2026-10-21, job 28680527. Both on `cpu_short` with 40 CPUs per task |
@@ -39,11 +33,10 @@ The `source_sha256` recorded in every result row matches these commits.
 - `comparison_table_n2000_normal.csv` / `.tex`: per-coefficient bias, SD, SE and coverage, with the two estimators side by side.
 - `comparison_metrics.csv`: the long-format data behind that table, including Monte-Carlo SEs.
 
-## Main findings so far
+## Main findings
 
-Ranges are across the 9 settings. With 389-500 replicates, the Monte-Carlo
-range at exact 0.95 coverage is ±0.022 to ±0.019 around 0.95 for a single
-coefficient.
+Ranges are across the 9 settings. The Monte-Carlo range for 500 replicates at
+exact 0.95 coverage is 0.931-0.969 for a single coefficient.
 
 - **β intervals.**
   - NeuralPLSI covers 0.940-0.955; SplinePLSI covers 0.942-0.969.
@@ -60,28 +53,23 @@ coefficient.
   - RMSE is equal or up to 3% lower for NeuralPLSI.
 - **g, RMSE on |u| ≤ 2.**
   - NeuralPLSI is lower in 7 of 9 settings: 24-44% lower for linear g, 10-17% lower for sigmoid continuous and binary, 9% lower for S-shape binary and 4% lower for sigmoid Cox.
-  - NeuralPLSI is about equal for S-shape Cox (0.115 vs 0.114) and 12% higher for S-shape continuous (0.060 vs 0.053).
+  - NeuralPLSI is about equal for S-shape Cox (0.115 vs 0.114) and 11% higher for S-shape continuous (0.059 vs 0.053).
 - **g band, mean coverage on |u| ≤ 2.**
   - NeuralPLSI: 0.94-0.97 in 8 settings. The weak spot is S-shape binary, at 0.92 on |u| ≤ 2: it dips to about 0.83 near u = 0 and falls to about 0.59 at |u| = 3.
   - SplinePLSI: 0.92-0.97. It dips to about 0.85 at the steep part of the sigmoid for continuous and Cox, which is consistent with the bias of a 5-knot spline.
 - **Prediction.** Test AUC and C-index agree to the third decimal. Test MSE for continuous outcomes is 1.008-1.011 for NeuralPLSI and 1.010-1.011 for SplinePLSI.
 - **Cost (median per replicate, 40 threads).**
   - Fit: 0.3-1.1 s for NeuralPLSI; 0.07-0.3 s for SplinePLSI.
-  - Bootstrap: 8-32 s for NeuralPLSI with B = 1000; 3-10 s for SplinePLSI with B = 999.
+  - Bootstrap: 8-31 s for NeuralPLSI with B = 1000; 3-10 s for SplinePLSI with B = 999.
   - NeuralPLSI is slowest for continuous outcomes, and S-shape continuous is the slowest setting.
 
 ## Regenerate
-
-When the run is complete:
 
 ```bash
 python reproduce/plot_inference.py --input output/simulation --out results/simulation
 python reproduce/visualize_simulation.py --input output/simulation --out results/simulation --no-plots
 python reproduce/table_simulation_comparison.py --input output/simulation --out results/simulation
 ```
-
-For this snapshot, `--input` was a folder holding the partial NeuralPLSI files
-and the SplinePLSI files filtered to the same seeds.
 
 `visualize_simulation.py` also writes per-setting tables to `tables/`. They are
 not kept here because `summary_table.csv` has the same numbers.
