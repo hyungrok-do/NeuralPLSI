@@ -414,11 +414,29 @@ int newton(const DVec& design,const float* y,const double* offset,DVec& w,int n,
     }
     throw std::runtime_error(what+" did not converge");
 }
+// AdamW with PyTorch's defaults (betas 0.9, 0.999; eps 1e-8). Decoupled weight
+// decay applies to the link network only, the parameters L-BFGS penalizes.
+struct AdamW {
+    Vec first,second; int step=0;
+    void reset(int n) { first.assign(n,0.f); second.assign(n,0.f); step=0; }
+    void update(const Model& m,Vec& w,const Vec& grad,float rate,float decay) {
+        ++step;
+        float correction1=float(1.-std::pow(.9,step)),correction2=float(std::sqrt(1.-std::pow(.999,step)));
+        for(int j=0;j<m.size;++j) {
+            if(j>=m.p && !gamma_parameter(m,j)) w[j]*=1.f-rate*decay;
+            first[j]=.9f*first[j]+.1f*grad[j];
+            second[j]=.999f*second[j]+.001f*grad[j]*grad[j];
+            w[j]-=(rate/correction1)*first[j]/(std::sqrt(second[j])/correction2+1e-8f);
+        }
+    }
+};
 struct TrainingWorkspace {
-    Vec w,grad,link;
+    Vec w,grad,link,best,bx,bz,by,validation_prediction;
     DVec design,offset;
     BackwardWorkspace backward;
     ForwardWorkspace forward;
+    OutcomeWorkspace validation;
+    AdamW adam;
 };
 // Fits gamma and the optional intercept exactly, given the index and link:
 // Newton on all rows with g(x'beta) as a fixed offset. Returns iterations.
@@ -476,7 +494,7 @@ void train(const int32_t* config,const float* hyper,float* weights,
     DVec current(weights,weights+size),gradient,next(size),next_gradient,direction(size),alpha(history);
     if(!cap) {
         double value=evaluate(current,gradient); finite(value,w);
-        diagnostics[0]=0; diagnostics[1]=0; diagnostics[2]=value;
+        diagnostics[0]=0; diagnostics[1]=0; diagnostics[2]=value; diagnostics[3]=0;
         return;
     }
     unit_beta(current);
@@ -542,7 +560,58 @@ void train(const int32_t* config,const float* hyper,float* weights,
     value=evaluate(current,gradient);
     finite(value,w);
     std::copy(w.begin(),w.end(),weights);
-    diagnostics[0]=iteration; diagnostics[1]=gamma_iterations; diagnostics[2]=value;
+    diagnostics[0]=iteration; diagnostics[1]=gamma_iterations; diagnostics[2]=value; diagnostics[3]=0;
+}
+// Baseline: typical minibatch neural-network training, for comparison with
+// L-BFGS. AdamW (learning rate hyper[2], weight decay hyper[0]) updates every
+// parameter jointly on minibatches of config[11] training rows, one shuffled
+// pass per epoch from next_order. The validation loss (outcome loss plus the
+// g(0)^2 anchor) is checked after each epoch. Training stops after config[12]
+// epochs without improvement or config[8] epochs, and the best checkpoint is
+// restored. Gamma is not refitted. max_iter=0 performs initialization only.
+template<class NextOrder>
+void train_adam(const int32_t* config,const float* hyper,float* weights,
+                const float* tx,const float* tz,const float* ty,int nt,
+                const float* vx,const float* vz,const float* vy,int nv,
+                NextOrder next_order,double* diagnostics,TrainingWorkspace& ws) {
+    Model m(config,hyper[1]); Network net(m);
+    const int cap=config[8],patience=config[12],yd=m.family==2 ? 2:1;
+    const int batch=std::min(config[11],nt);
+    if(nt<1 || nv<1 || batch<1 || cap<0 || patience<1) throw std::invalid_argument("Invalid native training sizes");
+    auto& w=ws.w; auto& best=ws.best; auto& grad=ws.grad;
+    auto& bx=ws.bx; auto& bz=ws.bz; auto& by=ws.by; auto& prediction=ws.validation_prediction;
+    w.assign(weights,weights+m.size); best=w;
+    bx.resize(size_t(batch)*m.p); bz.resize(size_t(batch)*m.q); by.resize(size_t(batch)*yd);
+    if(m.family==2) ws.validation.cox.prepare(vy,nv);
+    auto validation_loss=[&]() {
+        net.predict(w,vx,vz,nv,true,true,prediction,ws.forward);
+        double value=outcome(prediction,vy,nv,m.family,nullptr,ws.validation,true)
+                     +double(prediction[nv])*prediction[nv];
+        finite(value,w); return value;
+    };
+    ws.adam.reset(m.size);
+    double best_loss=validation_loss();
+    int epoch=0,best_epoch=0;
+    while(epoch<cap) {
+        const int32_t* order=next_order();
+        for(int start=0;start<nt;start+=batch) {
+            int nb=std::min(batch,nt-start);
+            for(int i=0;i<nb;++i) {
+                int row=order[start+i];
+                std::copy_n(tx+size_t(row)*m.p,m.p,bx.data()+size_t(i)*m.p);
+                if(m.q) std::copy_n(tz+size_t(row)*m.q,m.q,bz.data()+size_t(i)*m.q);
+                std::copy_n(ty+size_t(row)*yd,yd,by.data()+size_t(i)*yd);
+            }
+            double value=net.loss_grad(w,bx.data(),bz.data(),by.data(),nb,true,grad,ws.backward);
+            finite(value,grad); ws.adam.update(m,w,grad,hyper[2],hyper[0]);
+        }
+        ++epoch;
+        double value=validation_loss();
+        if(value<best_loss) { best_loss=value; best=w; best_epoch=epoch; }
+        else if(epoch-best_epoch>=patience) break;
+    }
+    std::copy(best.begin(),best.end(),weights);
+    diagnostics[0]=epoch; diagnostics[1]=0; diagnostics[2]=best_loss; diagnostics[3]=best_epoch;
 }
 }
 
@@ -587,15 +656,18 @@ struct State {
     std::array<int32_t,NPLSI_CONFIG_SIZE> config;
     std::array<float,NPLSI_HYPER_SIZE> hyper;
     Vec weights;
-    std::array<double,3> diagnostics{{0.,0.,0.}};
+    std::array<double,4> diagnostics{{0.,0.,0.,0.}};
     State(const int32_t* c,const float* h): weights(c[7]>0 && c[7]<=10000000 ? c[7] : 0) {
         std::copy_n(c,NPLSI_CONFIG_SIZE,config.begin());
         std::copy_n(h,NPLSI_HYPER_SIZE,hyper.begin());
         Model m(c,h[1]);
-        if(c[8]<0 || c[8]>1000000 || (c[9]!=0 && c[9]!=1))
+        if(c[8]<0 || c[8]>1000000 || (c[9]!=0 && c[9]!=1) || (c[10]!=0 && c[10]!=1) ||
+           c[11]<1 || c[11]>10000000 || c[12]<1 || c[12]>1000000)
             throw std::invalid_argument("Invalid training configuration");
         if(!std::isfinite(h[0]) || h[0]<0)
             throw std::invalid_argument("The penalty must be finite and nonnegative");
+        if(!std::isfinite(h[2]) || h[2]<=0)
+            throw std::invalid_argument("The learning rate must be finite and positive");
     }
     void initialize(uint64_t seed) {
         Model m(config.data(),1.f);
@@ -618,7 +690,7 @@ struct State {
     }
     std::string serialize() const {
         std::ostringstream out; out.imbue(std::locale::classic());
-        out<<"NEURALPLSI_NATIVE 4\n";
+        out<<"NEURALPLSI_NATIVE 5\n";
         for(int v:config) out<<v<<' ';
         out<<'\n'<<std::setprecision(std::numeric_limits<float>::max_digits10);
         for(float v:hyper) out<<v<<' ';
@@ -637,8 +709,9 @@ std::unique_ptr<State> deserialize(const char* buffer,size_t size) {
     std::istringstream in(std::string(buffer,size)); in.imbue(std::locale::classic());
     std::string magic; int version=0; in>>magic>>version;
     // Version 1 states carried a warm-start flag, version 2 the minibatch
-    // optimizer settings and version 3 the alternating optimizer's settings.
-    if(magic!="NEURALPLSI_NATIVE" || version!=4) throw std::invalid_argument("Unsupported model state format");
+    // optimizer settings, version 3 the alternating optimizer's settings and
+    // version 4 had no optimizer choice.
+    if(magic!="NEURALPLSI_NATIVE" || version!=5) throw std::invalid_argument("Unsupported model state format");
     std::array<int32_t,NPLSI_CONFIG_SIZE> c{}; std::array<float,NPLSI_HYPER_SIZE> h{};
     for(auto& v:c) in>>v;
     for(auto& v:h) in>>v;
@@ -690,9 +763,41 @@ void initialize_linear(State& s,const float* x,const float* z,const float* y,int
     finite(0.,s.weights);
 }
 struct FitWorkspace {
-    Vec x,z,y;
+    Vec x,z,y,tx,tz,ty,vx,vz,vy;
+    std::vector<int32_t> split,order;
     TrainingWorkspace training;
 };
+// The AdamW baseline holds out a random 20% of rows for early stopping.
+void fit_adam(State& s,const float* x,const float* z,const float* y,int n,
+              uint64_t seed,FitWorkspace& work) {
+    Model m(s.config.data(),s.hyper[1]);
+    int nv=n/5+int(n%5!=0),nt=n-nv,yd=m.family==2 ? 2:1;
+    auto& indices=work.split; indices.resize(n); std::iota(indices.begin(),indices.end(),0);
+    Random split(seed^UINT64_C(0x53504c4954)); split.shuffle(indices.begin(),indices.end());
+    auto& tx=work.tx; auto& tz=work.tz; auto& ty=work.ty;
+    auto& vx=work.vx; auto& vz=work.vz; auto& vy=work.vy;
+    tx.resize(size_t(nt)*m.p); tz.resize(size_t(nt)*m.q); ty.resize(size_t(nt)*yd);
+    vx.resize(size_t(nv)*m.p); vz.resize(size_t(nv)*m.q); vy.resize(size_t(nv)*yd);
+    for(int k=0;k<n;++k) {
+        int row=indices[k],i=k<nv ? k : k-nv;
+        Vec& xx=k<nv ? vx:tx; Vec& zz=k<nv ? vz:tz; Vec& yy=k<nv ? vy:ty;
+        std::copy_n(x+size_t(row)*m.p,m.p,xx.data()+size_t(i)*m.p);
+        if(m.q) std::copy_n(z+size_t(row)*m.q,m.q,zz.data()+size_t(i)*m.q);
+        std::copy_n(y+size_t(row)*yd,yd,yy.data()+size_t(i)*yd);
+    }
+    validate_arrays(m,tx.data(),tz.data(),ty.data(),nt,true);
+    validate_arrays(m,vx.data(),vz.data(),vy.data(),nv,true);
+    s.initialize(seed);
+    if(s.config[9]) initialize_linear(s,tx.data(),tz.data(),ty.data(),nt);
+    Random batches(seed^UINT64_C(0x4241544348));
+    auto& order=work.order; order.resize(nt);
+    auto next_order=[&]() {
+        std::iota(order.begin(),order.end(),0); batches.shuffle(order.begin(),order.end());
+        return order.data();
+    };
+    train_adam(s.config.data(),s.hyper.data(),s.weights.data(),tx.data(),tz.data(),ty.data(),nt,
+               vx.data(),vz.data(),vy.data(),nv,next_order,s.diagnostics.data(),work.training);
+}
 // sample_rows maps a bootstrap sample to the shared original arrays.
 // The caller validates the original data once before entering this function.
 void fit_state(State& s,const float* x,const float* z,const float* y,int n,
@@ -711,6 +816,7 @@ void fit_state(State& s,const float* x,const float* z,const float* y,int n,
         x=work.x.data(); z=work.z.data(); y=work.y.data();
         validate_arrays(m,x,z,y,n,true);  // e.g. a Cox resample without events
     }
+    if(s.config[10]==1) { fit_adam(s,x,z,y,n,seed,work); s.canonicalize(); return; }
     s.initialize(seed);
     if(s.config[9]) initialize_linear(s,x,z,y,n);
     train(s.config.data(),s.hyper.data(),s.weights.data(),x,z,y,n,s.diagnostics.data(),work.training);

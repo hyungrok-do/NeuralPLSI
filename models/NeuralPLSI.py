@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .base import _SummaryMixin, validate_data
-from .native import (NativeModel, FAMILIES, ACTIVATIONS, seed_value,
+from .native import (NativeModel, FAMILIES, ACTIVATIONS, OPTIMIZERS, seed_value,
                      bootstrap_options, link_grid, BOOTSTRAP_RNG_PROTOCOL)
 
 
@@ -23,11 +23,19 @@ class NeuralPLSI(_SummaryMixin):
     until the objective stops decreasing or max_iter iterations. With beta and
     the link fixed, gamma and the optional intercept are then fitted exactly by
     deterministic Newton iterations, with g(X @ beta) as an offset.
+
+    optimizer='adam' is a baseline for typical neural-network training, not a
+    recommended estimator: AdamW (learning_rate, decoupled weight_decay on the
+    link network) on minibatches of batch_size rows from a random 80% of the
+    data, for at most max_iter epochs, stopping after patience epochs without
+    improvement in the loss on the other 20% and restoring the best
+    checkpoint. Gamma is not refitted.
     """
     def __init__(self, family='continuous', max_iter=5000, weight_decay=1e-3,
                  hidden_units=32, n_hidden_layers=2,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, device='cpu', backend='cpp'):
+                 initial=False, optimizer='lbfgs', batch_size=64, learning_rate=1e-3,
+                 patience=10, device='cpu', backend='cpp'):
         if family not in FAMILIES:
             raise ValueError('family must be continuous, binary, or cox')
         if family == 'cox' and add_intercept:
@@ -36,23 +44,31 @@ class NeuralPLSI(_SummaryMixin):
             raise ValueError('NeuralPLSI is C++ only: use backend="cpp" and device="cpu"')
         if activation not in ACTIVATIONS:
             raise ValueError('Supported activations: ELU, LeakyReLU, ReLU and Tanh')
+        if optimizer not in OPTIMIZERS:
+            raise ValueError("optimizer must be 'lbfgs' or 'adam'")
         for name, value, minimum in [('max_iter', max_iter, 0), ('hidden_units', hidden_units, 1),
-                                      ('n_hidden_layers', n_hidden_layers, 1)]:
+                                      ('n_hidden_layers', n_hidden_layers, 1),
+                                      ('batch_size', batch_size, 1), ('patience', patience, 1)]:
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f'{name} must be an integer >= {minimum}')
         if not np.isfinite(weight_decay) or weight_decay < 0:
             raise ValueError('weight_decay must be finite and nonnegative')
+        if not np.isfinite(learning_rate) or learning_rate <= 0:
+            raise ValueError('learning_rate must be finite and positive')
         if num_workers != 0:
             raise ValueError('num_workers is obsolete; use n_jobs for bootstrap parallelism')
         self.family, self.max_iter, self.weight_decay = family, int(max_iter), weight_decay
         self.hidden_units, self.n_hidden_layers = int(hidden_units), int(n_hidden_layers)
         self.num_workers, self.add_intercept, self.activation = 0, bool(add_intercept), activation
         self.initial, self.device, self.backend = bool(initial), 'cpu', 'cpp'
+        self.optimizer, self.batch_size, self.patience = optimizer, int(batch_size), int(patience)
+        self.learning_rate = learning_rate
         self.net = None
 
     def get_params(self, deep=True):
         names = ('family', 'max_iter', 'weight_decay', 'hidden_units', 'n_hidden_layers',
-                 'num_workers', 'add_intercept', 'activation', 'initial', 'device', 'backend')
+                 'num_workers', 'add_intercept', 'activation', 'initial', 'optimizer',
+                 'batch_size', 'learning_rate', 'patience', 'device', 'backend')
         return {name: getattr(self, name) for name in names}
 
     def fit(self, X, Z, y, random_state=0):
@@ -131,7 +147,9 @@ class NeuralPLSI(_SummaryMixin):
         model = cls(family=next(k for k, v in FAMILIES.items() if v == c[5]),
             activation=next(k for k, v in ACTIVATIONS.items() if v == c[6]),
             hidden_units=int(c[2]), n_hidden_layers=int(c[3]), add_intercept=bool(c[4]),
-            max_iter=int(c[8]), initial=bool(c[9]), weight_decay=float(h[0]))
+            max_iter=int(c[8]), initial=bool(c[9]), weight_decay=float(h[0]),
+            optimizer=next(k for k, v in OPTIMIZERS.items() if v == c[10]),
+            batch_size=int(c[11]), patience=int(c[12]), learning_rate=float(h[2]))
         model.net = net
         return model
 
@@ -145,8 +163,8 @@ class NeuralPLSI(_SummaryMixin):
         Replicate seeds are independent of worker scheduling. A failed draw
         raises an error and invalidates the whole bootstrap result.
         Each refit starts from a fresh seeded initialization (cold start) and
-        uses the same full-batch training, stopping rule and exact gamma fit as
-        the original fit. Warm starts from the original fit were removed: refits
+        uses the same training and stopping rule (and, for L-BFGS, the same
+        exact gamma fit) as the original fit. Warm starts from the original fit were removed: refits
         inherited its optimizer error, so the bootstrap understated the
         variability of beta.
 

@@ -14,6 +14,7 @@ import numpy as np
 
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
+OPTIMIZERS = {'lbfgs': 0, 'adam': 1}
 RNG_PROTOCOL = 'splitmix64_v1'
 BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 
@@ -121,14 +122,15 @@ class NativeModel:
     """Own a native model handle. No Python network or automatic differentiation."""
     def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, add_intercept=False,
                  family='continuous', activation='ELU', max_iter=5000, weight_decay=1e-3,
-                 initial=False, random_state=0):
+                 initial=False, optimizer='lbfgs', batch_size=64, learning_rate=1e-3,
+                 patience=10, random_state=0):
         self._library = library()
         self._handle = None
         self.config = np.array([p, q, hidden_units, n_hidden_layers, int(add_intercept),
             FAMILIES[family], ACTIVATIONS[activation],
             parameter_count(p, q, hidden_units, n_hidden_layers, add_intercept),
-            max_iter, int(initial)], dtype=np.int32)
-        self.hyper = np.array([weight_decay, 1.], dtype=np.float32)
+            max_iter, int(initial), OPTIMIZERS[optimizer], batch_size, patience], dtype=np.int32)
+        self.hyper = np.array([weight_decay, 1., learning_rate], dtype=np.float32)
         self._handle = self._library.nplsi_create(self.config, self.hyper, seed_value(random_state))
         self._check_handle()
         self._refresh()
@@ -146,11 +148,11 @@ class NativeModel:
         self.close()
 
     def _refresh(self):
-        self.config, self.hyper = np.empty(10, dtype=np.int32), np.empty(2, dtype=np.float32)
-        diagnostics = np.empty(3, dtype=np.float64)
+        self.config, self.hyper = np.empty(13, dtype=np.int32), np.empty(3, dtype=np.float32)
+        diagnostics = np.empty(4, dtype=np.float64)
         checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
         self.fit_diagnostics = dict(iterations=int(diagnostics[0]), gamma_iterations=int(diagnostics[1]),
-                                   objective=float(diagnostics[2]))
+                                   objective=float(diagnostics[2]), best_epoch=int(diagnostics[3]))
 
     @classmethod
     def _from_handle(cls, handle):

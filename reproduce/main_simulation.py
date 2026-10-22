@@ -68,14 +68,15 @@ def evaluate(model, X_te, Z_te, y_te, outcome):
 def parse_models(arg):
     """Parse model names from CLI into canonical keys."""
     alias = {'plsi': 'PLSI', 'splineplsi': 'PLSI',
-             'neuralplsi': 'NeuralPLSI', 'nplsi': 'NeuralPLSI'}
+             'neuralplsi': 'NeuralPLSI', 'nplsi': 'NeuralPLSI',
+             'neuralplsi-adam': 'NeuralPLSI-Adam'}
     if len(arg) == 1 and arg[0].lower() in ('all', 'both'):
         return ['PLSI', 'NeuralPLSI']
     out = []
     for m in arg:
         key = alias.get(m.strip().lower())
         if key is None:
-            raise ValueError(f"Unknown model: {m}. Use PLSI, NeuralPLSI, or all.")
+            raise ValueError(f"Unknown model: {m}. Use PLSI, NeuralPLSI, NeuralPLSI-Adam, or all.")
         if key not in out:
             out.append(key)
     return out
@@ -92,14 +93,22 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
     return os.path.join(base, name)
 
 
-MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI}
+MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI, 'NeuralPLSI-Adam': NeuralPLSI}
+# NeuralPLSI-Adam is a baseline for typical neural-network training: minibatch
+# AdamW with early stopping on a 20% validation split, and no gamma refit.
+NEURAL_OPTIONS = {'NeuralPLSI': {},
+                  'NeuralPLSI-Adam': dict(optimizer='adam', max_iter=200, batch_size=64,
+                                          learning_rate=1e-3, weight_decay=1e-4, patience=10)}
+TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_exact_gamma_v1',
+                   'NeuralPLSI-Adam': 'minibatch_adamw_early_stopping_v1'}
 
 
 def run_configuration(args, model):
     """Record the estimator, inference settings and exact simulation source."""
+    neural = model in NEURAL_OPTIONS
     paths = ['reproduce/main_simulation.py', 'simulation/__init__.py',
              'models/base.py',
-             'models/NeuralPLSI.py' if model == 'NeuralPLSI' else 'models/PLSI.py']
+             'models/NeuralPLSI.py' if neural else 'models/PLSI.py']
     paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
                     if p.suffix in ('.py', '.cpp', '.h'))
     digest = hashlib.sha256()
@@ -108,22 +117,22 @@ def run_configuration(args, model):
         with open(os.path.join(ROOT, path), 'rb') as source:
             digest.update(source.read())
     native_build = None
-    if model != 'NeuralPLSI' or args.nn_backend == 'cpp':
+    if not neural or args.nn_backend == 'cpp':
         from models.native import build_library
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
-                       if model == 'NeuralPLSI' else 'cpu')
+                       if neural else 'cpu')
     return dict(protocol_version=9, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
-                activation=args.activation if model == 'NeuralPLSI' else None,
+                activation=args.activation if neural else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
                 quantile_method=(getattr(args, 'nn_bootstrap_quantile', 'linear')
-                                 if model == 'NeuralPLSI' else 'linear'),
-                fit_random_state=args.fit_seed if model == 'NeuralPLSI' else 'replicate_seed',
-                initial=args.initial if model == 'NeuralPLSI' else None,
-                training_policy=('full_batch_lbfgs_exact_gamma_v1'
-                                 if model == 'NeuralPLSI' else None),
-                backend=args.nn_backend if model == 'NeuralPLSI' else 'cpp',
+                                 if neural else 'linear'),
+                fit_random_state=args.fit_seed if neural else 'replicate_seed',
+                initial=args.initial if neural else None,
+                training_policy=TRAINING_POLICY.get(model),
+                training_options=NEURAL_OPTIONS.get(model),
+                backend=args.nn_backend if neural else 'cpp',
                 device=resolved_device, native_build=native_build,
                 normalization='l2', native_rng='splitmix64_v1',
                 bootstrap_engine='cpp', bootstrap_rng=BOOTSTRAP_RNG_PROTOCOL,
@@ -188,9 +197,11 @@ def run_replicate(args, mname, seed, configuration):
     X, Z, y, *_ = simulate_data(2*n, outcome=args.outcome, g_type=args.g_fn,
                                seed=seed, x_dist=args.exposure_dist)
     X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
-    if mname == 'NeuralPLSI':
+    neural = mname in NEURAL_OPTIONS
+    if neural:
         model = NeuralPLSI(family=args.outcome, activation=args.activation,
-            initial=args.initial, device=args.device, backend=args.nn_backend)
+            initial=args.initial, device=args.device, backend=args.nn_backend,
+            **NEURAL_OPTIONS[mname])
         fit_options = {'random_state': args.fit_seed}
     else:
         model = SplinePLSI(family=args.outcome)
@@ -204,7 +215,7 @@ def run_replicate(args, mname, seed, configuration):
     grid = np.linspace(args.g_grid_min, args.g_grid_max, args.g_grid_n)
     g_estimate = model.g_function(grid)
     start = perf_counter()
-    options = {'quantile_method': args.nn_bootstrap_quantile} if mname == 'NeuralPLSI' else {}
+    options = {'quantile_method': args.nn_bootstrap_quantile} if neural else {}
     jobs = args.bootstrap_jobs
     boot = model.inference_bootstrap(X_tr, Z_tr, y_tr, n_samples=args.n_bootstrap,
         random_state=seed, ci=.95, g_grid=grid, n_jobs=jobs, **options)
@@ -227,7 +238,7 @@ def run_replicate(args, mname, seed, configuration):
                     block+'_bootstrap_mean': bootstrap_mean,
                     block+'_bootstrap_bias': bootstrap_mean-estimate})
     row['bootstrap_workers'] = boot['n_workers']
-    if mname == 'NeuralPLSI':
+    if neural:
         row['fit_diagnostics'] = model.fit_diagnostics
         row['device'] = str(model.device)
     else:
@@ -287,7 +298,7 @@ def main(argv=None):
     bootstrap_jobs(args.bootstrap_jobs, args.n_bootstrap)
     for mname in parse_models(args.models):
         path = output_path(args.out, mname, args.n_instances, args.g_fn,
-                           args.outcome, args.exposure_dist, args.initial if mname == 'NeuralPLSI' else False)
+                           args.outcome, args.exposure_dist, args.initial if mname in NEURAL_OPTIONS else False)
         with result_lock(path):
             configuration = run_configuration(args, mname)
             records = load_compatible_results(path, configuration)

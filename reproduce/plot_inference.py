@@ -41,8 +41,10 @@ SHAPES = ['linear', 'sfun', 'sigmoid']
 OUTCOMES = ['continuous', 'binary', 'cox']
 SHAPE_LABEL = {'linear': 'Linear', 'sfun': 'S-shape', 'sigmoid': 'Sigmoid'}
 OUTCOME_LABEL = {'continuous': 'Continuous', 'binary': 'Binary', 'cox': 'Cox'}
-MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI'}
-MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00'}
+MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
+               'NeuralPLSI-Adam': 'NeuralPLSI, minibatch AdamW with early stopping'}
+MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73'}
+MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2}
 SIZE_MARKER = ['o', 's', '^', 'D']
 SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964
@@ -225,7 +227,9 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
         ax.grid(axis='y', alpha=0.08, lw=0.7)
         ax.set_axisbelow(True)
     first = axes[0][2]  # scale, ticks and limits carry over to the shared axes
-    if log:
+    if log:  # limits first: settings without results leave empty axes
+        positive = [v for v in shown if v > 0]
+        first.set_xlim(min(positive)/1.5, max(positive)*1.5)
         first.set_xscale('log')
     elif step is not None:
         first.xaxis.set_major_locator(MultipleLocator(step))
@@ -269,7 +273,7 @@ def draw_g_coverage(container, cells, series, sizes, reps):
 
 
 def combined(cells, out):
-    series = sorted({(model, n) for model, n, _, _ in cells}, key=lambda s: (s[1], s[0] != 'NeuralPLSI'))
+    series = sorted({(model, n) for model, n, _, _ in cells}, key=lambda s: (s[1], MODEL_ORDER[s[0]]))
     sizes = sorted({n for _, n in series})
     reps = min(len(c['beta_est']) for c in cells.values())
     fig = plt.figure(figsize=(15, 29), layout='constrained')

@@ -2,12 +2,14 @@
 # Shared array-job entry point. Run from the repository root.
 set -euo pipefail
 n=${1:?Pass the sample size}
-id=${SLURM_ARRAY_TASK_ID:?Set SLURM_ARRAY_TASK_ID (0-17)}
-[[ "$id" =~ ^[0-9]+$ ]] && (( id <= 17 )) || { echo 'Array ID must be 0-17' >&2; exit 2; }
+id=${SLURM_ARRAY_TASK_ID:?Set SLURM_ARRAY_TASK_ID (0-26)}
+[[ "$id" =~ ^[0-9]+$ ]] && (( id <= 26 )) || { echo 'Array ID must be 0-26' >&2; exit 2; }
 g_values=(sigmoid sfun linear)
 outcomes=(continuous binary cox)
+# 0-8 NeuralPLSI, 9-17 SplinePLSI, 18-26 the minibatch AdamW baseline.
 model=NeuralPLSI
 (( id < 9 )) || model=PLSI
+(( id < 18 )) || model=NeuralPLSI-Adam
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 project=${NPLSI_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}
 cd "$project"

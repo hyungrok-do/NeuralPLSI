@@ -8,17 +8,22 @@ extern "C" {
 /* All matrices are contiguous, row-major float32. Outcomes are n scalars,
    or n x 2 [duration, event] for Cox. Each model handle owns its parameters.
    Config: p, q, width, hidden_layers, intercept, family, activation,
-           parameter_count, max_iter, linear_init.
+           parameter_count, max_iter, linear_init, optimizer, batch_size, patience.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
-   Hyper: penalty (L2 on the link network), index_sign. */
-#define NPLSI_CONFIG_SIZE 10
-#define NPLSI_HYPER_SIZE 2
+   optimizer: full-batch L-BFGS=0, minibatch AdamW baseline=1. max_iter counts
+   L-BFGS iterations or AdamW epochs; batch_size and patience apply to AdamW.
+   Hyper: penalty (L2 on the link network; decoupled weight decay for AdamW),
+          index_sign, learning_rate (AdamW). */
+#define NPLSI_CONFIG_SIZE 13
+#define NPLSI_HYPER_SIZE 3
 const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
-/* Every fit starts from a fresh initialization drawn from seed and runs
-   full-batch L-BFGS on all rows, then fits gamma exactly. */
+/* Every fit starts from a fresh initialization drawn from seed. L-BFGS runs
+   on all rows and then fits gamma exactly. The AdamW baseline is typical
+   neural-network training: minibatches on 80% of rows, early stopping on the
+   other 20%, the best checkpoint restored and no further gamma fit. */
 int nplsi_fit(void* handle, const float* x, const float* z, const float* y,
               int n, uint64_t seed);
 /* Prediction mode: 0=linear predictor, 1=probability, 2=partial hazard,
@@ -27,7 +32,9 @@ int nplsi_predict(void* handle, const float* x, const float* z, int n,
                   int batch_size, int mode, float* result);
 int nplsi_link(void* handle, const float* grid, int n, float* result);
 int nplsi_coefficients(void* handle, float* beta, float* gamma, float* intercept);
-/* diagnostics: L-BFGS iterations, gamma Newton iterations, penalized objective. */
+/* diagnostics: L-BFGS iterations or AdamW epochs, gamma Newton iterations,
+   objective (L-BFGS: penalized objective; AdamW: best validation loss) and
+   the AdamW epoch whose checkpoint was restored (0 for L-BFGS). */
 int nplsi_get_config(void* handle, int32_t* config, float* hyper, double* diagnostics);
 int nplsi_get_weights(void* handle, float* weights);
 int nplsi_set_weights(void* handle, const float* weights, float sign);

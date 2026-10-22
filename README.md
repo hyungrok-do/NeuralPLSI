@@ -198,6 +198,16 @@ times longer and changed beta and g RMSE by under 2%.
 fit to all rows; it is off by default. The original L2 index normalization,
 linear skip and sign canonicalization are retained.
 
+`optimizer='adam'` is a baseline for typical neural-network training, kept to
+show how bootstrap inference behaves without the steps above; it is not a
+recommended estimator. AdamW (`learning_rate` 1e-3, decoupled `weight_decay` on
+the link network) updates all parameters jointly on minibatches of `batch_size`
+rows from a random 80% of the data. Training stops after `patience` epochs
+without improvement in the loss on the other 20%, or after `max_iter` epochs,
+and restores the best checkpoint. Gamma is not refitted. The simulations run
+it as model `NeuralPLSI-Adam`, with at most 200 epochs, batch size 64, weight
+decay 1e-4 and patience 10.
+
 Each native worker reuses its training, gradient and inference buffers across
 bootstrap refits, and gathers each resampled dataset into one reusable buffer.
 The Cox ordering and tie groups are prepared once per fit. Prediction and
@@ -369,7 +379,8 @@ data dimensions, architecture, bootstrap output and worker count.
 ## Corrected simulation and HPC workflow
 
 Submit from the repository root. The array scripts default to the nine
-NeuralPLSI scenarios. IDs 9–17 run the corresponding spline scenarios.
+NeuralPLSI scenarios. IDs 9–17 run the corresponding spline scenarios and
+IDs 18–26 the minibatch AdamW baseline (`NeuralPLSI-Adam`).
 The scripts use the active Python environment unless a container is specified.
 Existing cluster resource directives may need adjustment for another cluster.
 
@@ -443,10 +454,11 @@ replicates, not a bootstrap confidence band.
 
 - Bootstrap refits always start from a fresh seeded initialization and are
   canonicalized to the same index orientation. New fits clear uncertainty
-  estimates from previous fits. Saved model states use format version 4, without
-  the removed warm-start flag (version 1), minibatch optimizer settings
-  (version 2) or the alternating optimizer's settings (version 3); older files
-  are rejected.
+  estimates from previous fits. Saved model states use format version 5, which
+  records the optimizer (L-BFGS or the AdamW baseline) and its settings. Older
+  files are rejected: version 1 had the removed warm-start flag, version 2 the
+  earlier minibatch optimizer settings, version 3 the alternating optimizer's
+  settings and version 4 no optimizer choice.
 - Cox likelihoods use complete Breslow risk sets for ties and stable log-space
   calculations in both estimators. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only
