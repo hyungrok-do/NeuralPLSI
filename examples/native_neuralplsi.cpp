@@ -9,9 +9,10 @@
 
 int main(int argc,char** argv) {
     try {
-        // p, q, width, layers, intercept, family, activation, size, batch, epochs, init
-        int32_t config[NPLSI_CONFIG_SIZE]={2,1,8,2,0,0,0,101,32,200,0};
-        float hyper[NPLSI_HYPER_SIZE]={.001f,.0001f,.00001f,1.f,1.f};
+        // p, q, width, layers, intercept, family, activation, size, batch, epochs,
+        // init, optimizer (alternating), link epochs per coefficient update.
+        int32_t config[NPLSI_CONFIG_SIZE]={2,1,8,2,0,0,0,101,32,200,0,1,1};
+        float hyper[NPLSI_HYPER_SIZE]={.001f,.0001f,.00001f,1.f,1.f,0.f,.001f,.25f};
         using Model=std::unique_ptr<void,decltype(&nplsi_destroy)>;
         Model model(nplsi_create(config,hyper,19),nplsi_destroy);
         if(!model) throw std::runtime_error(nplsi_error());

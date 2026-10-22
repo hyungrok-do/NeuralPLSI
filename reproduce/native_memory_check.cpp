@@ -28,8 +28,8 @@ int main(int argc,char** argv) {
             throw std::invalid_argument("Require n>=10, B=0 or B>=2, nonzero workers and positive epochs");
         constexpr int p=8,q=3,h=32,depth=2;
         int32_t config[NPLSI_CONFIG_SIZE]={p,q,h,depth,0,0,0,
-            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,64,epochs,0};
-        float hyper[NPLSI_HYPER_SIZE]={0.f,1e-4f,1e-5f,1.f,1.f};
+            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,64,epochs,0,0,1};
+        float hyper[NPLSI_HYPER_SIZE]={0.f,1e-4f,1e-5f,1.f,1.f,.2f,.001f,.25f};
         std::vector<float> x(size_t(n)*p),z(size_t(n)*q),y(n);
         for(int i=0;i<n;++i) {
             for(int j=0;j<p;++j) x[size_t(i)*p+j]=float(std::sin(.017*(i+1)*(j+1)));
@@ -48,7 +48,7 @@ int main(int argc,char** argv) {
                                     nullptr,0,.95,0,draws.data(),summary.data(),&workers));
         }
         double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-        double diagnostics[3]; checked(nplsi_get_config(model.get(),config,hyper,diagnostics));
+        double diagnostics[NPLSI_DIAGNOSTICS_SIZE]; checked(nplsi_get_config(model.get(),config,hyper,diagnostics));
         double peak_mib=-1.;
 #if defined(__linux__)
         // ru_maxrss can retain a Python parent's pre-exec high-water mark.

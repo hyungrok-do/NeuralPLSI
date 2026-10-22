@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from models import NeuralPLSI
 from models.native import (NativeModel, checked, library, outcome_loss_gradient,
-                           training_validation_indices)
+                           training_validation_indices, DIAGNOSTICS_SIZE)
 
 
 class TrainingPhasesTest(unittest.TestCase):
@@ -27,7 +27,8 @@ class TrainingPhasesTest(unittest.TestCase):
         self.assertTrue(np.any(a[active]!=net.weights[active]))
 
     def test_returned_model_matches_recorded_validation_loss(self):
-        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=16).fit(self.X,self.Z,self.y,random_state=19)
+        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=16,
+                        optimizer='joint',validation_fraction=.2).fit(self.X,self.Z,self.y,random_state=19)
         _,valid=training_validation_indices(len(self.X),19)
         loss=np.mean((model.predict(self.X[valid],self.Z[valid]).astype(float)-self.y[valid])**2)
         self.assertAlmostEqual(loss,model.fit_diagnostics['validation_loss'],places=6)
@@ -53,10 +54,11 @@ class TrainingPhasesTest(unittest.TestCase):
         fits=[]
         for epochs in (1,40):
             net=NativeModel(1,0,hidden_units=1,n_hidden_layers=1,
-                max_epoch=epochs,batch_size=8,weight_decay=0,weight_decay_beta=0)
+                max_epoch=epochs,batch_size=8,weight_decay=0,weight_decay_beta=0,
+                optimizer='joint',validation_fraction=.2)
             weights=np.zeros_like(net.weights); weights[0]=1.
             orders=np.tile(np.arange(8,dtype='int32'),(epochs,1))
-            diagnostics=np.empty(3)
+            diagnostics=np.empty(DIAGNOSTICS_SIZE)
             checked(library().nplsi_train(net.config,net.hyper,weights,
                 x,z,target,8,x,z,-target,8,orders,diagnostics))
             net.set_weights(weights)

@@ -29,14 +29,15 @@ namespace {
 thread_local std::string last_error;
 struct Layer { int in, out, w, b; };
 struct Model {
-    int p, q, h, depth, intercept, family, activation, size;
+    int p, q, h, depth, intercept, family, activation, size, optimizer;
     float sign;
     std::vector<Layer> layers;
     Model(const int32_t* c, float s): p(c[0]), q(c[1]), h(c[2]), depth(c[3]),
-        intercept(c[4]), family(c[5]), activation(c[6]), size(c[7]), sign(s) {
+        intercept(c[4]), family(c[5]), activation(c[6]), size(c[7]), optimizer(c[11]), sign(s) {
         if(p<1 || p>100000 || q<0 || q>100000 || h<1 || h>10000 || depth<1 || depth>128 ||
            (intercept!=0 && intercept!=1) || family<0 || family>2 || activation<0 || activation>3 ||
-           (family==2 && intercept) || size<1 || size>10000000 || (sign!=1.f && sign!=-1.f))
+           (family==2 && intercept) || size<1 || size>10000000 || (sign!=1.f && sign!=-1.f) ||
+           (optimizer!=0 && optimizer!=1))
             throw std::invalid_argument("Invalid native network configuration");
         int64_t expected=int64_t(p)+q+1;
         int previous=1;
@@ -52,6 +53,12 @@ struct Model {
             pos+=in*out+out; in=out;
         }
         if(pos+intercept!=size) throw std::invalid_argument("Native parameter layout mismatch");
+    }
+    float index_norm(const std::vector<float>& w) const {
+        float r=0.f; for(int j=0;j<p;++j) r+=w[j]*w[j];
+        r=std::sqrt(r);
+        if(optimizer && r==0.f) throw std::invalid_argument("Zero index direction");
+        return r+(optimizer ? 0.f : 1e-6f);
     }
     float activate(float v) const {
         switch(activation) {
@@ -151,7 +158,7 @@ struct BackwardWorkspace {
 };
 // Only two layer buffers are needed for inference. A fixed chunk size bounds
 // activation storage independently of validation size or link-grid length.
-struct ForwardWorkspace { Vec index,a,b; };
+struct ForwardWorkspace { Vec index,a,b,da,db; };
 constexpr int forward_chunk=256;
 struct Network {
     const Model& m;
@@ -161,8 +168,7 @@ struct Network {
         int rows=n+int(anchor);
         auto& a=work.a; auto& pre=work.pre;
         a.resize(m.layers.size()+1); pre.resize(m.layers.size()); a[0].assign(rows,0.f);
-        float norm=0; for(int j=0;j<m.p;++j) norm+=w[j]*w[j];
-        norm=std::sqrt(norm)+1e-6f;
+        float norm=m.index_norm(w);
         for(int i=0;i<n;++i) {
             float v=0; for(int j=0;j<m.p;++j) v+=x[i*m.p+j]*(w[j]/norm);
             a[0][i]=m.sign*v;
@@ -198,11 +204,33 @@ struct Network {
         }
         for(int i=0;i<rows;++i) work.a[i]+=w[m.p+m.q]*work.index[i];
     }
+    // Forward-mode differentiation with respect to the scalar link input.
+    // Two layer buffers keep activation memory independent of dataset size.
+    void link_derivative(const Vec& w,int rows,ForwardWorkspace& work) const {
+        work.a.assign(work.index.begin(),work.index.end()); work.da.assign(rows,1.f);
+        for(size_t k=0;k<m.layers.size();++k) {
+            auto l=m.layers[k]; work.b.resize(size_t(rows)*l.out); work.db.resize(size_t(rows)*l.out);
+            for(int i=0;i<rows;++i) for(int o=0;o<l.out;++o) {
+                float t=w[l.b+o],dt=0.f;
+                for(int j=0;j<l.in;++j) {
+                    t+=work.a[i*l.in+j]*w[l.w+o*l.in+j];
+                    dt+=work.da[i*l.in+j]*w[l.w+o*l.in+j];
+                }
+                bool last=k+1==m.layers.size();
+                work.b[i*l.out+o]=last ? t : m.activate(t);
+                work.db[i*l.out+o]=last ? dt : dt*m.derivative(t);
+            }
+            work.a.swap(work.b); work.da.swap(work.db);
+        }
+        for(int i=0;i<rows;++i) {
+            work.a[i]+=w[m.p+m.q]*work.index[i];
+            work.da[i]+=w[m.p+m.q];
+        }
+    }
     void predict(const Vec& w,const float* x,const float* z,int n,bool anchor,
                  bool include_linear,Vec& result,ForwardWorkspace& work) const {
         const int rows=n+int(anchor); result.resize(rows);
-        float norm=0; for(int j=0;j<m.p;++j) norm+=w[j]*w[j];
-        norm=std::sqrt(norm)+1e-6f;
+        float norm=m.index_norm(w);
         for(int start=0;start<rows;start+=std::min(forward_chunk,rows-start)) {
             int count=std::min(forward_chunk,rows-start); work.index.assign(count,0.f);
             for(int i=0;i<count && start+i<n;++i) {
@@ -260,7 +288,7 @@ struct Network {
         }
         float rnorm=0,dot=0;
         for(int j=0;j<m.p;++j) {rnorm+=w[j]*w[j]; dot+=v[j]*w[j];}
-        rnorm=std::sqrt(rnorm); float denom=rnorm+1e-6f;
+        rnorm=std::sqrt(rnorm); float denom=m.index_norm(w);
         for(int j=0;j<m.p;++j)
             grad[j]=v[j]/denom-(rnorm>0 ? w[j]*dot/(rnorm*denom*denom) : 0.f);
         return loss;
@@ -273,9 +301,11 @@ struct Adam {
     Vec first,second; int step=0;
     explicit Adam(int n=0) { reset(n); }
     void reset(int n) { first.assign(n,0.f); second.assign(n,0.f); step=0; }
-    void update(const Model& m,Vec& w,Vec& grad,const float* hyper,bool gamma_only) {
+    void update(const Model& m,Vec& w,Vec& grad,const float* hyper,int group) {
+        auto active=[&](int j) { return group==0 || (group==1 ? gamma_parameter(m,j) :
+            j>=m.p+m.q && !gamma_parameter(m,j)); };
         if(hyper[3]>0) {
-            double ss=0; for(int j=0;j<m.size;++j) if(!gamma_only || gamma_parameter(m,j)) ss+=double(grad[j])*grad[j];
+            double ss=0; for(int j=0;j<m.size;++j) if(active(j)) ss+=double(grad[j])*grad[j];
             float scale=std::min(1.f,hyper[3]/(float(std::sqrt(ss))+1e-6f));
             for(float& v:grad) v*=scale;
         }
@@ -283,8 +313,8 @@ struct Adam {
         float correction1=float(1.-std::pow(.9,step)), correction2=float(std::sqrt(1.-std::pow(.999,step)));
         for(int j=0;j<m.size;++j) {
             bool gamma=gamma_parameter(m,j);
-            if(gamma_only && !gamma) continue;
-            float rate=hyper[0]*(gamma_only ? 10.f : (gamma ? 50.f : 1.f));
+            if(!active(j)) continue;
+            float rate=hyper[0]*(group==1 ? 10.f : (gamma ? 50.f : 1.f));
             float decay=gamma ? 0.f : (j<m.p ? hyper[2] : hyper[1]);
             w[j]*=1.f-rate*decay;
             first[j]+=(grad[j]-first[j])*.1f;
@@ -298,18 +328,8 @@ void finite(double value,const Vec& w) {
     if(!std::isfinite(value) || !std::all_of(w.begin(),w.end(),[](float v){return std::isfinite(v);}))
         throw std::runtime_error("Nonfinite native training loss or parameter");
 }
-// Outcome loss of the link values g plus the linear covariate terms.
-double gamma_loss(const Model& m,const Vec& w,const Vec& g,const float* z,const float* y,int n,
-                  Vec& prediction,OutcomeWorkspace& ow,bool cached_order=false) {
-    auto& r=prediction; r.assign(g.begin(),g.end());
-    for(int i=0;i<n;++i) {
-        for(int j=0;j<m.q;++j) r[i]+=z[i*m.q+j]*w[m.p+j];
-        if(m.intercept) r[i]+=w.back();
-    }
-    return outcome(r,y,n,m.family,nullptr,ow,cached_order);
-}
 // Double-precision Newton solver for the linear terms: the optional linear-model
-// starting point and the gamma step after joint training.
+// starting point and the gamma steps in both optimizers.
 using DVec=std::vector<double>;
 DVec solve(DVec a,DVec b,int d) {
     for(int k=0;k<d;++k) {
@@ -333,7 +353,8 @@ DVec solve(DVec a,DVec b,int d) {
 }
 // The linear predictor is offset+design*w; a null offset means zero.
 double linear_objective(const DVec& design,const float* y,const double* offset,const DVec& w,
-                        int n,int d,int family,int intercept,DVec& gradient,DVec& hessian) {
+                        int n,int d,int family,int intercept,DVec& gradient,DVec& hessian,
+                        double penalty=-1.) {
     gradient.assign(d,0.); hessian.assign(d*d,0.); DVec eta(n,0.);
     for(int i=0;i<n;++i) {
         if(offset) eta[i]=offset[i];
@@ -385,7 +406,7 @@ double linear_objective(const DVec& design,const float* y,const double* offset,c
             start=end;
         }
     }
-    double penalty=family==0 ? 1e-10 : 1e-6;
+    if(penalty<0.) penalty=family==0 ? 1e-10 : 1e-6;
     for(int j=0;j<d-intercept;++j) {
         loss+=.5*penalty*w[j]*w[j]; gradient[j]+=penalty*w[j]; hessian[j*d+j]+=penalty;
     }
@@ -422,6 +443,106 @@ int newton(const DVec& design,const float* y,const double* offset,DVec& w,int n,
     }
     throw std::runtime_error(what+" did not converge");
 }
+struct BetaWorkspace {
+    DVec basis,beta,design,offset,gradient,curvature;
+    Vec prediction,candidate;
+    ForwardWorkspace forward;
+    OutcomeWorkspace outcome;
+};
+// An orthonormal basis for the tangent space, using a stable Householder
+// reflection. Beta is represented directly on the sphere, without Adam moments
+// or a decaying, unidentifiable raw-weight scale.
+void tangent_basis(const Model& m,const Vec& w,BetaWorkspace& ws) {
+    const int d=m.p-1;
+    ws.beta.resize(m.p); double norm=0.;
+    for(int j=0;j<m.p;++j) norm+=double(w[j])*w[j];
+    norm=std::sqrt(norm);
+    if(!(norm>0.)) throw std::invalid_argument("Zero index direction");
+    int pivot=0;
+    for(int j=0;j<m.p;++j) {
+        ws.beta[j]=w[j]/norm;
+        if(std::abs(ws.beta[j])>std::abs(ws.beta[pivot])) pivot=j;
+    }
+    DVec v=ws.beta; v[pivot]+=std::copysign(1.,v[pivot]);
+    double vv=std::inner_product(v.begin(),v.end(),v.begin(),0.);
+    ws.basis.resize(size_t(m.p)*d);
+    for(int j=0,col=0;j<m.p;++j) if(j!=pivot) {
+        for(int k=0;k<m.p;++k) ws.basis[size_t(k)*d+col]=(k==j ? 1. : 0.)-2.*v[k]*v[j]/vv;
+        ++col;
+    }
+}
+// Frozen-link generalized Gauss-Newton geometry for the *full* fitting loss.
+// For Cox, linear_objective supplies global Breslow risk-set covariances,
+// including ties. The anchor and network decay do not depend on beta.
+double beta_geometry(const Model& m,const Network& net,const Vec& w,const float* x,
+                     const float* z,const float* y,int n,BetaWorkspace& ws) {
+    if(!m.optimizer) throw std::invalid_argument("Sphere updates require the alternating optimizer");
+    tangent_basis(m,w,ws); const int d=m.p-1;
+    net.predict(w,x,z,n,false,true,ws.prediction,ws.forward);
+    double value=outcome(ws.prediction,y,n,m.family,nullptr,ws.outcome);
+    ws.offset.assign(ws.prediction.begin(),ws.prediction.end());
+    ws.design.resize(size_t(n)*d);
+    const float norm=m.index_norm(w);
+    for(int start=0;start<n;start+=std::min(forward_chunk,n-start)) {
+        int count=std::min(forward_chunk,n-start); auto& f=ws.forward; f.index.assign(count,0.f);
+        for(int i=0;i<count;++i) {
+            float u=0.f;
+            for(int j=0;j<m.p;++j) u+=x[size_t(start+i)*m.p+j]*(w[j]/norm);
+            f.index[i]=m.sign*u;
+        }
+        net.link_derivative(w,count,f);
+        for(int i=0;i<count;++i) for(int k=0;k<d;++k) {
+            double v=0.;
+            for(int j=0;j<m.p;++j) v+=x[size_t(start+i)*m.p+j]*ws.basis[size_t(j)*d+k];
+            ws.design[size_t(start+i)*d+k]=m.sign*f.da[i]*v;
+        }
+    }
+    DVec zero(d,0.);
+    linear_objective(ws.design,y,ws.offset.data(),zero,n,d,m.family,0,ws.gradient,ws.curvature,0.);
+    double scale=m.family==0 ? 2./n : (m.family==1 ? 1./n : 1./ws.outcome.cox.events);
+    for(double& v:ws.gradient) { v*=scale; if(!std::isfinite(v)) throw std::runtime_error("Nonfinite beta gradient"); }
+    for(double& v:ws.curvature) { v*=scale; if(!std::isfinite(v)) throw std::runtime_error("Nonfinite beta curvature"); }
+    return value;
+}
+// One bounded tangent step, with damping for rank deficiency and backtracking
+// on the actual nonlinear loss. Damping is numerical, not a beta penalty.
+bool beta_step(const Model& m,const Network& net,Vec& w,const float* hyper,
+               const float* x,const float* z,const float* y,int n,BetaWorkspace& ws,
+               double* losses=nullptr) {
+    double value=beta_geometry(m,net,w,x,z,y,n,ws);
+    if(losses) losses[0]=losses[1]=value;
+    const int d=m.p-1;
+    if(!d) return false;
+    double maximum=0.,trace=0.;
+    for(int j=0;j<d;++j) {
+        maximum=std::max(maximum,std::abs(ws.gradient[j])); trace+=ws.curvature[j*d+j];
+    }
+    if(maximum<1e-7) return false;
+    DVec hessian=ws.curvature;
+    double damping=std::max(1e-10,double(hyper[6])*std::max(0.,trace/d));
+    for(int j=0;j<d;++j) hessian[j*d+j]+=damping;
+    DVec direction=solve(hessian,ws.gradient,d);
+    double norm=std::sqrt(std::inner_product(direction.begin(),direction.end(),direction.begin(),0.));
+    double factor=std::min(1.,double(hyper[7])/std::max(norm,1e-30));
+    for(double& v:direction) v*=factor;
+    double slope=std::inner_product(ws.gradient.begin(),ws.gradient.end(),direction.begin(),0.);
+    if(!(slope>0.) || !std::isfinite(slope)) throw std::runtime_error("Invalid beta descent direction");
+    DVec delta(m.p,0.);
+    for(int j=0;j<m.p;++j) for(int k=0;k<d;++k) delta[j]+=ws.basis[size_t(j)*d+k]*direction[k];
+    ws.candidate=w;
+    for(double step=1.;step>=1./1048576.;step*=.5) {
+        double length=0.;
+        for(int j=0;j<m.p;++j) length+=std::pow(ws.beta[j]-step*delta[j],2);
+        length=std::sqrt(length);
+        for(int j=0;j<m.p;++j) ws.candidate[j]=float((ws.beta[j]-step*delta[j])/length);
+        net.predict(ws.candidate,x,z,n,false,true,ws.prediction,ws.forward);
+        double next=outcome(ws.prediction,y,n,m.family,nullptr,ws.outcome,true);
+        if(std::isfinite(next) && next<=value-1e-4*step*slope) {
+            w.swap(ws.candidate); if(losses) losses[1]=next; return true;
+        }
+    }
+    return false; // Float32 resolution or an unsuccessful line search: no change.
+}
 struct TrainingWorkspace {
     Vec w,best,grad,bx,bz,by,tg,vg,outcomes,validation_prediction;
     DVec design,offset;
@@ -429,10 +550,11 @@ struct TrainingWorkspace {
     ForwardWorkspace forward;
     OutcomeWorkspace validation;
     Adam adam;
+    BetaWorkspace beta;
 };
-// Fits gamma and the optional intercept exactly, given the selected index and
-// link: Newton on all training and validation rows with g(x'beta) as a fixed
-// offset. On entry ws.vg holds the validation link values. Returns iterations.
+// Fits gamma and the optional intercept with g(x'beta) as a fixed offset.
+// Alternating training passes nv=0. The legacy final gamma fit includes the
+// validation partition, whose link values must be supplied in ws.vg.
 int profile_gamma(const Model& m,const Network& net,Vec& w,
                   const float* tx,const float* tz,const float* ty,int nt,
                   const float* vz,const float* vy,int nv,TrainingWorkspace& ws) {
@@ -443,8 +565,8 @@ int profile_gamma(const Model& m,const Network& net,Vec& w,
     design.resize(size_t(n)*d); offset.resize(n); outcomes.resize(size_t(n)*yd);
     for(int i=0;i<n;++i) {
         bool train=i<nt; int k=train ? i : i-nt;
-        const float* z=(train ? tz : vz)+size_t(k)*m.q;
-        for(int j=0;j<m.q;++j) design[size_t(i)*d+j]=z[j];
+        const float* z=train ? tz : vz;
+        for(int j=0;j<m.q;++j) design[size_t(i)*d+j]=z[size_t(k)*m.q+j];
         if(m.intercept) design[size_t(i)*d+d-1]=1.;
         offset[i]=(train ? ws.tg : ws.vg)[k];
         std::copy_n((train ? ty : vy)+size_t(k)*yd,yd,outcomes.begin()+size_t(i)*yd);
@@ -458,9 +580,9 @@ int profile_gamma(const Model& m,const Network& net,Vec& w,
     if(m.intercept) w.back()=float(coefficients.back());
     return iterations;
 }
-// next_order supplies one permutation per joint epoch. Joint training runs its
-// full budget and restores the best validation checkpoint without terminating
-// when validation loss plateaus or worsens; gamma is then fitted exactly.
+// Both optimizers execute the entire neural epoch budget. With a validation
+// partition, checkpoints are selected only after a complete alternating cycle.
+// Without validation, the final iterate is returned, with no loss-based stopping.
 template<class NextOrder>
 void train(const int32_t* config,const float* hyper,float* weights,
            const float* tx,const float* tz,const float* ty,int nt,
@@ -470,13 +592,17 @@ void train(const int32_t* config,const float* hyper,float* weights,
     auto& w=ws.w; auto& best=ws.best; auto& grad=ws.grad;
     w.assign(weights,weights+m.size); best=w;
     int batch=config[8],epochs=config[9],yd=m.family==2 ? 2:1;
-    if(nt<1 || nv<1 || batch<1 || epochs<0) throw std::invalid_argument("Invalid native training sizes");
+    if(nt<1 || nv<0 || batch<1 || epochs<0 || config[12]<1) throw std::invalid_argument("Invalid native training sizes");
     batch=std::min(batch,nt);
     auto& bx=ws.bx; auto& bz=ws.bz; auto& by=ws.by;
     bx.resize(size_t(batch)*m.p); bz.resize(size_t(batch)*m.q); by.resize(size_t(batch)*yd);
     ws.adam.reset(m.size); double best_loss=std::numeric_limits<double>::infinity();
-    if(m.family==2) ws.validation.cox.prepare(vy,nv);
-    int joint=0;
+    if(m.family==2 && nv) ws.validation.cox.prepare(vy,nv);
+    int joint=0,gamma_iterations=0,beta_steps=0,beta_skipped=0,best_epoch=0;
+    auto fit_gamma=[&]() {
+        return profile_gamma(m,net,w,tx,tz,ty,nt,nullptr,nullptr,0,ws);
+    };
+    if(m.optimizer && epochs) gamma_iterations+=fit_gamma();
     for(int epoch=0;epoch<epochs;++epoch) {
         const int32_t* order=next_order();
         for(int start=0;start<nt;start+=batch) {
@@ -488,22 +614,44 @@ void train(const int32_t* config,const float* hyper,float* weights,
                 std::copy_n(ty+size_t(row)*yd,yd,by.data()+size_t(i)*yd);
             }
             double value=net.loss_grad(w,bx.data(),bz.data(),by.data(),nb,true,grad,ws.backward);
-            finite(value,grad); ws.adam.update(m,w,grad,hyper,false);
+            finite(value,grad); ws.adam.update(m,w,grad,hyper,m.optimizer ? 2 : 0);
         }
-        net.predict(w,vx,vz,nv,true,true,ws.validation_prediction,ws.forward);
-        double value=outcome(ws.validation_prediction,vy,nv,m.family,nullptr,ws.validation,true);
-        value+=double(ws.validation_prediction[nv])*ws.validation_prediction[nv];
-        finite(value,w); ++joint;
-        if(value<best_loss) {best_loss=value;best=w;}
+        ++joint;
+        bool complete=!m.optimizer || joint%config[12]==0 || joint==epochs;
+        if(m.optimizer && complete) {
+            gamma_iterations+=fit_gamma();
+            if(beta_step(m,net,w,hyper,tx,tz,ty,nt,ws.beta)) ++beta_steps;
+            else ++beta_skipped;
+            gamma_iterations+=fit_gamma();
+        }
+        if(nv && complete) {
+            net.predict(w,vx,vz,nv,true,true,ws.validation_prediction,ws.forward);
+            double value=outcome(ws.validation_prediction,vy,nv,m.family,nullptr,ws.validation,true);
+            value+=double(ws.validation_prediction[nv])*ws.validation_prediction[nv];
+            finite(value,w);
+            if(value<best_loss) {best_loss=value;best=w;best_epoch=joint;}
+        }
     }
-    if(joint) w=best;
-    net.predict(w,vx,nullptr,nv,false,false,ws.vg,ws.forward);
+    if(joint && nv) w=best;
     // max_epoch=0 performs initialization only.
-    int iterations=epochs ? profile_gamma(m,net,w,tx,tz,ty,nt,vz,vy,nv,ws) : 0;
-    double validation=gamma_loss(m,w,ws.vg,vz,vy,nv,ws.validation_prediction,ws.validation,true);
-    finite(validation,w);
+    if(!m.optimizer && epochs) {
+        net.predict(w,vx,nullptr,nv,false,false,ws.vg,ws.forward);
+        gamma_iterations+=profile_gamma(m,net,w,tx,tz,ty,nt,vz,vy,nv,ws);
+    }
+    double validation=0.;
+    if(nv) {
+        net.predict(w,vx,vz,nv,false,true,ws.validation_prediction,ws.forward);
+        validation=outcome(ws.validation_prediction,vy,nv,m.family,nullptr,ws.validation,true);
+    }
+    net.predict(w,tx,tz,nt,false,true,ws.validation_prediction,ws.forward);
+    OutcomeWorkspace training_loss_work;
+    double training_loss=outcome(ws.validation_prediction,ty,nt,m.family,nullptr,training_loss_work);
+    finite(validation,w); finite(training_loss,w);
     std::copy(w.begin(),w.end(),weights);
-    diagnostics[0]=joint; diagnostics[1]=iterations; diagnostics[2]=validation;
+    diagnostics[0]=joint; diagnostics[1]=gamma_iterations; diagnostics[2]=validation;
+    diagnostics[3]=beta_steps; diagnostics[4]=training_loss; diagnostics[5]=best_epoch;
+    diagnostics[6]=best_epoch ? best_loss : 0.; diagnostics[7]=nt; diagnostics[8]=nv;
+    diagnostics[9]=beta_skipped;
 }
 }
 
@@ -522,7 +670,8 @@ int nplsi_loss_grad(const int32_t* config,const float* hyper,const float* weight
 int nplsi_adam_step(const int32_t* config,const float* hyper,float* weights,const float* gradient,int gamma_only) {
     try {
         Model m(config,hyper[4]); Vec w(weights,weights+m.size),g(gradient,gradient+m.size); Adam adam(m.size);
-        adam.update(m,w,g,hyper,gamma_only!=0); std::copy(w.begin(),w.end(),weights); return 0;
+        if(gamma_only<0 || gamma_only>2) throw std::invalid_argument("Invalid Adam parameter group");
+        adam.update(m,w,g,hyper,gamma_only); std::copy(w.begin(),w.end(),weights); return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
 int nplsi_train(const int32_t* config,const float* hyper,float* weights,
@@ -571,15 +720,19 @@ struct State {
     std::array<int32_t,NPLSI_CONFIG_SIZE> config;
     std::array<float,NPLSI_HYPER_SIZE> hyper;
     Vec weights;
-    std::array<double,3> diagnostics{{0.,0.,0.}};
+    std::array<double,NPLSI_DIAGNOSTICS_SIZE> diagnostics{};
     State(const int32_t* c,const float* h): weights(c[7]>0 && c[7]<=10000000 ? c[7] : 0) {
         std::copy_n(c,NPLSI_CONFIG_SIZE,config.begin());
         std::copy_n(h,NPLSI_HYPER_SIZE,hyper.begin());
         Model m(c,h[4]);
-        if(c[8]<1 || c[9]<0 || c[9]>1000000 || (c[10]!=0 && c[10]!=1))
+        if(c[8]<1 || c[9]<0 || c[9]>1000000 || (c[10]!=0 && c[10]!=1) || c[12]<1)
             throw std::invalid_argument("Invalid training configuration");
         for(int i=0;i<4;++i) if(!std::isfinite(h[i]) || h[i]<0)
             throw std::invalid_argument("Hyperparameters must be finite and nonnegative");
+        if(!std::isfinite(h[5]) || h[5]<0.f || h[5]>=1.f ||
+           !std::isfinite(h[6]) || h[6]<=0.f || !std::isfinite(h[7]) || h[7]<=0.f)
+            throw std::invalid_argument("Invalid validation fraction or beta step controls");
+        if(m.optimizer && m.p>1000) throw std::invalid_argument("Alternating training supports at most 1000 index coefficients");
     }
     void initialize(uint64_t seed) {
         Model m(config.data(),1.f);
@@ -592,6 +745,10 @@ struct State {
             for(int j=l.w;j<l.b+l.out;++j) weights[j]=rng.uniform(bound);
         }
         if(m.intercept) weights.back()=0.f;
+        if(m.optimizer) {
+            float norm=m.index_norm(weights);
+            for(int j=0;j<m.p;++j) weights[j]/=norm;
+        }
         hyper[4]=1.f;
     }
     void canonicalize() {
@@ -602,7 +759,7 @@ struct State {
     }
     std::string serialize() const {
         std::ostringstream out; out.imbue(std::locale::classic());
-        out<<"NEURALPLSI_NATIVE 2\n";
+        out<<"NEURALPLSI_NATIVE 3\n";
         for(int v:config) out<<v<<' ';
         out<<'\n'<<std::setprecision(std::numeric_limits<float>::max_digits10);
         for(float v:hyper) out<<v<<' ';
@@ -621,14 +778,17 @@ std::unique_ptr<State> deserialize(const char* buffer,size_t size) {
     std::istringstream in(std::string(buffer,size)); in.imbue(std::locale::classic());
     std::string magic; int version=0; in>>magic>>version;
     // Version 1 states carried a warm-start flag in the configuration.
-    if(magic!="NEURALPLSI_NATIVE" || version!=2) throw std::invalid_argument("Unsupported model state format");
+    if(magic!="NEURALPLSI_NATIVE" || (version!=2 && version!=3)) throw std::invalid_argument("Unsupported model state format");
     std::array<int32_t,NPLSI_CONFIG_SIZE> c{}; std::array<float,NPLSI_HYPER_SIZE> h{};
-    for(auto& v:c) in>>v;
-    for(auto& v:h) in>>v;
+    for(int i=0;i<(version==2 ? 11 : NPLSI_CONFIG_SIZE);++i) in>>c[i];
+    for(int i=0;i<(version==2 ? 5 : NPLSI_HYPER_SIZE);++i) in>>h[i];
+    if(version==2) { c[11]=0; c[12]=1; h[5]=.2f; h[6]=1e-3f; h[7]=.25f; }
     if(!in) throw std::invalid_argument("Truncated model configuration");
     auto result=std::make_unique<State>(c.data(),h.data());
     for(auto& v:result->weights) in>>v;
-    for(auto& v:result->diagnostics) in>>v;
+    for(int i=0;i<(version==2 ? 3 : NPLSI_DIAGNOSTICS_SIZE);++i) in>>result->diagnostics[i];
+    // Old states did not store partition counts or the selected epoch.
+    if(version==2) result->diagnostics[7]=result->diagnostics[8]=-1.;
     if(!in) throw std::invalid_argument("Truncated model parameters");
     in>>std::ws;
     if(!in.eof()) throw std::invalid_argument("Unexpected data after model parameters");
@@ -666,7 +826,7 @@ void initialize_linear(State& s,const float* x,const float* z,const float* y,int
     if(!std::isfinite(norm) || norm<1e-10) throw std::runtime_error("Linear initialization produced a zero exposure direction");
     for(int j=0;j<m.p;++j) s.weights[j]=float(w[j]);
     for(int j=0;j<m.q;++j) s.weights[m.p+j]=float(w[m.p+j]);
-    s.weights[m.p+m.q]=float(norm)+1e-6f;
+    s.weights[m.p+m.q]=float(norm)+(m.optimizer ? 0.f : 1e-6f);
     auto last=m.layers.back();
     std::fill(s.weights.begin()+last.w,s.weights.begin()+last.b+last.out,0.f);
     if(m.intercept) s.weights.back()=float(w.back());
@@ -684,9 +844,13 @@ void fit_state(State& s,const float* x,const float* z,const float* y,int n,
                uint64_t seed,FitWorkspace& work,const int32_t* sample_rows=nullptr) {
     if(n<2) throw std::invalid_argument("Training requires at least two observations");
     Model m(s.config.data(),s.hyper[4]);
-    int nv=n/5+int(n%5!=0),nt=n-nv,yd=m.family==2 ? 2:1;
+    // Round the float32 fraction before ceil so the historical .2 split is
+    // exactly ceil(n/5), rather than gaining a row from representation error.
+    double fraction=std::round(double(s.hyper[5])*1e7)/1e7;
+    int nv=int(std::ceil(n*fraction)),nt=n-nv,yd=m.family==2 ? 2:1;
+    if(nt<1) throw std::invalid_argument("Validation split leaves no fitting observations");
     auto& indices=work.split; indices.resize(n); std::iota(indices.begin(),indices.end(),0);
-    Random split(seed^UINT64_C(0x53504c4954)); split.shuffle(indices.begin(),indices.end());
+    if(nv) { Random split(seed^UINT64_C(0x53504c4954)); split.shuffle(indices.begin(),indices.end()); }
     auto& tx=work.tx; auto& tz=work.tz; auto& ty=work.ty;
     auto& vx=work.vx; auto& vz=work.vz; auto& vy=work.vy;
     tx.resize(size_t(nt)*m.p); tz.resize(size_t(nt)*m.q); ty.resize(size_t(nt)*yd);
@@ -699,7 +863,7 @@ void fit_state(State& s,const float* x,const float* z,const float* y,int n,
         std::copy_n(y+size_t(row)*yd,yd,yy.data()+size_t(i)*yd);
     }
     validate_arrays(m,tx.data(),tz.data(),ty.data(),nt,true);
-    validate_arrays(m,vx.data(),vz.data(),vy.data(),nv,true);
+    if(nv) validate_arrays(m,vx.data(),vz.data(),vy.data(),nv,true);
     s.initialize(seed);
     if(s.config[10]) initialize_linear(s,tx.data(),tz.data(),ty.data(),nt);
     Random batches(seed^UINT64_C(0x4241544348));
@@ -767,6 +931,29 @@ int nplsi_fit(void* handle,const float* x,const float* z,const float* y,int n,ui
         return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
+int nplsi_beta_geometry(const int32_t* config,const float* hyper,const float* weights,
+                        const float* x,const float* z,const float* y,int n,double* loss,
+                        double* basis,double* gradient,double* curvature) {
+    try {
+        Model m(config,hyper[4]); Network net(m); Vec w(weights,weights+m.size); BetaWorkspace ws;
+        validate_arrays(m,x,z,y,n,true); finite(0.,w);
+        *loss=beta_geometry(m,net,w,x,z,y,n,ws);
+        std::copy(ws.basis.begin(),ws.basis.end(),basis);
+        std::copy(ws.gradient.begin(),ws.gradient.end(),gradient);
+        std::copy(ws.curvature.begin(),ws.curvature.end(),curvature); return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+int nplsi_beta_step(const int32_t* config,const float* hyper,float* weights,
+                    const float* x,const float* z,const float* y,int n,double* losses) {
+    try {
+        Model m(config,hyper[4]); Network net(m); Vec w(weights,weights+m.size); BetaWorkspace ws;
+        validate_arrays(m,x,z,y,n,true); finite(0.,w);
+        if(!std::isfinite(hyper[6]) || hyper[6]<=0 || !std::isfinite(hyper[7]) || hyper[7]<=0)
+            throw std::invalid_argument("Invalid beta step controls");
+        beta_step(m,net,w,hyper,x,z,y,n,ws,losses);
+        std::copy(w.begin(),w.end(),weights); return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
 int nplsi_predict(void* handle,const float* x,const float* z,int n,int batch_size,int mode,float* result) {
     try {
         auto& s=state(handle); Model m(s.config.data(),s.hyper[4]); Network net(m);
@@ -803,9 +990,8 @@ int nplsi_link(void* handle,const float* grid,int n,float* result) {
 }
 int nplsi_coefficients(void* handle,float* beta,float* gamma,float* intercept) {
     try {
-        auto& s=state(handle); int p=s.config[0],q=s.config[1]; float norm=0.f;
-        for(int j=0;j<p;++j) norm+=s.weights[j]*s.weights[j];
-        norm=std::sqrt(norm)+1e-6f;
+        auto& s=state(handle); int p=s.config[0],q=s.config[1]; Model m(s.config.data(),s.hyper[4]);
+        float norm=m.index_norm(s.weights);
         for(int j=0;j<p;++j) beta[j]=s.weights[j]/norm;
         for(int j=0;j<q;++j) gamma[j]=s.weights[p+j];
         *intercept=s.config[4] ? s.weights.back() : 0.f; return 0;
@@ -858,7 +1044,8 @@ int nplsi_adam_updates(const int32_t* config,const float* hyper,float* weights,c
         if(steps<0) throw std::invalid_argument("Negative optimizer step count");
         for(int i=0;i<steps;++i) {
             Vec gradient(gradients+size_t(i)*m.size,gradients+size_t(i+1)*m.size);
-            finite(0.,gradient); adam.update(m,w,gradient,hyper,gamma_only!=0);
+            if(gamma_only<0 || gamma_only>2) throw std::invalid_argument("Invalid Adam parameter group");
+            finite(0.,gradient); adam.update(m,w,gradient,hyper,gamma_only);
         }
         finite(0.,w); std::copy(w.begin(),w.end(),weights); return 0;
     } catch(const std::exception& e) {last_error=e.what();return 1;}

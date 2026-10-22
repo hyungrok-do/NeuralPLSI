@@ -110,6 +110,21 @@ class NativeBootstrapTest(unittest.TestCase):
             self.assertEqual(result['gamma_se'].shape, (0,))
             self.assertEqual('intercept_samples' in result, intercept)
 
+    def test_bootstrap_preserves_optimizer_split_and_alternation_controls(self):
+        x, z, y, *_ = simulate_data(140, seed=3)
+        for optimizer, fraction in (('alternating', .25), ('joint', .2), ('joint', 0.)):
+            with self.subTest(optimizer=optimizer, fraction=fraction):
+                model = NeuralPLSI(max_epoch=7, hidden_units=4, optimizer=optimizer,
+                    validation_fraction=fraction, link_epochs=3, beta_damping=.01,
+                    beta_max_step=.1).fit(x, z, y)
+                draws = model.inference_bootstrap(x, z, y, n_samples=3, random_state=7, n_jobs=2)
+                for replicate in range(3):
+                    rows = bootstrap_indices(len(x), 7, replicate)
+                    fitted = NeuralPLSI(**model.get_params()).fit(x[rows], z[rows], y[rows],
+                                                                  random_state=7+1337+replicate)
+                    np.testing.assert_array_equal(fitted.beta, draws['beta_samples'][replicate])
+                    np.testing.assert_array_equal(fitted.gamma, draws['gamma_samples'][replicate])
+
 
 if __name__ == '__main__':
     unittest.main()

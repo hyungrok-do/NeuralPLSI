@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 from models.native import (NativeModel, checked, library, outcome_loss_gradient,
-                           training_validation_indices)
+                           training_validation_indices, DIAGNOSTICS_SIZE)
 
 
 def epoch_orders(n, count, seed):
@@ -50,14 +50,15 @@ class NativeWorkspacesTest(unittest.TestCase):
             with self.subTest(family=family):
                 x, z, y = self.data(family, 113)
                 options = dict(hidden_units=4, n_hidden_layers=3, max_epoch=200,
-                               batch_size=17, family=family, add_intercept=family!='cox')
+                               batch_size=17, family=family, add_intercept=family!='cox',
+                               optimizer='joint',validation_fraction=.2)
                 actual = NativeModel(3, 2, **options).fit(x, z, y, random_state=13)
                 expected = NativeModel(3, 2, **options, random_state=13)
                 train, valid = training_validation_indices(len(x), 13)
                 arrays = [np.ascontiguousarray(a[rows]) for rows in (train, valid) for a in (x, z, y)]
                 tx, tz, ty, vx, vz, vy = arrays
                 orders = epoch_orders(len(train), 200, 13)
-                weights, diagnostics = expected.weights, np.empty(3)
+                weights, diagnostics = expected.weights, np.empty(DIAGNOSTICS_SIZE)
                 checked(library().nplsi_train(expected.config, expected.hyper, weights,
                     tx, tz, ty, len(train), vx, vz, vy, len(valid), orders, diagnostics))
                 expected.set_weights(weights)
@@ -75,7 +76,7 @@ class NativeWorkspacesTest(unittest.TestCase):
                 x, z, y = self.data(family, 1303)
                 model = NativeModel(3, 2, hidden_units=5, n_hidden_layers=3,
                     family=family, max_epoch=8, batch_size=47,
-                    add_intercept=family!='cox').fit(x, z, y, random_state=13)
+                    add_intercept=family!='cox',validation_fraction=.2).fit(x, z, y, random_state=13)
                 _, valid = training_validation_indices(len(x), 13)
                 risk = model.predict(x[valid], z[valid])
                 value, _ = outcome_loss_gradient(risk, y[valid], family)

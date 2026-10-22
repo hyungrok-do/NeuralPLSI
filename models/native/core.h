@@ -8,12 +8,19 @@ extern "C" {
 /* All matrices are contiguous, row-major float32. Outcomes are n scalars,
    or n x 2 [duration, event] for Cox. Each model handle owns its parameters.
    Config: p, q, width, hidden_layers, intercept, family, activation,
-           parameter_count, batch_size, max_epochs, linear_init.
+           parameter_count, batch_size, max_epochs, linear_init,
+           optimizer (0=joint AdamW, 1=alternating), link_epochs.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
-   Hyper: learning_rate, link_decay, beta_decay, gradient_clip, index_sign. */
-#define NPLSI_CONFIG_SIZE 11
-#define NPLSI_HYPER_SIZE 5
+   Hyper: learning_rate, link_decay, beta_decay (joint only), gradient_clip,
+          index_sign, validation_fraction, beta_damping, beta_max_step.
+   Diagnostics: neural epochs, gamma iterations, final validation loss,
+          accepted beta steps, final training loss, checkpoint epoch,
+          checkpoint loss, training rows, validation rows, skipped beta steps.
+   Absent validation losses/checkpoint epochs are stored as zero. */
+#define NPLSI_CONFIG_SIZE 13
+#define NPLSI_HYPER_SIZE 8
+#define NPLSI_DIAGNOSTICS_SIZE 10
 const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
@@ -63,6 +70,14 @@ int nplsi_adam_step(const int32_t*, const float*, float*, const float*, int);
 int nplsi_adam_updates(const int32_t*, const float*, float*, const float*, int, int);
 int nplsi_outcome(const float* risks, const float* y, int n, int family,
                   double* loss, float* gradient);
+/* Frozen-link sphere geometry. basis is p x (p-1), gradient is p-1 and
+   curvature is (p-1) x (p-1), all row-major doubles. Cox uses global risk sets.
+   beta_step changes only beta and returns the before/after outcome loss.
+   Adam diagnostic group: 0=all, 1=gamma/intercept, 2=link only. */
+int nplsi_beta_geometry(const int32_t*, const float*, const float*, const float*,
+                        const float*, const float*, int, double*, double*, double*, double*);
+int nplsi_beta_step(const int32_t*, const float*, float*, const float*,
+                    const float*, const float*, int, double*);
 /* SplinePLSI (spline.cpp): g(x'beta) + z'gamma with a B-spline g, double precision.
    Config: p, q, family, num_knots, degree, max_iter. Hyper: ridge alpha, tol.
    Knots sit at num_knots equally spaced order statistics of x'beta, clamped,

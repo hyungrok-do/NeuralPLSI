@@ -150,7 +150,7 @@ class ModelRegressionTest(unittest.TestCase):
         x, z, y, *_ = simulate_data(50, seed=2)
         for intercept in (False, True):
             model = NeuralPLSI(initial=True, max_epoch=0, add_intercept=intercept).fit(x, z, y, random_state=4)
-            train, _ = training_validation_indices(len(x), 4)
+            train, _ = training_validation_indices(len(x), 4, validation_fraction=0)
             design = np.column_stack([x, z]).astype('float32').astype(float)
             reference = LinearRegression(fit_intercept=intercept).fit(design[train], y[train].astype('float32'))
             np.testing.assert_allclose(model.predict(x,z), reference.predict(design), rtol=1e-5, atol=2e-6)
@@ -161,7 +161,7 @@ class ModelRegressionTest(unittest.TestCase):
         rng = np.random.default_rng(24)
         x, z = rng.normal(size=(160, 3)), rng.normal(size=(160, 2))
         x, z = x.astype('float32'), z.astype('float32')
-        train, _ = training_validation_indices(len(x), 4)
+        train, _ = training_validation_indices(len(x), 4, validation_fraction=0)
         for family, intercept in [('binary', False), ('binary', True), ('cox', False)]:
             with self.subTest(family=family, intercept=intercept):
                 y = rng.binomial(1, expit(.5*x[:, 0] + .3*z[:, 0]))
