@@ -1,0 +1,617 @@
+{
+  "baseline_commit": "b74333674c63adee16b61a64f4aad9240a78a56b",
+  "current_commit": "b74333674c63adee16b61a64f4aad9240a78a56b",
+  "working_tree_dirty": true,
+  "current_core_sha256": "0f0afc8a541732096315748743f78cef91d43a151abdb399f744bd90ff1632b5",
+  "current_library": "core-0e569b73337b6edc1a32.so",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+  "compiler_flags": [
+    "-O3",
+    "-std=c++17",
+    "-ffp-contract=off",
+    "-pthread",
+    "-shared",
+    "-fPIC"
+  ],
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+  "settings": {
+    "baseline_ref": "b74333674c63adee16b61a64f4aad9240a78a56b",
+    "n": 2000,
+    "bootstrap": 4,
+    "bootstrap_seed": 11,
+    "seed": 0,
+    "grid": 301,
+    "max_iter": 5000,
+    "activation": "ELU",
+    "repeats": 3,
+    "jobs": [
+      1,
+      4
+    ],
+    "outcomes": [
+      "continuous",
+      "binary",
+      "cox"
+    ],
+    "out": "results/dense_kernel_benchmark.json"
+  },
+  "timings": [
+    {
+      "fit_seconds": 1.8825494419997995,
+      "prediction_seconds": 0.0027768829995693523,
+      "bootstrap_seconds": 9.096612744000595,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.7963260339993212,
+      "prediction_seconds": 0.0008876399997461704,
+      "bootstrap_seconds": 4.230358545999479,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.7909359510003924,
+      "prediction_seconds": 0.001000461000330688,
+      "bootstrap_seconds": 4.762516644999778,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.215807243999734,
+      "prediction_seconds": 0.002228255999398243,
+      "bootstrap_seconds": 6.362206386000253,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.216215939999529,
+      "prediction_seconds": 0.0019669299999804934,
+      "bootstrap_seconds": 7.007155830000556,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8691844920003859,
+      "prediction_seconds": 0.0009139499998127576,
+      "bootstrap_seconds": 4.417276432000108,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.284528345999206,
+      "prediction_seconds": 0.0019238650002080249,
+      "bootstrap_seconds": 2.4695239489992673,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.953465696999956,
+      "prediction_seconds": 0.0012965659998371848,
+      "bootstrap_seconds": 2.1038396049998482,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.074454937000155,
+      "prediction_seconds": 0.0016491300002599019,
+      "bootstrap_seconds": 2.141875202999472,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.5588196859998789,
+      "prediction_seconds": 0.002085669999360107,
+      "bootstrap_seconds": 2.69407328699981,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.274987812999825,
+      "prediction_seconds": 0.0039795849997972255,
+      "bootstrap_seconds": 2.8161054490001334,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "before",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.9782388989997344,
+      "prediction_seconds": 0.0008852370001477539,
+      "bootstrap_seconds": 1.7205338349995145,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 334,
+        "gamma_iterations": 1,
+        "objective": 1.0060656653801325
+      },
+      "version": "after",
+      "family": "continuous",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.836480568999832,
+      "prediction_seconds": 0.0018253500002174405,
+      "bootstrap_seconds": 3.0193498960006764,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.6368705439999758,
+      "prediction_seconds": 0.0009686240000519319,
+      "bootstrap_seconds": 2.691788708999411,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5683480010002313,
+      "prediction_seconds": 0.0010274329997628229,
+      "bootstrap_seconds": 2.2126351120004983,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.9492520249996232,
+      "prediction_seconds": 0.0017947320002349443,
+      "bootstrap_seconds": 3.1416669709997223,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8535309219996634,
+      "prediction_seconds": 0.0018800699999701465,
+      "bootstrap_seconds": 3.38165295699946,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.6161851660008324,
+      "prediction_seconds": 0.0011550350000106846,
+      "bootstrap_seconds": 2.0820520719998967,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8129676109992943,
+      "prediction_seconds": 0.001805918999707501,
+      "bootstrap_seconds": 1.242528752999533,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.7467274559994621,
+      "prediction_seconds": 0.001094133000151487,
+      "bootstrap_seconds": 1.0384515919995465,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.6057399410001381,
+      "prediction_seconds": 0.0011903189997610752,
+      "bootstrap_seconds": 0.9585571420002452,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 1.0952385680002408,
+      "prediction_seconds": 0.0019014629997400334,
+      "bootstrap_seconds": 1.3873780379999516,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.952405481999449,
+      "prediction_seconds": 0.001798336999854655,
+      "bootstrap_seconds": 1.1757316579996768,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "before",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.6461373219999587,
+      "prediction_seconds": 0.0011720499996954459,
+      "bootstrap_seconds": 0.7778403219999745,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 220,
+        "gamma_iterations": 1,
+        "objective": 0.3785805319562079
+      },
+      "version": "after",
+      "family": "binary",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8222694509995563,
+      "prediction_seconds": 0.0018472900001142989,
+      "bootstrap_seconds": 3.094280317999619,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5216033990000142,
+      "prediction_seconds": 0.0028662510003414354,
+      "bootstrap_seconds": 2.353388988000006,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.49982068600002094,
+      "prediction_seconds": 0.0008599789998697815,
+      "bootstrap_seconds": 2.062234071000603,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.7484090970001489,
+      "prediction_seconds": 0.0017373849996147328,
+      "bootstrap_seconds": 2.9077494909997768,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8043141309999555,
+      "prediction_seconds": 0.0024243130001195823,
+      "bootstrap_seconds": 2.983565284999713,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5065481609999551,
+      "prediction_seconds": 0.0009128180008701747,
+      "bootstrap_seconds": 1.8824619120005082,
+      "workers": 1,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 1,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.7127925869999672,
+      "prediction_seconds": 0.0023185330001069815,
+      "bootstrap_seconds": 1.030392837999898,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5194667139994635,
+      "prediction_seconds": 0.0012304589999985183,
+      "bootstrap_seconds": 0.8921583999999712,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 0,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5482224950001182,
+      "prediction_seconds": 0.0008971349998319056,
+      "bootstrap_seconds": 0.8527707749999536,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.8377484820002792,
+      "prediction_seconds": 0.0018385459998171427,
+      "bootstrap_seconds": 1.0856789319996096,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 1,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.755275991000417,
+      "prediction_seconds": 0.0019073000003118068,
+      "bootstrap_seconds": 1.2332310020001387,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "before",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    },
+    {
+      "fit_seconds": 0.5174507859992445,
+      "prediction_seconds": 0.0009295439995185006,
+      "bootstrap_seconds": 0.757281972999408,
+      "workers": 4,
+      "diagnostics": {
+        "iterations": 197,
+        "gamma_iterations": 1,
+        "objective": 5.891177001530978
+      },
+      "version": "after",
+      "family": "cox",
+      "jobs": 4,
+      "repeat": 2,
+      "reference_exact": true
+    }
+  ],
+  "baseline_core_sha256": "07c2139e8aaa5a2502fd64bdbee22a17c72655ae2bd7149895c317f48c152a65"
+}

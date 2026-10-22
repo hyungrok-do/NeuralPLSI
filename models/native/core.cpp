@@ -146,13 +146,44 @@ double outcome(const Vec& r,const float* y,int n,int family,Vec* delta,
 }
 struct BackwardWorkspace {
     std::vector<Vec> a,pre;
-    Vec prediction,delta,previous,index_delta,beta_delta;
+    Vec prediction,delta,previous,index_delta,beta_delta,packed;
     OutcomeWorkspace outcome;
 };
 // Only two layer buffers are needed for inference. A fixed chunk size bounds
 // activation storage independently of prediction size or link-grid length.
-struct ForwardWorkspace { Vec index,a,b; };
+struct ForwardWorkspace { Vec index,a,b,packed; };
 constexpr int forward_chunk=256;
+// Pack output neurons so the inner loop can use SIMD across independent outputs.
+// Each neuron's input terms are still added in their original float32 order.
+// A tile needs at most 32 * layer.in floats, independently of the output width.
+void affine_layer(const Layer& l,const Vec& w,const Vec& input,int rows,
+                  Vec& value,Vec& packed) {
+    value.resize(size_t(rows)*l.out);
+    if(l.in==1 || l.out<4) {
+        for(int i=0;i<rows;++i) for(int o=0;o<l.out;++o) {
+            float t=w[l.b+o];
+            for(int j=0;j<l.in;++j) t+=input[size_t(i)*l.in+j]*w[l.w+o*l.in+j];
+            value[size_t(i)*l.out+o]=t;
+        }
+        return;
+    }
+    constexpr int tile=32;
+    for(int first=0;first<l.out;first+=tile) {
+        int count=std::min(tile,l.out-first);
+        packed.resize(size_t(l.in)*count);
+        for(int j=0;j<l.in;++j) for(int o=0;o<count;++o)
+            packed[size_t(j)*count+o]=w[l.w+(first+o)*l.in+j];
+        for(int i=0;i<rows;++i) {
+            float* target=value.data()+size_t(i)*l.out+first;
+            std::copy_n(w.data()+l.b+first,count,target);
+            for(int j=0;j<l.in;++j) {
+                float a=input[size_t(i)*l.in+j];
+                const float* weights=packed.data()+size_t(j)*count;
+                for(int o=0;o<count;++o) target[o]+=a*weights[o];
+            }
+        }
+    }
+}
 struct Network {
     const Model& m;
     explicit Network(const Model& model): m(model) {}
@@ -169,13 +200,10 @@ struct Network {
         }
         for(size_t k=0;k<m.layers.size();++k) {
             auto l=m.layers[k]; auto& v=pre[k]; auto& next=a[k+1];
-            v.resize(size_t(rows)*l.out); next.resize(size_t(rows)*l.out);
-            for(int i=0;i<rows;++i) for(int o=0;o<l.out;++o) {
-                float t=w[l.b+o];
-                for(int j=0;j<l.in;++j) t+=a[k][i*l.in+j]*w[l.w+o*l.in+j];
-                v[i*l.out+o]=t;
-                next[i*l.out+o]=k+1==m.layers.size() ? t : m.activate(t);
-            }
+            affine_layer(l,w,a[k],rows,v,work.packed);
+            next.resize(size_t(rows)*l.out);
+            for(size_t i=0;i<v.size();++i)
+                next[i]=k+1==m.layers.size() ? v[i] : m.activate(v[i]);
         }
         auto& result=work.prediction; result.assign(a.back().begin(),a.back().end());
         for(int i=0;i<rows;++i) result[i]+=w[m.p+m.q]*a[0][i];
@@ -188,12 +216,10 @@ struct Network {
     void link_chunk(const Vec& w,int rows,ForwardWorkspace& work) const {
         work.a.assign(work.index.begin(),work.index.end());
         for(size_t k=0;k<m.layers.size();++k) {
-            auto l=m.layers[k]; work.b.resize(size_t(rows)*l.out);
-            for(int i=0;i<rows;++i) for(int o=0;o<l.out;++o) {
-                float t=w[l.b+o];
-                for(int j=0;j<l.in;++j) t+=work.a[i*l.in+j]*w[l.w+o*l.in+j];
-                work.b[i*l.out+o]=k+1==m.layers.size() ? t : m.activate(t);
-            }
+            auto l=m.layers[k];
+            affine_layer(l,w,work.a,rows,work.b,work.packed);
+            if(k+1!=m.layers.size())
+                for(float& value:work.b) value=m.activate(value);
             work.a.swap(work.b);
         }
         for(int i=0;i<rows;++i) work.a[i]+=w[m.p+m.q]*work.index[i];

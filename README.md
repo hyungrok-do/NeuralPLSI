@@ -208,6 +208,12 @@ selecting `n_jobs`. The packed double-precision bootstrap output uses
 `8 * B * (p + q + intercept + grid_size)` bytes, shared across workers, plus its
 four-row summary.
 
+Dense hidden layers pack up to 32 output neurons into a reusable tile, allowing
+the compiler to vectorize across neurons. Each neuron's float32 accumulation
+order is preserved, with fused multiply-add disabled. The network architecture,
+objective, gradients and L-BFGS procedure are unchanged. Each packing buffer is
+at most `32 * input_width` floats (4 KiB for a 32-unit hidden layer).
+
 ### Native bootstrap
 
 `inference_bootstrap(..., n_jobs=8)` uses up to eight C++ worker threads in the
@@ -280,6 +286,18 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
+
+For the dense-layer optimization's before/after timings and exact-result checks,
+run the following against the pre-optimization full-batch L-BFGS revision:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  python reproduce/compare_dense_kernels.py --repeats 3 --bootstrap 4 --jobs 1 4
+```
+
+The script alternates execution order and checks serialized fitted states,
+predictions, bootstrap draws, SEs and intervals for exact equality. Local results
+and the measurement settings are in [results/dense_kernel_benchmark.md](results/dense_kernel_benchmark.md).
 
 The historical timings and memory comparisons below used minibatch AdamW with
 patience-based early stopping and warm-start bootstrap refits, all since removed.

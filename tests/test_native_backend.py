@@ -58,6 +58,36 @@ class NativeBackendTest(unittest.TestCase):
                         numeric[j] = (loss(net.config, plus, x, z, y)-loss(net.config, minus, x, z, y))/2e-5
                     np.testing.assert_allclose(gradient, numeric, rtol=3e-4, atol=3e-6)
 
+    def test_packed_neuron_tiles_preserve_predictions_and_gradients(self):
+        # Complete tiles, both sides of a boundary, and multiple tiles.
+        for width, family in ((31, 'continuous'), (32, 'binary'), (33, 'cox'), (65, 'continuous')):
+            for activation in ('ELU', 'LeakyReLU', 'ReLU', 'Tanh'):
+                with self.subTest(width=width, family=family, activation=activation):
+                    x, z, y = self.data(family, n=259)
+                    net = NativeModel(3, 2, hidden_units=width, n_hidden_layers=3,
+                        family=family, activation=activation, add_intercept=family!='cox', random_state=9)
+                    net.set_weights(net.weights, sign=-1.)
+                    weights = net.weights.astype(float)
+                    expected, _ = forward(net.config, weights, x, z, -1.)
+                    actual = net.predict(x, z, batch_size=256)
+                    np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=3e-7)
+                    for batch in (1, 31, 1024):
+                        np.testing.assert_array_equal(actual, net.predict(x, z, batch_size=batch))
+                    # Independent scalar finite differences of beta and weights
+                    # spanning output-tile boundaries check the full gradient.
+                    x, z, y = x[:17], z[:17], y[:17]
+                    _, gradient = loss_and_gradient(net, x, z, y)
+                    start = 3+2+1+2*width
+                    positions = (0, 1, 2, start, start+min(31, width-1)*width,
+                                 start+min(32, width-1)*width+width-1, start+width*width-1)
+                    for j in positions:
+                        plus, minus = weights.copy(), weights.copy()
+                        plus[j] += 1e-5
+                        minus[j] -= 1e-5
+                        numeric = (loss(net.config, plus, x, z, y, -1.)-
+                                   loss(net.config, minus, x, z, y, -1.))/2e-5
+                        np.testing.assert_allclose(gradient[j], numeric, rtol=5e-4, atol=5e-6)
+
     def test_all_families_fit_bootstrap_and_round_trip(self):
         for family in ('continuous','binary','cox'):
             with self.subTest(family=family):
