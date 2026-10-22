@@ -1,7 +1,7 @@
 // Isolated native-process peak memory check. Arguments: n, B, workers, max_iter.
 // B=0 measures fitting alone. Each fit runs at most max_iter full-batch L-BFGS
 // iterations, followed by the exact gamma fit; runtime depends on when it stops.
-#include "core.h"
+#include "neuralplsi.h"
 #include <chrono>
 #include <cmath>
 #include <cstdlib>

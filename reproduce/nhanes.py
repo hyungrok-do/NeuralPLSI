@@ -7,10 +7,10 @@ import matplotlib.pyplot as plt
 import time
 
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
+if os.path.join(root_dir, 'python') not in sys.path:
+    sys.path.insert(0, os.path.join(root_dir, 'python'))
 
-from models import NeuralPLSI
+from neuralplsi import NeuralPLSI
 
 def main():
     os.makedirs('output/nhanes', exist_ok=True)

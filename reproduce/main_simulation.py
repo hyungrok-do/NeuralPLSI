@@ -27,13 +27,11 @@ from sklearn.metrics import roc_auc_score
 from lifelines.utils import concordance_index
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+sys.path[:0] = [ROOT, os.path.join(ROOT, 'python')]  # this checkout's reproduce/ and neuralplsi
 
-from models import SplinePLSI, NeuralPLSI
-from models.base import bootstrap_jobs
-from models.native import BOOTSTRAP_RNG_PROTOCOL
-from simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
+from neuralplsi import SplinePLSI, NeuralPLSI
+from neuralplsi.native import BOOTSTRAP_RNG_PROTOCOL
+from neuralplsi.simulation import simulate_data, beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 
 def to_json(obj):
@@ -103,14 +101,26 @@ TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_exact_gamma_v1',
                    'NeuralPLSI-Adam': 'minibatch_adamw_early_stopping_v1'}
 
 
+def bootstrap_jobs(n_jobs, n_samples):
+    """Workers for n_jobs ('auto', positive, or -k for all but k-1), capped by usable CPUs and SLURM."""
+    if n_jobs == 'auto':
+        n_jobs = -1
+    if isinstance(n_jobs, bool) or not isinstance(n_jobs, int) or n_jobs == 0:
+        raise ValueError('n_jobs must be a nonzero integer or auto')
+    available = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    if os.environ.get('SLURM_CPUS_PER_TASK'):
+        available = min(available, max(1, int(os.environ['SLURM_CPUS_PER_TASK'])))
+    requested = n_jobs if n_jobs > 0 else max(1, available+1+n_jobs)
+    return min(requested, available, n_samples)
+
+
 def run_configuration(args, model):
     """Record the estimator, inference settings and exact simulation source."""
     neural = model in NEURAL_OPTIONS
-    paths = ['reproduce/main_simulation.py', 'simulation/__init__.py',
-             'models/base.py',
-             'models/NeuralPLSI.py' if neural else 'models/PLSI.py']
-    paths += sorted(str(p.relative_to(ROOT)) for p in Path(ROOT, 'models/native').glob('*')
-                    if p.suffix in ('.py', '.cpp', '.h'))
+    paths = ['reproduce/main_simulation.py', 'python/neuralplsi/simulation.py',
+             'python/neuralplsi/base.py', 'python/neuralplsi/native.py',
+             'python/neuralplsi/neural.py' if neural else 'python/neuralplsi/spline.py',
+             'core/include/neuralplsi.h', 'core/src/neuralplsi.cpp', 'core/src/spline.cpp']
     digest = hashlib.sha256()
     for path in paths:
         digest.update(path.encode())
@@ -118,8 +128,8 @@ def run_configuration(args, model):
             digest.update(source.read())
     native_build = None
     if not neural or args.nn_backend == 'cpp':
-        from models.native import build_library
-        native_build = build_library().name
+        from neuralplsi.native import library_path
+        native_build = library_path().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if neural else 'cpu')
     return dict(protocol_version=9, model=model, n=args.n_instances,

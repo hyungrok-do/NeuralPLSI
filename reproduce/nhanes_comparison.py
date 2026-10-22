@@ -9,10 +9,10 @@ import time
 
 # Add root directory to path to allow imports
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if root_dir not in sys.path:
-    sys.path.append(root_dir)
+if os.path.join(root_dir, 'python') not in sys.path:
+    sys.path.insert(0, os.path.join(root_dir, 'python'))
 
-from models import NeuralPLSI, SplinePLSI
+from neuralplsi import NeuralPLSI, SplinePLSI
 
 # Set style for high-quality plots
 plt.rcParams['font.family'] = 'sans-serif'

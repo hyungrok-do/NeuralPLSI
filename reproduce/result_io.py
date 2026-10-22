@@ -5,7 +5,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from simulation import beta as TRUE_BETA, gamma as TRUE_GAMMA, simulate_data
+from neuralplsi.simulation import beta as TRUE_BETA, gamma as TRUE_GAMMA, simulate_data
 
 SCENARIO = ('model', 'n', 'g_fn', 'outcome', 'x_dist')
 

@@ -1,0 +1,10 @@
+# The simulation, NHANES and report scripts. They use this checkout's
+# python/neuralplsi (and compile core/ on first use), so the package itself
+# needs no installation here.
+numpy>=1.23.5
+pandas>=2.0.0
+jinja2>=3.1.2  # pandas' LaTeX tables
+scipy>=1.10.0
+scikit-learn>=1.2.0
+lifelines>=0.27.0
+matplotlib>=3.7.0

@@ -21,10 +21,10 @@ from unittest.mock import patch
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from models import NeuralPLSI
-from models import native
-from simulation import simulate_data
+sys.path[:0] = [str(ROOT), str(ROOT/'python')]  # this checkout's reproduce/ and neuralplsi
+from neuralplsi import NeuralPLSI
+from neuralplsi import native
+from neuralplsi.simulation import simulate_data
 from reproduce.main_simulation import atomic_json
 
 
@@ -87,15 +87,16 @@ def main(argv=None):
     compiler = shlex.split(os.environ.get('CXX', 'g++'))
     flags = ['-O3', '-std=c++17', '-ffp-contract=off', '-pthread', '-shared', '-fPIC']
     current = native.library()
-    source = ROOT/'models'/'native'/'core.cpp'
+    source = ROOT/'core'/'src'/'neuralplsi.cpp'
     results = dict(baseline_commit=baseline, current_commit=run(['git', 'rev-parse', 'HEAD']).strip(),
         working_tree_dirty=bool(run(['git', 'status', '--porcelain']).strip()),
         current_core_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-        current_library=native.build_library().name,
+        current_library=native.library_path().name,
         compiler=run(compiler+['--version']).splitlines()[0], compiler_flags=flags,
         platform=platform.platform(), settings=vars(args), timings=[])
     with tempfile.TemporaryDirectory(prefix='neuralplsi-dense-') as temporary:
         temp = Path(temporary)
+        # Baseline revisions predate core/: the engine was models/native/core.cpp.
         for filename in ('core.cpp', 'core.h'):
             (temp/filename).write_text(run(['git', 'show', baseline+':models/native/'+filename]))
         results['baseline_core_sha256'] = hashlib.sha256((temp/'core.cpp').read_bytes()).hexdigest()

@@ -3,9 +3,17 @@ logs/*
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.DS_Store
+.pytest_cache/
+
+# C++ and Python package builds
+/build*/
+*.egg-info/
+dist/
+
 outputs/legacy/
 reproduce/inference_audit/
 reproduce/neuralplsi_*review.zip
 reproduce/neuralplsi_*audit.zip
 reproduce/neuralplsi_gamma_followup.zip
-*.so

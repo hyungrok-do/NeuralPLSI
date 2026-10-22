@@ -8,10 +8,11 @@ from time import perf_counter
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from models import NeuralPLSI
-from models.native import library, RNG_PROTOCOL, BOOTSTRAP_RNG_PROTOCOL
-from simulation import simulate_data
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT), str(ROOT/'python')]  # this checkout's reproduce/ and neuralplsi
+from neuralplsi import NeuralPLSI
+from neuralplsi.native import library, RNG_PROTOCOL, BOOTSTRAP_RNG_PROTOCOL
+from neuralplsi.simulation import simulate_data
 from reproduce.main_simulation import atomic_json
 
 

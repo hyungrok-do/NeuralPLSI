@@ -1,0 +1,45 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "neuralplsi"
+version = "0.1.0"
+description = "Neural-network partial-linear single-index models with bootstrap inference, on a C++ engine."
+readme = "python/README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Hyungrok Do" }]
+keywords = ["single-index model", "environmental mixtures", "neural network", "bootstrap", "survival"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: C++",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = ["numpy>=1.23.5", "pandas>=2.0.0", "scipy>=1.10.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/hyungrok-do/NeuralPLSI"
+Paper = "https://arxiv.org/abs/2512.11593"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.16"
+cmake.build-type = "Release"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/neuralplsi"]
+# The engine is loaded through ctypes (no Python C API), so one wheel per
+# platform serves every Python 3 version.
+wheel.py-api = "py3"
+sdist.include = ["core", "python/neuralplsi", "python/README.md", "CMakeLists.txt", "LICENSE"]
+sdist.exclude = ["/build*", ".github", "output", "results", "reproduce", "r", "web", "NHANES"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests", "reproduce/tests"]
