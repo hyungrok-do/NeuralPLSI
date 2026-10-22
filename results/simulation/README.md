@@ -1,14 +1,14 @@
 # Simulation: NeuralPLSI vs SplinePLSI, n = 2000
 
-**Interim snapshot (2026-10-22, 12:10 EDT).** The NeuralPLSI rerun (job
+**Interim snapshot (2026-10-22, 13:07 EDT).** The NeuralPLSI rerun (job
 28702575) is still running. Everything here uses the datasets it has finished,
 and the SplinePLSI numbers are restricted to the same seeds:
 
 | g \ outcome | continuous | binary | cox |
 |---|---:|---:|---:|
 | linear | 500 | 500 | 500 |
-| sfun (S-shape) | 278 | 499 | 500 |
-| sigmoid | 389 | 484 | 500 |
+| sfun (S-shape) | 389 | 500 | 500 |
+| sigmoid | 500 | 500 | 500 |
 
 The raw per-replicate results are not in git. They are on BigPurple at
 `/gpfs/scratch/doh03/NeuralPLSI/output/simulation`.
@@ -41,28 +41,28 @@ The `source_sha256` recorded in every result row matches these commits.
 
 ## Main findings so far
 
-Ranges are across the 9 settings. With 278-500 replicates, the Monte-Carlo
-range at exact 0.95 coverage is ±0.026 to ±0.019 around 0.95 for a single
+Ranges are across the 9 settings. With 389-500 replicates, the Monte-Carlo
+range at exact 0.95 coverage is ±0.022 to ±0.019 around 0.95 for a single
 coefficient.
 
 - **β intervals.**
-  - NeuralPLSI covers 0.940-0.958; SplinePLSI covers 0.942-0.969.
+  - NeuralPLSI covers 0.940-0.955; SplinePLSI covers 0.942-0.969.
   - SE/SD is 0.98-1.03 for both. The one exception is SplinePLSI linear-binary at 1.14, which over-covers (0.969), as in the previous run.
   - The previous NeuralPLSI run over-covered (0.967-0.984). That came from optimizer noise in the single fit. The bagged β is now no more accurate than the single fit (RMSE within 0.2%), so that noise is gone.
 - **β accuracy.** NeuralPLSI and SplinePLSI have the same RMSE to within 0.4% in 6 settings. NeuralPLSI is about 1% lower for linear-Cox and sigmoid-binary, and 6% lower for linear-binary. (In the previous run SplinePLSI was 11-16% lower.)
 - **γ.**
-  - Coverage is 0.933-0.945 for NeuralPLSI and 0.925-0.945 for SplinePLSI. SE/SD is 0.96-1.02 for both.
+  - Coverage is 0.933-0.945 for NeuralPLSI and 0.925-0.945 for SplinePLSI. SE/SD is 0.98-1.02 for both.
   - RMSE is equal or up to 3% lower for NeuralPLSI.
 - **g, RMSE on |u| ≤ 2.**
-  - NeuralPLSI is lower in 7 of 9 settings: 24-44% lower for linear g, 10-18% lower for sigmoid continuous and binary, 9% lower for S-shape binary and 4% lower for sigmoid Cox.
-  - NeuralPLSI is about equal for S-shape Cox (0.115 vs 0.114) and 11% higher for S-shape continuous (0.059 vs 0.053).
+  - NeuralPLSI is lower in 7 of 9 settings: 24-44% lower for linear g, 10-17% lower for sigmoid continuous and binary, 9% lower for S-shape binary and 4% lower for sigmoid Cox.
+  - NeuralPLSI is about equal for S-shape Cox (0.115 vs 0.114) and 12% higher for S-shape continuous (0.060 vs 0.053).
 - **g band, mean coverage on |u| ≤ 2.**
   - NeuralPLSI: 0.94-0.97 in 8 settings. The weak spot is S-shape binary, at 0.92 on |u| ≤ 2: it dips to about 0.83 near u = 0 and falls to about 0.59 at |u| = 3.
   - SplinePLSI: 0.92-0.97. It dips to about 0.85 at the steep part of the sigmoid for continuous and Cox, which is consistent with the bias of a 5-knot spline.
-- **Prediction.** Test AUC and C-index agree to the third decimal. Test MSE for continuous outcomes is 1.008-1.009 for NeuralPLSI and 1.007-1.010 for SplinePLSI.
+- **Prediction.** Test AUC and C-index agree to the third decimal. Test MSE for continuous outcomes is 1.008-1.011 for NeuralPLSI and 1.010-1.011 for SplinePLSI.
 - **Cost (median per replicate, 40 threads).**
   - Fit: 0.3-1.1 s for NeuralPLSI; 0.07-0.3 s for SplinePLSI.
-  - Bootstrap: 8-33 s for NeuralPLSI with B = 1000; 3-11 s for SplinePLSI with B = 999.
+  - Bootstrap: 8-32 s for NeuralPLSI with B = 1000; 3-10 s for SplinePLSI with B = 999.
   - NeuralPLSI is slowest for continuous outcomes, and S-shape continuous is the slowest setting.
 
 ## Regenerate
