@@ -263,6 +263,10 @@ def main():
     csv_file = 'output/nhanes/nhanes_comparison.csv'
     df_res.to_csv(csv_file)
     print(f"Results saved to {csv_file}")
+    # The plotted curves: bootstrap mean and 95% band of g (NeuralPLSI: plus intercept).
+    pd.DataFrame({'index': g_grid, 'Neural_Mean': g_mean_n, 'Neural_LB': g_lb_n, 'Neural_UB': g_ub_n,
+                  'PLSI_Mean': g_mean_s, 'PLSI_LB': g_lb_s, 'PLSI_UB': g_ub_s}).to_csv(
+        'output/nhanes/nhanes_g_curves.csv', index=False)
 
 
 if __name__ == "__main__":

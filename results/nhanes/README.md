@@ -33,6 +33,8 @@ the size of the NeuralPLSI estimate.
 
 - `nhanes_comparison.csv`: both models' estimates, SEs and 95% intervals for beta and gamma.
 - `nhanes_nplsi_results.csv`: NeuralPLSI only, including the intercept.
+- `nhanes_g_curves.csv`: the plotted curves on a 200-point index grid: bootstrap mean and 95% band of g
+  for both models (NeuralPLSI's includes the intercept).
 - `nhanes_g_function_neural.png`, `nhanes_g_function_plsi.png`, `nhanes_forest_plot.png`.
 
 Regenerate (needs `NHANES/12940_2020_644_MOESM2_ESM.csv`):
