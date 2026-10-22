@@ -14,6 +14,7 @@ extern "C" {
    Hyper: learning_rate, link_decay, beta_decay, gradient_clip, index_sign. */
 #define NPLSI_CONFIG_SIZE 11
 #define NPLSI_HYPER_SIZE 5
+#define NPLSI_TRAINING_DIAGNOSTICS_SIZE 9
 const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
@@ -28,6 +29,14 @@ int nplsi_predict(void* handle, const float* x, const float* z, int n,
 int nplsi_link(void* handle, const float* grid, int n, float* result);
 int nplsi_coefficients(void* handle, float* beta, float* gamma, float* intercept);
 int nplsi_get_config(void* handle, int32_t* config, float* hyper, double* diagnostics);
+/* Default: alternating (1), one link epoch per coefficient update, no holdout.
+   Joint Adam (0) is retained for comparison. validation_fraction is in [0,1).
+   get_training writes two integers (optimizer, link_epochs), the fraction, and
+   nine doubles: training loss, checkpoint epoch (-1 if none), checkpoint loss,
+   accepted coefficient steps, rejected coefficient steps, beta score norm,
+   training rows, validation rows, coefficient update attempts. */
+int nplsi_set_training(void* handle, int optimizer, int link_epochs, double validation_fraction);
+int nplsi_get_training(void* handle, int32_t* options, double* validation_fraction, double* diagnostics);
 int nplsi_get_weights(void* handle, float* weights);
 int nplsi_set_weights(void* handle, const float* weights, float sign);
 int nplsi_canonicalize(void* handle);
@@ -56,13 +65,23 @@ int nplsi_export_state(void* handle, char* buffer, size_t size);
 void* nplsi_import_state(const char* buffer, size_t size);
 int nplsi_save(void* handle, const char* path);
 void* nplsi_load(const char* path);
-/* Diagnostics for independently checking gradients and optimizer steps. */
+/* Diagnostics for independently checking gradients and optimizer steps.
+   Adam group: 0=all, 1=gamma/intercept, 2=link only. */
 int nplsi_loss_grad(const int32_t*, const float*, const float*, const float*,
                     const float*, const float*, int, int, double*, float*);
 int nplsi_adam_step(const int32_t*, const float*, float*, const float*, int);
 int nplsi_adam_updates(const int32_t*, const float*, float*, const float*, int, int);
 int nplsi_outcome(const float* risks, const float* y, int n, int family,
                   double* loss, float* gradient);
+/* Frozen-network coefficient diagnostics. d=p+q+intercept. The raw beta
+   direction must have unit length. The first p gradient/Hessian coordinates
+   are tangent to that direction. Outputs use double precision.
+   step statistics: objective before/after, beta score norm, status (1 accepted,
+   0 negligible step, -1 rejected). The network is unchanged by this step. */
+int nplsi_coefficient_system(const int32_t*, const float*, const float*, const float*,
+                            const float*, const float*, int, double*, double*, double*);
+int nplsi_coefficient_step(const int32_t*, const float*, float*, const float*,
+                          const float*, const float*, int, double*);
 /* SplinePLSI (spline.cpp): g(x'beta) + z'gamma with a B-spline g, double precision.
    Config: p, q, family, num_knots, degree, max_iter. Hyper: ridge alpha, tol.
    Knots sit at num_knots equally spaced order statistics of x'beta, clamped,

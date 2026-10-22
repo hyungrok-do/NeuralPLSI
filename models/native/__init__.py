@@ -14,6 +14,7 @@ import numpy as np
 
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
+OPTIMIZERS = {'joint': 0, 'alternating': 1}
 RNG_PROTOCOL = 'splitmix64_v1'
 BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 
@@ -70,6 +71,8 @@ def library():
         'nplsi_link': ([pointer, fp, integer, fp], integer),
         'nplsi_coefficients': ([pointer, fp, fp, fp], integer),
         'nplsi_get_config': ([pointer, ip, fp, dp], integer),
+        'nplsi_set_training': ([pointer, integer, integer, ctypes.c_double], integer),
+        'nplsi_get_training': ([pointer, ip, dp, dp], integer),
         'nplsi_get_weights': ([pointer, fp], integer),
         'nplsi_set_weights': ([pointer, fp, ctypes.c_float], integer),
         'nplsi_canonicalize': ([pointer], integer),
@@ -87,6 +90,8 @@ def library():
         'nplsi_adam_step': ([ip, fp, fp, fp, integer], integer),
         'nplsi_adam_updates': ([ip, fp, fp, fp, integer, integer], integer),
         'nplsi_outcome': ([fp, fp, integer, integer, dp, fp], integer),
+        'nplsi_coefficient_system': ([ip, fp, fp, fp, fp, fp, integer, dp, dp, dp], integer),
+        'nplsi_coefficient_step': ([ip, fp, fp, fp, fp, fp, integer, dp], integer),
         'nplsi_train': ([ip, fp, fp, fp, fp, fp, integer, fp, fp, fp, integer, ip, dp], integer),
         'splsi_error': ([], chars),
         'splsi_fit': ([ip, dp, dp, dp, dp, integer, seed, optional_dp, dp, dp, dp, dp, dp], integer),
@@ -121,12 +126,26 @@ def parameter_count(p, q, width, depth, intercept):
     return p+q+1+2*width+(depth-1)*(width*width+width)+width+1+int(intercept)
 
 
+def training_options(optimizer, link_epochs, validation_fraction):
+    if optimizer not in OPTIMIZERS:
+        raise ValueError('optimizer must be alternating or joint')
+    if isinstance(link_epochs, bool) or not isinstance(link_epochs, Integral) or not 1 <= link_epochs <= 1000000:
+        raise ValueError('link_epochs must be an integer in [1, 1000000]')
+    if validation_fraction is None:
+        validation_fraction = 0. if optimizer == 'alternating' else .2
+    if not np.isfinite(validation_fraction) or not 0 <= validation_fraction < 1:
+        raise ValueError('validation_fraction must be in [0, 1)')
+    return optimizer, int(link_epochs), float(validation_fraction)
+
+
 class NativeModel:
     """Own a native model handle. No Python network or automatic differentiation."""
     def __init__(self, p, q, hidden_units=32, n_hidden_layers=2, add_intercept=False,
                  family='continuous', activation='ELU', batch_size=64, max_epoch=200,
                  learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-                 grad_clip=1., initial=False, random_state=0):
+                 grad_clip=1., initial=False, random_state=0, optimizer='alternating',
+                 link_epochs=1, validation_fraction=None):
+        optimizer, link_epochs, validation_fraction = training_options(optimizer, link_epochs, validation_fraction)
         self._library = library()
         self._handle = None
         self.config = np.array([p, q, hidden_units, n_hidden_layers, int(add_intercept),
@@ -136,6 +155,7 @@ class NativeModel:
         self.hyper = np.array([learning_rate, weight_decay, weight_decay_beta, grad_clip, 1.], dtype=np.float32)
         self._handle = self._library.nplsi_create(self.config, self.hyper, seed_value(random_state))
         self._check_handle()
+        checked(self._library.nplsi_set_training(self._handle, OPTIMIZERS[optimizer], link_epochs, validation_fraction))
         self._refresh()
 
     def _check_handle(self):
@@ -154,8 +174,18 @@ class NativeModel:
         self.config, self.hyper = np.empty(11, dtype=np.int32), np.empty(5, dtype=np.float32)
         diagnostics = np.empty(3, dtype=np.float64)
         checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
-        self.fit_diagnostics = dict(joint_epochs=int(diagnostics[0]), gamma_iterations=int(diagnostics[1]),
-                                   validation_loss=float(diagnostics[2]))
+        options, fraction, extra = np.empty(2, dtype=np.int32), np.empty(1), np.empty(9)
+        checked(self._library.nplsi_get_training(self._handle, options, fraction, extra))
+        self.optimizer = next(k for k, v in OPTIMIZERS.items() if v == options[0])
+        self.link_epochs, self.validation_fraction = int(options[1]), float(fraction[0])
+        self.fit_diagnostics = dict(epochs=int(diagnostics[0]), joint_epochs=int(diagnostics[0]),
+            gamma_iterations=int(diagnostics[1]),
+            validation_loss=float(diagnostics[2]) if self.validation_fraction else None,
+            training_loss=float(extra[0]), checkpoint_epoch=int(extra[1]) if extra[1] >= 0 else None,
+            checkpoint_loss=float(extra[2]) if extra[1] >= 0 else None,
+            coefficient_steps=int(extra[3]), coefficient_rejections=int(extra[4]),
+            beta_gradient_norm=float(extra[5]) if options[0] and diagnostics[0] else None,
+            training_rows=int(extra[6]), validation_rows=int(extra[7]), coefficient_cycles=int(extra[8]))
 
     @classmethod
     def _from_handle(cls, handle):
@@ -300,13 +330,19 @@ def outcome_loss_gradient(risk, y, family):
     return float(loss[0]), gradient
 
 
-def training_validation_indices(n, random_state=0):
-    """Inspect the native 80/20 split without fitting or changing any RNG state."""
+def training_validation_indices(n, random_state=0, validation_fraction=.2):
+    """Inspect a native split without fitting or changing any RNG state."""
     if isinstance(n, bool) or not isinstance(n, Integral) or n < 2:
         raise ValueError('Splitting requires at least two rows')
+    _, _, validation_fraction = training_options('alternating', 1, validation_fraction)
+    validation_size = int(np.ceil(n*validation_fraction))
+    if validation_size >= n:
+        raise ValueError('Validation fraction leaves no fitting rows')
+    if not validation_size:
+        seed_value(random_state)
+        return np.arange(n, dtype=np.int32), np.empty(0, dtype=np.int32)
     order = np.empty(n, dtype=np.int32)
     checked(library().nplsi_split(n, seed_value(random_state), order))
-    validation_size = (n+4)//5
     return order[validation_size:], order[:validation_size]
 
 

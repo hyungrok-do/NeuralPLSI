@@ -149,7 +149,7 @@ class ModelRegressionTest(unittest.TestCase):
         from sklearn.linear_model import LinearRegression
         x, z, y, *_ = simulate_data(50, seed=2)
         for intercept in (False, True):
-            model = NeuralPLSI(initial=True, max_epoch=0, add_intercept=intercept).fit(x, z, y, random_state=4)
+            model = NeuralPLSI(initial=True, max_epoch=0, add_intercept=intercept, optimizer='joint').fit(x, z, y, random_state=4)
             train, _ = training_validation_indices(len(x), 4)
             design = np.column_stack([x, z]).astype('float32').astype(float)
             reference = LinearRegression(fit_intercept=intercept).fit(design[train], y[train].astype('float32'))
@@ -196,7 +196,7 @@ class ModelRegressionTest(unittest.TestCase):
                 reference = minimize(objective, np.zeros(design.shape[1]), jac=True,
                                      method='BFGS', options={'gtol': 1e-7})
                 self.assertLess(np.max(np.abs(objective(reference.x)[1])), 1e-5)
-                model = NeuralPLSI(family=family, initial=True, max_epoch=0,
+                model = NeuralPLSI(family=family, initial=True, max_epoch=0, optimizer='joint',
                                    add_intercept=intercept).fit(x, z, y, random_state=4)
                 np.testing.assert_allclose(model.predict(x, z), design @ reference.x,
                                            rtol=1e-5, atol=2e-6)

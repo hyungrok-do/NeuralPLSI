@@ -154,66 +154,103 @@ only supported execution modes (`device="auto"` is a CPU alias).
 
 ### Optimization
 
-Training uses **minibatch AdamW**, with explicit C++ backpropagation. It uses
-stochastic minibatches, with Adam's adaptive first and second moments and
-decoupled weight decay. Default settings are:
+The default `optimizer="alternating"` keeps the two hidden layers of 32 units
+and fits on **all supplied rows**. Each cycle runs `link_epochs` ordinary neural
+training epochs (default 1), then freezes the link for a full-data coefficient
+update. `max_epoch=200` is the total neural epoch budget, including a final
+partial block if needed. There is no patience-based early stopping.
 
-| Parameter group | Joint training learning rate | Gamma fit | Weight decay |
-|---|---:|---:|---:|
-| Raw index weights, beta | 0.001 | Frozen | 0.00001 |
-| Link network and linear skip | 0.001 | Frozen | 0.0001 |
-| Covariate coefficients, gamma, and optional intercept | 0.05 | Newton | 0 |
+| Component | Alternating update | Regularization |
+|---|---|---|
+| Link network and linear skip | Minibatch AdamW, base rate 0.001 | Decay 0.0001, identifying `g(0)^2` anchor |
+| Index direction, beta | Full-data damped Gauss-Newton, sphere retraction and line search | No weight decay |
+| Gamma and optional intercept | Joint coefficient step, then conditional Newton refinement | Existing numerical ridge on gamma, no intercept penalty |
 
-The `learning_rate` argument controls the base rate. Gamma uses 50 times that
-rate during joint training. Adam's moment coefficients are 0.9 and 0.999, with
-epsilon 1e-8. The default gradient norm limit is 1.0.
+Adam's moment coefficients remain 0.9 and 0.999 with epsilon 1e-8. Its gradient
+norm limit (default 1.0) applies only to the link parameters. Beta and gamma do
+not receive minibatch Adam updates or participate in that clipping calculation.
+`weight_decay_beta` is used only by the comparison `joint` optimizer.
 
-Each fit uses an 80/20 training/validation split and shuffled minibatches of 64.
-Joint training runs all `max_epoch` epochs (200 by default), evaluating validation
-loss after every epoch, and does not stop early when validation loss plateaus
-or worsens. The best joint checkpoint is restored before freezing beta and the
-entire link. Gamma and the optional intercept are then fitted exactly, with
-`g(x'beta)` as a fixed offset, on all rows (training and validation): least
-squares, logistic regression or the Breslow Cox partial likelihood, solved by
-double-precision damped Newton iterations. This step is deterministic, so it adds
-no optimizer noise to gamma; the former 50-epoch minibatch Adam fine-tuning with
-validation checkpoints added fit-to-fit variation of the same size as the
-sampling error at n = 2000. `max_epoch=0` performs initialization only.
-Original fits and all bootstrap refits use the same procedure.
+The coefficient Jacobian uses the link input derivative and projects exposure
+covariates onto the tangent space of the current beta direction. The small
+coefficient system includes gamma cross-curvature, uses double precision, and
+adds numerical damping. A proposed direction is capped at tangent length 0.25
+(an angular change of at most `atan(0.25)`), retracted onto the sphere, and checked
+against the actual full-data objective by Armijo backtracking. Failed steps
+are rejected and counted. Damping starts at 0.001 times the mean curvature
+(with a numerical floor), decreases after acceptance, and increases after a
+failed line search. The frozen network is identical for every score, curvature,
+and line-search evaluation within a coefficient update.
 
-This retains validation-based model selection for the network while allowing
-later epochs to improve after a temporary plateau. It does not establish
-numerical convergence of the joint phase or nominal bootstrap coverage; those
-require separate diagnostics and simulations.
+The network objectives remain mean squared error, binary cross-entropy, or the
+negative Breslow Cox partial likelihood divided by the event count, plus the
+soft `g(0)^2` anchor. **Cox network minibatches still use within-batch risk sets**.
+Cox coefficient updates and the conditional gamma fit use complete risk sets
+for all fitting rows, including ties. Consequently this Cox algorithm is not
+exact block descent on a single full partial likelihood. Stabilizing beta does
+not itself remove the network's Cox approximation, statistical overfitting, or
+link-estimation bias.
 
-The objectives are mean squared error, binary cross-entropy, or the negative
-Breslow Cox partial likelihood divided by the event count, plus the identifying
-`g(0)^2` anchor during joint training. Cox risk sets include all tied observations
-within each training batch; validation uses its full partition. The original L2
-index normalization, linear skip and sign canonicalization are retained.
-`initial=True` optionally starts from a native linear/logistic/Cox regression
-fit to the training partition; it is off by default.
+No holdout is used by default, and the final completed cycle is returned.
+Regularization and the training budget must therefore be fixed as part of the
+estimator. To retain checkpoint selection, set `validation_fraction=0.2`.
+Training still runs its entire budget. Validation is evaluated at completed
+cycle boundaries, and the entire best state (beta, gamma, and network) is
+restored. Under alternating training, gamma also uses only fitting rows,
+so held-out observations do not enter its Newton fit. Checkpoint selection is
+not a guarantee of performance on future data.
 
-Each native worker reuses its training, gradient, optimizer and inference
-buffers across minibatches and bootstrap refits. Shuffling keeps one permutation
-of the training rows and generates the next only when an epoch executes. The
-gamma fit reuses its design, offset and outcome buffers. Validation computes loss
-without unused derivatives, and its
-Cox ordering and tie groups are prepared once per fit.
+```python
+model = NeuralPLSI(activation="ELU", optimizer="alternating",
+                   validation_fraction=0.0, link_epochs=1)
+# Optional held-out checkpoint selection, without early termination:
+selected = NeuralPLSI(activation="ELU", validation_fraction=0.2)
+# Matched full-data comparison with the former joint optimizer:
+joint_full = NeuralPLSI(activation="ELU", optimizer="joint", validation_fraction=0.0)
+# Historical joint protocol, including its 80/20 split:
+joint_legacy = NeuralPLSI(activation="ELU", optimizer="joint")
+```
 
-Validation prediction and link-grid evaluation use chunks of at most 256 rows
-and two reusable layer buffers. Cox validation still evaluates the full
-validation risk sets. Bootstrap workers gather train/validation rows directly
-from the shared original arrays using their sample indices. This removes the
-extra copy of the entire bootstrap sample. Input partitions, cached frozen-link
-values, and Cox risk-set storage still grow with the number of observations;
-per-worker memory therefore still matters when selecting `n_jobs`. The packed
-double-precision bootstrap output uses `8 * B * (p + q + intercept + grid_size)`
-bytes, shared across workers, plus its four-row summary.
+`optimizer="joint"` preserves minibatch AdamW on all parameters, its 50x gamma
+learning rate, shared clipping, and beta decay. When a holdout is requested,
+it preserves the historical final gamma fit on both partitions. Its reported
+final `validation_loss` is therefore not fully held out. `checkpoint_loss`
+records the selection score before that refit. Both optimizers retain the
+existing L2 index normalization, linear skip and sign canonicalization.
 
-These workspace changes preserve the native RNG streams, optimizer, stopping
-rules and bootstrap definition. Same-seed comparisons with commit `4637057`
-matched fitted states, predictions, bootstrap draws and summaries exactly.
+`fit_diagnostics` records neural epochs, fitting/validation row counts,
+checkpoint epoch and score, returned-model outcome losses, accepted/rejected
+coefficient steps, attempted cycles, and the final tangent beta score norm.
+Checkpoint scores include the anchor; reported training and validation losses
+are outcome losses. `joint_epochs` remains an alias of `epochs` for existing
+callers. `max_epoch=0` performs initialization only. `initial=True` fits a native
+linear/logistic/Cox starting point using the fitting rows (all rows without a
+holdout). It is off by default.
+
+The scalar-input link derivative uses a chunked forward-mode pass. Native
+workers reuse buffers and gather bootstrap samples directly into their fitting
+partitions. Layer activation storage remains bounded by minibatch/chunk size;
+the full-data coefficient design requires approximately `8*n*(p+q+intercept)`
+bytes per worker. Coefficient curvature requires quadratic storage in the
+number of coefficients, so this optimizer targets a low-dimensional index.
+The packed bootstrap draws use `8*B*(p+q+intercept+grid_size)` shared bytes.
+
+These are alternating conditional updates, not exact neural profile likelihood.
+The optimizer, holdout, block length and all other fitting settings are repeated
+inside every cold native bootstrap refit. Coverage still needs simulation.
+
+To compare estimation error across datasets and sensitivity to optimizer seeds,
+with matching full-data fits and unchanged network capacity:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  python reproduce/benchmark_optimizers.py --datasets 10 --starts 10 --jobs 4
+```
+
+This point-fit pilot includes SplinePLSI as a reference. It does not estimate
+bootstrap coverage. Reported concurrent fit timings include CPU contention.
+The eight-dataset/eight-start pilot is summarized in
+[`results/optimizer_pilot`](results/optimizer_pilot/README.md).
 
 ### Native bootstrap
 
@@ -244,7 +281,7 @@ Resampling now uses `splitmix64_bootstrap_v1`. Replicate `b` resamples with a
 separate stream keyed by `random_state+b` and fits with `random_state+1337+b`.
 This preserves reproducibility across thread counts and when extending B, but
 changes the draws relative to the former NumPy RNG. Use a fresh simulation output
-directory. Point-fit initialization, optimizer and stopping rules are unchanged.
+directory. The alternating optimizer changes the fitting rule; use fresh simulation outputs.
 
 ### Use without Python
 
@@ -374,6 +411,11 @@ sbatch reproduce/run_simulation_2000.slurm
 # sbatch --array=0-17 reproduce/run_simulation_2000.slurm
 ```
 
+The default neural optimizer is now alternating. Use a fresh directory such as
+`OUT_DIR=output/simulation_alternating`. `NN_OPTIMIZER=joint` selects the comparison
+trainer, `NN_LINK_EPOCHS` sets the alternating block length, and
+`NN_VALIDATION_FRACTION=0.2` enables checkpoint selection without early stopping.
+
 To use the existing Singularity environment, set these before submission:
 
 ```bash
@@ -419,7 +461,8 @@ python reproduce/plot_inference.py --input output/simulation
 
 `plot_inference.py` draws one figure that compares the two estimators:
 interval coverage, SE calibration, RMSE and pointwise coverage of the g band.
-The summaries of the current n = 2000 run are in `results/simulation`.
+The n = 2000 summaries in `results/simulation` predate alternating training
+and use the historical joint optimizer with its 80/20 split.
 
 Reports preserve sample size and exposure distribution, calculate coverage
 from the saved interval endpoints, and provide per-coefficient bias, empirical
@@ -431,22 +474,24 @@ replicates, not a bootstrap confidence band.
 
 - Bootstrap refits always start from a fresh seeded initialization and are
   canonicalized to the same index orientation. New fits clear uncertainty
-  estimates from previous fits. Saved model states use format version 2, without
-  the removed warm-start flag; version 1 files are rejected.
-- Cox likelihoods use complete Breslow risk sets for ties and stable log-space
-  calculations in both estimators. Cox intercepts are rejected because the
+  estimates from previous fits. Saved model states use format version 3 and retain the optimizer,
+  block length and holdout policy. Version 2 files load with their original
+  joint-training settings; version 1 files are rejected.
+- Cox likelihoods include every tied observation within the evaluated partition
+  and use stable log-space calculations. Neural link minibatches still have
+  batch-local risk sets; coefficient updates use all fitting rows. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only
   its identifying g(0) anchor gradient for Cox, avoiding numerical drift.
-- Joint training runs its full epoch budget and selects the best validation
-  checkpoint without patience-based early termination. Gamma is then fitted
-  exactly by Newton iterations with the index and link frozen. Bootstrap refits
-  use the same training policy.
+- Alternating training uses full-data coefficient steps and link-only AdamW.
+  Both optimizers run their full neural epoch budgets. Optional validation
+  selects complete checkpoints without early termination. Bootstrap refits
+  use the same optimizer and training policy.
 - Spline coefficients and knots correspond to the returned index: the final
   linear part is exactly the profile fit at that index. Profiling and final
   fitting use the same penalized objective. Serial and threaded bootstrap draws
   are identical.
-- `initial=True` now performs linear-model initialization using the training
-  partition. It was previously ignored. It is still off by default.
+- `initial=True` performs linear-model initialization using the fitting
+  rows. It was previously ignored. It is still off by default.
 - Simulation data retain the historical seeded draws without changing the
   caller's NumPy RNG state. Native initialization and minibatch shuffling use
   the versioned C++ RNG protocol. Corrected fits need fresh simulation results.
@@ -477,6 +522,11 @@ for continuous outcomes and a zero full-data gamma gradient for binary and Cox.
 A bootstrap test blocks Python refits, RNG calls, process/thread creation and
 percentile functions while asserting that exactly one native call completes the
 whole operation. A separate subprocess blocks every Torch import.
+Alternating tests independently differentiate a float64 network to check the
+full coefficient gradient and Fisher/Gauss-Newton matrix, including explicit
+global tied Cox risk sets. They also check frozen link weights during coefficient
+steps, tangent step bounds, objective descent, link-only Adam clipping/decay,
+complete checkpoint restoration, all-row initialization, and version-2 loading.
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \

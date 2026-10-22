@@ -18,7 +18,9 @@ args=(reproduce/main_simulation.py --n_instances "$n"
       --models "$model" --exposure_dist normal --n_bootstrap "${N_BOOTSTRAP:-100}"
       --n_replicates "${N_REPLICATES:-500}" --seed0 "${SEED0:-0}"
       --bootstrap_jobs "${BOOTSTRAP_JOBS:-${SLURM_CPUS_PER_TASK:-1}}"
-      --device cpu --nn_backend "$backend" --out "$out" --save_every 1)
+      --device cpu --nn_backend "$backend" --nn_optimizer "${NN_OPTIMIZER:-alternating}"
+      --nn_link_epochs "${NN_LINK_EPOCHS:-1}" --out "$out" --save_every 1)
+[[ -n ${NN_VALIDATION_FRACTION:-} ]] && args+=(--nn_validation_fraction "$NN_VALIDATION_FRACTION")
 [[ ${SAVE_BOOTSTRAP_SAMPLES:-0} == 1 ]] && args+=(--save_bootstrap_samples)
 [[ ${NPLSI_INITIAL:-0} == 1 ]] && args+=(--initial)
 if [[ ${NPLSI_DRY_RUN:-0} == 1 ]]; then
