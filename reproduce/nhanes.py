@@ -91,7 +91,8 @@ def main():
     z = df[covariates].copy().values
     z[:, 1] = z[:, 1] - 1
 
-    model = NeuralPLSI(family='continuous', add_intercept=True)
+    # ELU, as in the simulations that fixed the default L2 penalty.
+    model = NeuralPLSI(family='continuous', add_intercept=True, activation='ELU')
     model.fit(x, z, y)
 
     index = x @ model.beta
@@ -99,10 +100,10 @@ def main():
     g_fn_pred = model.g_function(g_grid)
 
     # Bootstrap Inference
-    n_bootstrap = 100
+    n_bootstrap = 1000
     print(f"Running Bootstrap Inference (n={n_bootstrap})...")
     t_start_boot = time.time()
-    boot_res = model.inference_bootstrap(x, z, y, n_samples=n_bootstrap, g_grid=g_grid, n_jobs=1)
+    boot_res = model.inference_bootstrap(x, z, y, n_samples=n_bootstrap, g_grid=g_grid, n_jobs='auto')
     t_boot = time.time() - t_start_boot
     print(f"Bootstrap Inference Time: {t_boot:.2f}s")
 

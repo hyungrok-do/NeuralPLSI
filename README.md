@@ -60,7 +60,7 @@ To run the analysis (requires `NHANES/` directory):
 ```bash
 python reproduce/nhanes.py
 ```
-This script performs data preprocessing, model fitting, and bootstrap inference, saving results to `output/`.
+This script performs data preprocessing, model fitting, and bootstrap inference, saving results to `output/`. `reproduce/nhanes_comparison.py` fits both models; the current results are in `results/nhanes`.
 
 ## Key Components
 

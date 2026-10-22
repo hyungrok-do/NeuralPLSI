@@ -109,7 +109,8 @@ def main():
 
     # --- 2. Fit NeuralPLSI + Bootstrap ---
     print("\n--- Fitting NeuralPLSI (Bootstrap Inference) ---")
-    m_neural = NeuralPLSI(family='continuous', add_intercept=True)
+    # ELU, as in the simulations that fixed the default L2 penalty.
+    m_neural = NeuralPLSI(family='continuous', add_intercept=True, activation='ELU')
     t0 = time.time()
     m_neural.fit(x, z, y)
     fit_time_neural = time.time() - t0
@@ -117,7 +118,7 @@ def main():
 
     # Bootstrap Inference
     g_grid = np.linspace(-2, 4, 200)
-    n_boot_neural = 200
+    n_boot_neural = 1000
     t0 = time.time()
     boot_res_n = m_neural.inference_bootstrap(x, z, y, n_samples=n_boot_neural, g_grid=g_grid, n_jobs='auto')
     boot_time_neural = time.time() - t0
@@ -149,7 +150,7 @@ def main():
     print(f"SplinePLSI Fit Time: {fit_time_spline:.2f}s")
 
     # Bootstrap Inference
-    n_boot = 500
+    n_boot = 1000
     print(f"Running Bootstrap (n={n_boot})...")
     t0 = time.time()
     m_spline.inference_bootstrap(x, z, y, n_samples=n_boot, n_jobs=-1, g_grid=g_grid)
