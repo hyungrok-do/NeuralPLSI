@@ -3,34 +3,7 @@ import unittest
 
 import numpy as np
 
-from models.native import (NativeModel, checked, library, outcome_loss_gradient,
-                           training_validation_indices, DIAGNOSTICS_SIZE)
-
-
-def epoch_orders(n, count, seed):
-    """Independent implementation of the published splitmix64_v1 schedule."""
-    mask = (1 << 64)-1
-    state = seed ^ 0x4241544348
-
-    def below(bound):
-        nonlocal state
-        threshold = (1 << 64) % bound
-        while True:
-            state = (state+0x9e3779b97f4a7c15) & mask
-            value = state
-            value = ((value ^ (value >> 30))*0xbf58476d1ce4e5b9) & mask
-            value = ((value ^ (value >> 27))*0x94d049bb133111eb) & mask
-            value ^= value >> 31
-            if value >= threshold:
-                return value % bound
-
-    result = np.empty((count, n), dtype=np.int32)
-    for row in result:
-        row[:] = np.arange(n)
-        for remaining in range(n, 1, -1):
-            j = below(remaining)
-            row[remaining-1], row[j] = row[j], row[remaining-1]
-    return result
+from models.native import NativeModel, outcome_loss_gradient
 
 
 class NativeWorkspacesTest(unittest.TestCase):
@@ -45,42 +18,19 @@ class NativeWorkspacesTest(unittest.TestCase):
             y = np.column_stack([rng.integers(1, 17, n), rng.binomial(1, .75, n)])
         return x, z, y.astype('float32')
 
-    def test_lazy_schedule_matches_explicit_orders_through_full_budgets(self):
+    def test_objective_matches_chunked_prediction_loss_including_cox_ties(self):
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
-                x, z, y = self.data(family, 113)
-                options = dict(hidden_units=4, n_hidden_layers=3, max_epoch=200,
-                               batch_size=17, family=family, add_intercept=family!='cox',
-                               optimizer='joint',validation_fraction=.2)
-                actual = NativeModel(3, 2, **options).fit(x, z, y, random_state=13)
-                expected = NativeModel(3, 2, **options, random_state=13)
-                train, valid = training_validation_indices(len(x), 13)
-                arrays = [np.ascontiguousarray(a[rows]) for rows in (train, valid) for a in (x, z, y)]
-                tx, tz, ty, vx, vz, vy = arrays
-                orders = epoch_orders(len(train), 200, 13)
-                weights, diagnostics = expected.weights, np.empty(DIAGNOSTICS_SIZE)
-                checked(library().nplsi_train(expected.config, expected.hyper, weights,
-                    tx, tz, ty, len(train), vx, vz, vy, len(valid), orders, diagnostics))
-                expected.set_weights(weights)
-                expected.resolve_sign_ambiguity()
-                np.testing.assert_array_equal(actual.weights, expected.weights)
-                np.testing.assert_array_equal(actual.hyper, expected.hyper)
-                np.testing.assert_array_equal(list(actual.fit_diagnostics.values()), diagnostics)
-                self.assertEqual(diagnostics[0], 200)
-                self.assertGreater(diagnostics[1], 0)  # gamma Newton iterations
-
-    def test_loss_only_validation_matches_full_outcome_including_cox_ties(self):
-        for family in ('continuous', 'binary', 'cox'):
-            with self.subTest(family=family):
-                # Validation crosses the internal 256-row inference boundary.
+                # The data cross the internal 256-row inference boundary.
                 x, z, y = self.data(family, 1303)
-                model = NativeModel(3, 2, hidden_units=5, n_hidden_layers=3,
-                    family=family, max_epoch=8, batch_size=47,
-                    add_intercept=family!='cox',validation_fraction=.2).fit(x, z, y, random_state=13)
-                _, valid = training_validation_indices(len(x), 13)
-                risk = model.predict(x[valid], z[valid])
-                value, _ = outcome_loss_gradient(risk, y[valid], family)
-                self.assertEqual(value, model.fit_diagnostics['validation_loss'])
+                model = NativeModel(3, 2, hidden_units=5, n_hidden_layers=3, family=family,
+                    max_iter=8, add_intercept=family!='cox').fit(x, z, y, random_state=13)
+                value, _ = outcome_loss_gradient(model.predict(x, z), y, family)
+                value += float(model.g_function([0.])[0])**2
+                decay, weights = float(model.hyper[0]), model.weights.astype(float)
+                for w in weights[5:len(weights)-int(model.config[4])]:
+                    value += .5*decay*w*w
+                self.assertEqual(value, model.fit_diagnostics['objective'])
 
     def test_prediction_and_link_chunk_boundaries(self):
         x, z, _ = self.data('continuous', 517)

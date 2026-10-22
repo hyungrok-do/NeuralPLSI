@@ -1,8 +1,18 @@
 import unittest
 import numpy as np
 from models import NeuralPLSI
-from models.native import (NativeModel, checked, library, outcome_loss_gradient,
-                           training_validation_indices, DIAGNOSTICS_SIZE)
+from models.native import NativeModel, loss_and_gradient, outcome_loss_gradient
+
+
+def penalized_objective(net,X,Z,y):
+    """Outcome loss, g(0)^2 anchor and weight_decay/2 times the squared link
+    network (including the skip weight), summed in the native order."""
+    value,_=loss_and_gradient(net,X,Z,y)
+    p,q,intercept=int(net.config[0]),int(net.config[1]),int(net.config[4])
+    decay=float(net.hyper[0])
+    for w in net.weights[p+q:len(net.weights)-intercept].astype(float):
+        value+=.5*decay*w*w
+    return value
 
 
 class TrainingPhasesTest(unittest.TestCase):
@@ -12,65 +22,45 @@ class TrainingPhasesTest(unittest.TestCase):
         self.Z=rng.normal(size=(80,2)).astype('float32')
         self.y=(self.X[:,0]+self.Z@[2.,-1.]+rng.normal(size=80)).astype('float32')
 
-    def test_fixed_parameter_gradients_cannot_affect_gamma_step(self):
-        net=NativeModel(3,2,hidden_units=4,n_hidden_layers=1,add_intercept=True)
-        rng=np.random.default_rng(19)
-        gradient=rng.normal(size=len(net.weights)).astype('float32')
-        distorted=gradient.copy(); active=np.zeros(len(gradient),dtype=bool)
-        active[3:5]=True; active[-1]=True
-        distorted[~active]*=1e8
-        a,b=net.weights.copy(),net.weights.copy()
-        for weights,g in ((a,gradient),(b,distorted)):
-            checked(library().nplsi_adam_step(net.config,net.hyper,weights,g,1))
-        np.testing.assert_array_equal(a,b)
-        np.testing.assert_array_equal(a[~active],net.weights[~active])
-        self.assertTrue(np.any(a[active]!=net.weights[active]))
+    def test_recorded_objective_is_penalized_loss_of_returned_model(self):
+        for intercept in (False,True):
+            with self.subTest(intercept=intercept):
+                model=NeuralPLSI(max_iter=40,hidden_units=4,n_hidden_layers=1,
+                                 add_intercept=intercept).fit(self.X,self.Z,self.y,random_state=19)
+                self.assertAlmostEqual(penalized_objective(model.net,self.X,self.Z,self.y),
+                                       model.fit_diagnostics['objective'],places=12)
 
-    def test_returned_model_matches_recorded_validation_loss(self):
-        model=NeuralPLSI(max_epoch=40,hidden_units=4,n_hidden_layers=1,batch_size=16,
-                        optimizer='joint',validation_fraction=.2).fit(self.X,self.Z,self.y,random_state=19)
-        _,valid=training_validation_indices(len(self.X),19)
-        loss=np.mean((model.predict(self.X[valid],self.Z[valid]).astype(float)-self.y[valid])**2)
-        self.assertAlmostEqual(loss,model.fit_diagnostics['validation_loss'],places=6)
-
-    def test_constant_validation_runs_full_budgets(self):
-        for epochs in (0, 1, 40, 80):
-            with self.subTest(epochs=epochs):
-                model=NeuralPLSI(max_epoch=epochs,hidden_units=4,n_hidden_layers=1,
-                                batch_size=1000,learning_rate=0)
+    def test_iteration_cap_and_initialization_only(self):
+        for cap in (0,1,5):
+            with self.subTest(cap=cap):
+                model=NeuralPLSI(max_iter=cap,hidden_units=4,n_hidden_layers=1)
                 model.fit(self.X,self.Z,self.y,random_state=19)
-                self.assertEqual(model.fit_diagnostics['joint_epochs'],epochs)
-                # max_epoch=0 performs initialization only, without the gamma fit.
-                if epochs:
+                self.assertEqual(model.fit_diagnostics['iterations'],cap)
+                # max_iter=0 performs initialization only, without the gamma fit.
+                if cap:
                     self.assertGreater(model.fit_diagnostics['gamma_iterations'],0)
                 else:
                     self.assertEqual(model.fit_diagnostics['gamma_iterations'],0)
+                    initial=NativeModel(3,2,hidden_units=4,n_hidden_layers=1,max_iter=0,random_state=19)
+                    initial.resolve_sign_ambiguity()
+                    np.testing.assert_array_equal(model.net.weights,initial.weights)
 
-    def test_worsening_validation_restores_checkpoint_after_full_training(self):
-        # Training and validation targets have opposite signs. Learning the
-        # training slope makes validation worse after its first checkpoint.
-        target=np.tile(np.array([-1.,1.],dtype='float32'),4)
-        x,z=target[:,None],np.empty((8,0),dtype='float32')
-        fits=[]
-        for epochs in (1,40):
-            net=NativeModel(1,0,hidden_units=1,n_hidden_layers=1,
-                max_epoch=epochs,batch_size=8,weight_decay=0,weight_decay_beta=0,
-                optimizer='joint',validation_fraction=.2)
-            weights=np.zeros_like(net.weights); weights[0]=1.
-            orders=np.tile(np.arange(8,dtype='int32'),(epochs,1))
-            diagnostics=np.empty(DIAGNOSTICS_SIZE)
-            checked(library().nplsi_train(net.config,net.hyper,weights,
-                x,z,target,8,x,z,-target,8,orders,diagnostics))
-            net.set_weights(weights)
-            self.assertEqual(diagnostics[0],epochs)
-            self.assertEqual(diagnostics[1],0)  # no gamma or intercept to fit
-            fits.append(net)
-        np.testing.assert_array_equal(fits[0].weights,fits[1].weights)
-        self.assertGreater(np.dot(fits[1].predict(x,z),target),0.)
+    def test_training_converges_before_the_cap_and_penalty_shrinks_the_link(self):
+        norms=[]
+        for decay in (1e-4,1e-1):
+            with self.subTest(weight_decay=decay):
+                model=NeuralPLSI(weight_decay=decay,hidden_units=4,n_hidden_layers=1)
+                model.fit(self.X,self.Z,self.y,random_state=19)
+                start=NeuralPLSI(weight_decay=decay,max_iter=0,hidden_units=4,n_hidden_layers=1)
+                start.fit(self.X,self.Z,self.y,random_state=19)
+                self.assertLess(model.fit_diagnostics['iterations'],model.max_iter)
+                self.assertLess(model.fit_diagnostics['objective'],start.fit_diagnostics['objective'])
+                norms.append(np.linalg.norm(model.net.weights[5:]))
+        self.assertGreater(norms[0],norms[1])
 
     def test_gamma_is_exact_full_data_fit_given_index_and_link(self):
-        # Gamma and the intercept minimize the outcome loss on all rows, training
-        # and validation, with the fitted g(x'beta) as an offset.
+        # Gamma and the intercept minimize the outcome loss on all rows, with
+        # the fitted g(x'beta) as an offset.
         rng=np.random.default_rng(7)
         n=300
         X=rng.normal(size=(n,3)).astype('float32')
@@ -83,8 +73,8 @@ class TrainingPhasesTest(unittest.TestCase):
         for family,y in outcomes.items():
             with self.subTest(family=family):
                 y=y.astype('float32')
-                model=NeuralPLSI(family=family,max_epoch=20,hidden_units=4,n_hidden_layers=1,
-                                 batch_size=32,add_intercept=family!='cox').fit(X,Z,y,random_state=3)
+                model=NeuralPLSI(family=family,max_iter=20,hidden_units=4,n_hidden_layers=1,
+                                 add_intercept=family!='cox').fit(X,Z,y,random_state=3)
                 self.assertGreater(model.fit_diagnostics['gamma_iterations'],0)
                 g=model.predict_gxb(X).astype(float)
                 coefficients=np.append(model.gamma,model.intercept_val if family!='cox' else [])

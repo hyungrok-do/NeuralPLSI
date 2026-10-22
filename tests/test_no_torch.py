@@ -26,7 +26,7 @@ from reproduce import visualize_simulation, table_simulation_comparison
 
 for family in ('continuous', 'binary', 'cox'):
     x, z, y, *_ = simulate_data(80, outcome=family, seed=7)
-    model = NeuralPLSI(family=family, max_epoch=2, hidden_units=4).fit(x, z, y)
+    model = NeuralPLSI(family=family, max_iter=2, hidden_units=4).fit(x, z, y)
     result = model.inference_bootstrap(x, z, y, n_samples=2, n_jobs=1, g_grid=[-1., 0., 1.])
     assert np.isfinite(model.predict(x, z)).all()
     assert np.isfinite(result['gamma_samples']).all()

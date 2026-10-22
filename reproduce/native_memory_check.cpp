@@ -1,8 +1,6 @@
-// Isolated native-process peak memory check. Arguments: n, B, workers, max_epoch.
-// B=0 measures fitting alone. Learning rate zero holds weights fixed while the
-// full joint epoch budget runs, followed by the exact gamma fit. Older revisions
-// stopped after 6 joint / 21 gamma epochs, so their runtime is not comparable at
-// the same max_epoch setting.
+// Isolated native-process peak memory check. Arguments: n, B, workers, max_iter.
+// B=0 measures fitting alone. Each fit runs at most max_iter full-batch L-BFGS
+// iterations, followed by the exact gamma fit; runtime depends on when it stops.
 #include "core.h"
 #include <chrono>
 #include <cmath>
@@ -23,13 +21,13 @@ int main(int argc,char** argv) {
         int n=argc>1 ? std::stoi(argv[1]) : 100000;
         int B=argc>2 ? std::stoi(argv[2]) : 0;
         int jobs=argc>3 ? std::stoi(argv[3]) : 1;
-        int epochs=argc>4 ? std::stoi(argv[4]) : 200;
-        if(n<10 || B<0 || B==1 || jobs==0 || epochs<1)
-            throw std::invalid_argument("Require n>=10, B=0 or B>=2, nonzero workers and positive epochs");
+        int iterations=argc>4 ? std::stoi(argv[4]) : 200;
+        if(n<10 || B<0 || B==1 || jobs==0 || iterations<1)
+            throw std::invalid_argument("Require n>=10, B=0 or B>=2, nonzero workers and positive max_iter");
         constexpr int p=8,q=3,h=32,depth=2;
         int32_t config[NPLSI_CONFIG_SIZE]={p,q,h,depth,0,0,0,
-            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,64,epochs,0,0,1};
-        float hyper[NPLSI_HYPER_SIZE]={0.f,1e-4f,1e-5f,1.f,1.f,.2f,.001f,.25f};
+            p+q+1+2*h+(depth-1)*(h*h+h)+h+1,iterations,0};
+        float hyper[NPLSI_HYPER_SIZE]={1e-3f,1.f};
         std::vector<float> x(size_t(n)*p),z(size_t(n)*q),y(n);
         for(int i=0;i<n;++i) {
             for(int j=0;j<p;++j) x[size_t(i)*p+j]=float(std::sin(.017*(i+1)*(j+1)));
@@ -48,7 +46,7 @@ int main(int argc,char** argv) {
                                     nullptr,0,.95,0,draws.data(),summary.data(),&workers));
         }
         double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-        double diagnostics[NPLSI_DIAGNOSTICS_SIZE]; checked(nplsi_get_config(model.get(),config,hyper,diagnostics));
+        double diagnostics[3]; checked(nplsi_get_config(model.get(),config,hyper,diagnostics));
         double peak_mib=-1.;
 #if defined(__linux__)
         // ru_maxrss can retain a Python parent's pre-exec high-water mark.
@@ -65,8 +63,8 @@ int main(int argc,char** argv) {
         peak_mib=double(usage.ru_maxrss)/(1024.*1024.);
 #endif
         std::cout<<std::setprecision(10)<<"{\"n\":"<<n<<",\"bootstrap\":"<<B
-            <<",\"workers\":"<<workers<<",\"max_epoch\":"<<epochs
-            <<",\"joint_epochs\":"<<diagnostics[0]<<",\"gamma_iterations\":"<<diagnostics[1]
+            <<",\"workers\":"<<workers<<",\"max_iter\":"<<iterations
+            <<",\"iterations\":"<<diagnostics[0]<<",\"gamma_iterations\":"<<diagnostics[1]
             <<",\"seconds\":"<<seconds<<",\"peak_rss_mib\":"<<peak_mib<<"}\n";
     } catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

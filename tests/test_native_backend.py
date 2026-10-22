@@ -40,26 +40,6 @@ class NativeBackendTest(unittest.TestCase):
                         numeric[j]=(loss(net.config,plus,x,z,y,-1.)-loss(net.config,minus,x,z,y,-1.))/(2*eps)
                     np.testing.assert_allclose(gradient,numeric,rtol=3e-4,atol=3e-6)
 
-    def test_adamw_multiple_steps_match_explicit_update(self):
-        net=NativeModel(3,2,hidden_units=4,n_hidden_layers=1,add_intercept=True,random_state=5)
-        rng=np.random.default_rng(123)
-        gradients=rng.normal(size=(5,len(net.weights))).astype('float32')
-        for gamma_only in (False,True):
-            weights=net.weights.copy(); expected=weights.astype(float)
-            m,v=np.zeros_like(expected),np.zeros_like(expected)
-            gamma=np.zeros(len(weights),dtype=bool); gamma[3:5]=True; gamma[-1]=True
-            for t,gradient in enumerate(gradients.astype(float),1):
-                active=gamma if gamma_only else np.ones(len(weights),dtype=bool)
-                gradient=gradient.copy()
-                gradient*=min(1.,float(net.hyper[3])/(np.linalg.norm(gradient[active])+1e-6))
-                rate=np.where(gamma,.05,.001) if not gamma_only else np.full(len(weights),.01)
-                decay=np.where(gamma,0.,1e-4); decay[:3]=1e-5
-                m=.9*m+.1*gradient; v=.999*v+.001*gradient*gradient
-                expected[active]*=1-rate[active]*decay[active]
-                expected[active]-=rate[active]*(m[active]/(1-.9**t))/(np.sqrt(v[active]/(1-.999**t))+1e-8)
-            checked(library().nplsi_adam_updates(net.config,net.hyper,weights,gradients,len(gradients),int(gamma_only)))
-            np.testing.assert_allclose(weights,expected,rtol=2e-6,atol=2e-7)
-
     def test_backprop_supports_different_depths_and_widths(self):
         for width, depth in ((1, 1), (5, 3), (7, 4)):
             for family in ('continuous', 'binary', 'cox'):
@@ -82,7 +62,7 @@ class NativeBackendTest(unittest.TestCase):
         for family in ('continuous','binary','cox'):
             with self.subTest(family=family):
                 x,z,y=self.data(family,n=80)
-                model=NeuralPLSI(family=family,max_epoch=8,hidden_units=6,batch_size=24,
+                model=NeuralPLSI(family=family,max_iter=8,hidden_units=6,
                                  activation='ELU',add_intercept=family!='cox').fit(x,z,y,random_state=4)
                 prediction=model.predict(x,z)
                 np.testing.assert_allclose(prediction,model.predict_gxb(x)+z@model.gamma+
@@ -105,18 +85,18 @@ class NativeBackendTest(unittest.TestCase):
     def test_initialization_and_fit_are_reproducible_without_global_rng_changes(self):
         x,z,y=self.data('continuous',n=80)
         np.random.seed(17); before=np.random.get_state()
-        a=NeuralPLSI(max_epoch=5).fit(x,z,y,random_state=7)
+        a=NeuralPLSI(max_iter=5).fit(x,z,y,random_state=7)
         after=np.random.get_state()
         np.testing.assert_array_equal(before[1],after[1])
-        b=NeuralPLSI(max_epoch=5).fit(x,z,y,random_state=7)
+        b=NeuralPLSI(max_iter=5).fit(x,z,y,random_state=7)
         np.testing.assert_array_equal(a.net.weights,b.net.weights)
-        c=NeuralPLSI(max_epoch=5).fit(x,z,y,random_state=8)
+        c=NeuralPLSI(max_iter=5).fit(x,z,y,random_state=8)
         self.assertFalse(np.array_equal(a.net.weights,c.net.weights))
 
     def test_zero_covariates_and_empty_predictions(self):
         x,_,y=self.data('continuous',n=80)
         z=np.empty((len(x),0))
-        model=NeuralPLSI(max_epoch=3,add_intercept=True).fit(x,z,y)
+        model=NeuralPLSI(max_iter=3,add_intercept=True).fit(x,z,y)
         self.assertEqual(model.gamma.size,0)
         self.assertEqual(model.predict(x[:0],z[:0]).shape,(0,))
         self.assertEqual(model.g_function([]).shape,(0,))

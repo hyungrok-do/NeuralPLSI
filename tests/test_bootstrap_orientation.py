@@ -14,8 +14,8 @@ class BootstrapOrientationTest(unittest.TestCase):
         draws=[]
         for flipped in [False,True]:
             with self.subTest(flipped=flipped):
-                m=NeuralPLSI(max_epoch=3,activation='ELU')
-                m.net=NativeModel(8,3,activation='ELU',max_epoch=3,random_state=19 if flipped else 7)
+                m=NeuralPLSI(max_iter=3,activation='ELU')
+                m.net=NativeModel(8,3,activation='ELU',max_iter=3,random_state=19 if flipped else 7)
                 weights=m.net.weights
                 weights[0]= -1 if flipped else 1
                 m.net.set_weights(weights,sign=1)

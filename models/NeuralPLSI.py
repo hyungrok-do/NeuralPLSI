@@ -5,34 +5,29 @@ from pathlib import Path
 import numpy as np
 
 from .base import _SummaryMixin, validate_data
-from .native import (NativeModel, FAMILIES, ACTIVATIONS, OPTIMIZERS, seed_value,
+from .native import (NativeModel, FAMILIES, ACTIVATIONS, seed_value,
                      bootstrap_options, link_grid, BOOTSTRAP_RNG_PROTOCOL)
 
 
 
 class NeuralPLSI(_SummaryMixin):
-    """Fit g(X @ beta) + Z @ gamma using native C++ alternating optimization.
+    """Fit g(X @ beta) + Z @ gamma using native C++ full-batch L-BFGS.
 
-    C++ owns initialization, the network, gradients, optimizer, data splitting,
-    shuffling, prediction, serialization and the entire bootstrap workflow.
-    Python handles array input and summary tables. CPU only, with float32 weights.
+    C++ owns initialization, the network, gradients, optimizer, prediction,
+    serialization and the entire bootstrap workflow. Python handles array input
+    and summary tables. CPU only, with float32 weights.
 
-    By default every row is used for fitting. The link uses minibatch AdamW with
-    beta/gamma fixed. After link_epochs neural epochs, beta takes a full-data
-    damped Gauss-Newton step on the sphere, with full-data gamma Newton fits
-    before and after it. max_epoch counts neural epochs, with no early stopping.
-    validation_fraction > 0 selects a complete-cycle checkpoint without using
-    validation rows in coefficient updates. optimizer='joint' retains the old
-    joint AdamW trainer and final gamma fit on fitting plus validation rows.
-    Cox link minibatches retain within-batch risk sets; beta/gamma use global
-    fitting risk sets. weight_decay_beta applies only to optimizer='joint'.
+    Each fit uses all rows, with no validation split. L-BFGS minimizes the
+    outcome loss plus the g(0)^2 anchor and weight_decay/2 times the squared
+    link-network weights, renormalizing beta to unit length after every step,
+    until the objective stops decreasing or max_iter iterations. With beta and
+    the link fixed, gamma and the optional intercept are then fitted exactly by
+    deterministic Newton iterations, with g(X @ beta) as an offset.
     """
-    def __init__(self, family='continuous', max_epoch=200, batch_size=64,
-                 learning_rate=1e-3, weight_decay=1e-4, weight_decay_beta=1e-5,
-                 hidden_units=32, n_hidden_layers=2, grad_clip=1.0,
+    def __init__(self, family='continuous', max_iter=5000, weight_decay=1e-3,
+                 hidden_units=32, n_hidden_layers=2,
                  num_workers=0, add_intercept=False, activation='LeakyReLU',
-                 initial=False, device='cpu', backend='cpp', optimizer='alternating',
-                 validation_fraction=0., link_epochs=1, beta_damping=1e-3, beta_max_step=.25):
+                 initial=False, device='cpu', backend='cpp'):
         if family not in FAMILIES:
             raise ValueError('family must be continuous, binary, or cox')
         if family == 'cox' and add_intercept:
@@ -41,38 +36,23 @@ class NeuralPLSI(_SummaryMixin):
             raise ValueError('NeuralPLSI is C++ only: use backend="cpp" and device="cpu"')
         if activation not in ACTIVATIONS:
             raise ValueError('Supported activations: ELU, LeakyReLU, ReLU and Tanh')
-        if optimizer not in OPTIMIZERS:
-            raise ValueError('optimizer must be alternating or joint')
-        if not np.isfinite(validation_fraction) or not 0 <= validation_fraction < 1:
-            raise ValueError('validation_fraction must lie in [0, 1)')
-        for name, value, minimum in [('max_epoch', max_epoch, 0), ('batch_size', batch_size, 1),
-                                      ('hidden_units', hidden_units, 1), ('n_hidden_layers', n_hidden_layers, 1),
-                                      ('link_epochs', link_epochs, 1)]:
+        for name, value, minimum in [('max_iter', max_iter, 0), ('hidden_units', hidden_units, 1),
+                                      ('n_hidden_layers', n_hidden_layers, 1)]:
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f'{name} must be an integer >= {minimum}')
-        for name, value in [('learning_rate', learning_rate), ('weight_decay', weight_decay),
-                            ('weight_decay_beta', weight_decay_beta), ('grad_clip', grad_clip)]:
-            if not np.isfinite(value) or value < 0:
-                raise ValueError(f'{name} must be finite and nonnegative')
+        if not np.isfinite(weight_decay) or weight_decay < 0:
+            raise ValueError('weight_decay must be finite and nonnegative')
         if num_workers != 0:
             raise ValueError('num_workers is obsolete; use n_jobs for bootstrap parallelism')
-        for name, value in [('beta_damping', beta_damping), ('beta_max_step', beta_max_step)]:
-            if not np.isfinite(value) or value <= 0:
-                raise ValueError(f'{name} must be finite and positive')
-        self.family, self.max_epoch, self.batch_size = family, int(max_epoch), int(batch_size)
-        self.learning_rate, self.weight_decay, self.weight_decay_beta = learning_rate, weight_decay, weight_decay_beta
-        self.hidden_units, self.n_hidden_layers, self.grad_clip = int(hidden_units), int(n_hidden_layers), grad_clip
+        self.family, self.max_iter, self.weight_decay = family, int(max_iter), weight_decay
+        self.hidden_units, self.n_hidden_layers = int(hidden_units), int(n_hidden_layers)
         self.num_workers, self.add_intercept, self.activation = 0, bool(add_intercept), activation
         self.initial, self.device, self.backend = bool(initial), 'cpu', 'cpp'
-        self.optimizer, self.validation_fraction, self.link_epochs = optimizer, validation_fraction, int(link_epochs)
-        self.beta_damping, self.beta_max_step = beta_damping, beta_max_step
         self.net = None
 
     def get_params(self, deep=True):
-        names = ('family', 'max_epoch', 'batch_size', 'learning_rate', 'weight_decay', 'weight_decay_beta',
-                 'hidden_units', 'n_hidden_layers', 'grad_clip', 'num_workers', 'add_intercept',
-                 'activation', 'initial', 'device', 'backend', 'optimizer', 'validation_fraction',
-                 'link_epochs', 'beta_damping', 'beta_max_step')
+        names = ('family', 'max_iter', 'weight_decay', 'hidden_units', 'n_hidden_layers',
+                 'num_workers', 'add_intercept', 'activation', 'initial', 'device', 'backend')
         return {name: getattr(self, name) for name in names}
 
     def fit(self, X, Z, y, random_state=0):
@@ -151,10 +131,7 @@ class NeuralPLSI(_SummaryMixin):
         model = cls(family=next(k for k, v in FAMILIES.items() if v == c[5]),
             activation=next(k for k, v in ACTIVATIONS.items() if v == c[6]),
             hidden_units=int(c[2]), n_hidden_layers=int(c[3]), add_intercept=bool(c[4]),
-            batch_size=int(c[8]), max_epoch=int(c[9]), initial=bool(c[10]),
-            learning_rate=float(h[0]), weight_decay=float(h[1]), weight_decay_beta=float(h[2]), grad_clip=float(h[3]),
-            optimizer=next(k for k,v in OPTIMIZERS.items() if v==c[11]), link_epochs=int(c[12]),
-            validation_fraction=float(h[5]), beta_damping=float(h[6]), beta_max_step=float(h[7]))
+            max_iter=int(c[8]), initial=bool(c[9]), weight_decay=float(h[0]))
         model.net = net
         return model
 
@@ -168,10 +145,10 @@ class NeuralPLSI(_SummaryMixin):
         Replicate seeds are independent of worker scheduling. A failed draw
         raises an error and invalidates the whole bootstrap result.
         Each refit starts from a fresh seeded initialization (cold start) and
-        uses the same optimizer, fitting/validation policy, full epoch budget,
-        coefficient updates and regularization as the original fit. Warm starts from the original fit
-        were removed: refits inherited its optimizer error, so the bootstrap
-        understated the variability of beta.
+        uses the same full-batch training, stopping rule and exact gamma fit as
+        the original fit. Warm starts from the original fit were removed: refits
+        inherited its optimizer error, so the bootstrap understated the
+        variability of beta.
 
         'linear' and 'weibull' choose percentile interpolation. They do not
         change the draws or correct estimator bias. The native bootstrap RNG

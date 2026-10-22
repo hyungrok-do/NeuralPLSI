@@ -45,7 +45,7 @@ class BootstrapQuantilesTest(unittest.TestCase):
     def test_interpolation_applies_to_all_model_blocks_without_changing_draws(self):
         rng = np.random.default_rng(4)
         x, z, y = rng.normal(size=(80, 2)), rng.normal(size=(80, 1)), rng.normal(size=80)
-        model = NeuralPLSI(max_epoch=3, hidden_units=4, add_intercept=True).fit(x, z, y)
+        model = NeuralPLSI(max_iter=3, hidden_units=4, add_intercept=True).fit(x, z, y)
         outputs = [model.inference_bootstrap(x, z, y, n_samples=8, random_state=9,
                     g_grid=[-1, 0, 1], n_jobs=2, quantile_method=method)
                    for method in ('linear', 'weibull')]

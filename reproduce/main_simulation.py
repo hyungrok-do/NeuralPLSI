@@ -113,7 +113,7 @@ def run_configuration(args, model):
         native_build = build_library().name
     resolved_device = (str(NeuralPLSI(device=args.device, backend=args.nn_backend).device)
                        if model == 'NeuralPLSI' else 'cpu')
-    return dict(protocol_version=8, model=model, n=args.n_instances,
+    return dict(protocol_version=9, model=model, n=args.n_instances,
                 g_fn=args.g_fn, outcome=args.outcome, x_dist=args.exposure_dist,
                 activation=args.activation if model == 'NeuralPLSI' else None,
                 n_bootstrap=args.n_bootstrap, ci=0.95,
@@ -121,14 +121,8 @@ def run_configuration(args, model):
                                  if model == 'NeuralPLSI' else 'linear'),
                 fit_random_state=args.fit_seed if model == 'NeuralPLSI' else 'replicate_seed',
                 initial=args.initial if model == 'NeuralPLSI' else None,
-                training_policy=('configurable_alternating_sphere_v1'
+                training_policy=('full_batch_lbfgs_exact_gamma_v1'
                                  if model == 'NeuralPLSI' else None),
-                optimizer=args.nn_optimizer if model == 'NeuralPLSI' else None,
-                validation_fraction=args.nn_validation_fraction if model == 'NeuralPLSI' else None,
-                neural_epochs=args.nn_epochs if model == 'NeuralPLSI' else None,
-                link_epochs=args.nn_link_epochs if model == 'NeuralPLSI' else None,
-                beta_damping=args.nn_beta_damping if model == 'NeuralPLSI' else None,
-                beta_max_step=args.nn_beta_max_step if model == 'NeuralPLSI' else None,
                 backend=args.nn_backend if model == 'NeuralPLSI' else 'cpp',
                 device=resolved_device, native_build=native_build,
                 normalization='l2', native_rng='splitmix64_v1',
@@ -196,10 +190,7 @@ def run_replicate(args, mname, seed, configuration):
     X_tr, X_te, Z_tr, Z_te, y_tr, y_te = train_test_split(X, Z, y, test_size=n, random_state=seed)
     if mname == 'NeuralPLSI':
         model = NeuralPLSI(family=args.outcome, activation=args.activation,
-            initial=args.initial, device=args.device, backend=args.nn_backend,
-            optimizer=args.nn_optimizer, validation_fraction=args.nn_validation_fraction,
-            max_epoch=args.nn_epochs, link_epochs=args.nn_link_epochs,
-            beta_damping=args.nn_beta_damping, beta_max_step=args.nn_beta_max_step)
+            initial=args.initial, device=args.device, backend=args.nn_backend)
         fit_options = {'random_state': args.fit_seed}
     else:
         model = SplinePLSI(family=args.outcome)
@@ -283,12 +274,6 @@ def build_parser():
     parser.add_argument('--initial', action='store_true')
     parser.add_argument('--device', default='cpu', choices=['auto','cpu'])
     parser.add_argument('--nn_backend', default='cpp', choices=['cpp'])
-    parser.add_argument('--nn_optimizer', default='alternating', choices=['alternating', 'joint'])
-    parser.add_argument('--nn_validation_fraction', type=float, default=0.)
-    parser.add_argument('--nn_epochs', type=int, default=200)
-    parser.add_argument('--nn_link_epochs', type=int, default=1)
-    parser.add_argument('--nn_beta_damping', type=float, default=1e-3)
-    parser.add_argument('--nn_beta_max_step', type=float, default=.25)
     return parser
 
 

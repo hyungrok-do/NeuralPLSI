@@ -18,10 +18,6 @@ args=(reproduce/main_simulation.py --n_instances "$n"
       --models "$model" --exposure_dist normal --n_bootstrap "${N_BOOTSTRAP:-100}"
       --n_replicates "${N_REPLICATES:-500}" --seed0 "${SEED0:-0}"
       --bootstrap_jobs "${BOOTSTRAP_JOBS:-${SLURM_CPUS_PER_TASK:-1}}"
-      --nn_optimizer "${NN_OPTIMIZER:-alternating}"
-      --nn_validation_fraction "${NN_VALIDATION_FRACTION:-0}"
-      --nn_epochs "${NN_EPOCHS:-200}" --nn_link_epochs "${NN_LINK_EPOCHS:-1}"
-      --nn_beta_damping "${NN_BETA_DAMPING:-0.001}" --nn_beta_max_step "${NN_BETA_MAX_STEP:-0.25}"
       --device cpu --nn_backend "$backend" --out "$out" --save_every 1)
 [[ ${SAVE_BOOTSTRAP_SAMPLES:-0} == 1 ]] && args+=(--save_bootstrap_samples)
 [[ ${NPLSI_INITIAL:-0} == 1 ]] && args+=(--initial)

@@ -15,11 +15,11 @@ class NativeBootstrapTest(unittest.TestCase):
         for family in ('continuous', 'binary', 'cox'):
             x, z, y, *_ = simulate_data(120, outcome=family, seed=5)
             if family == 'cox':
-                # Different bootstrap splits must rebuild cached tied risk sets.
+                # Different resamples must rebuild cached tied risk sets.
                 y[:, 0] = np.ceil(y[:, 0]*2)
             for initial in (False, True):
                 with self.subTest(family=family, initial=initial):
-                    model = NeuralPLSI(family=family, max_epoch=31, hidden_units=5,
+                    model = NeuralPLSI(family=family, max_iter=31, hidden_units=5,
                         n_hidden_layers=3, initial=initial,
                         add_intercept=family!='cox').fit(x, z, y, random_state=4)
                     before = model.net.to_bytes()
@@ -34,7 +34,7 @@ class NativeBootstrapTest(unittest.TestCase):
                         rows = bootstrap_indices(len(x), 9, r)
                         fitted = NativeModel.from_bytes(before)
                         fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r)
-                        self.assertEqual(fitted.fit_diagnostics['joint_epochs'],31)
+                        self.assertTrue(0 < fitted.fit_diagnostics['iterations'] <= 31)
                         self.assertGreater(fitted.fit_diagnostics['gamma_iterations'],0)
                         beta, gamma, intercept = fitted.coefficients()
                         np.testing.assert_array_equal(a['beta_samples'][r], beta)
@@ -48,7 +48,7 @@ class NativeBootstrapTest(unittest.TestCase):
 
     def test_bootstrap_has_no_python_refits_rng_statistics_or_worker_creation(self):
         x, z, y, *_ = simulate_data(80, seed=3)
-        model = NeuralPLSI(max_epoch=2, hidden_units=4).fit(x, z, y)
+        model = NeuralPLSI(max_iter=2, hidden_units=4).fit(x, z, y)
         # The shared library is already loaded. Any of these calls would mean
         # that the bootstrap left the single native invocation.
         forbidden = ('models.base.run_parallel_bootstrap', 'joblib.Parallel',
@@ -69,7 +69,7 @@ class NativeBootstrapTest(unittest.TestCase):
     def test_native_rng_golden_draw_prefix_and_numpy_state(self):
         np.testing.assert_array_equal(bootstrap_indices(10, 0, 0), [8, 5, 0, 2, 4, 2, 7, 1, 1, 7])
         x, z, y, *_ = simulate_data(80, seed=3)
-        model = NeuralPLSI(max_epoch=2, hidden_units=4).fit(x, z, y)
+        model = NeuralPLSI(max_iter=2, hidden_units=4).fit(x, z, y)
         np.random.seed(44)
         before = np.random.get_state()
         a = model.inference_bootstrap(x, z, y, n_samples=2, n_jobs=1)
@@ -89,8 +89,8 @@ class NativeBootstrapTest(unittest.TestCase):
             with self.assertRaises(ValueError): bootstrap_options(*options)
         # Cold linear initialization cannot identify an exposure direction on
         # all-zero X. Fail visibly inside a worker instead of omitting the draw.
-        model = NeuralPLSI(max_epoch=0, initial=True)
-        model.net = NativeModel(2, 0, max_epoch=0, initial=True)
+        model = NeuralPLSI(max_iter=0, initial=True)
+        model.net = NativeModel(2, 0, max_iter=0, initial=True)
         state = model.net.to_bytes()
         x, z, y = np.zeros((20, 2)), np.empty((20, 0)), np.arange(20.)
         for jobs in (1, 3):
@@ -104,26 +104,11 @@ class NativeBootstrapTest(unittest.TestCase):
         rng = np.random.default_rng(1)
         x, z, y = rng.normal(size=(60, 2)), np.empty((60, 0)), rng.normal(size=60)
         for intercept in (False, True):
-            model = NeuralPLSI(max_epoch=2, hidden_units=3, add_intercept=intercept).fit(x, z, y)
+            model = NeuralPLSI(max_iter=2, hidden_units=3, add_intercept=intercept).fit(x, z, y)
             result = model.inference_bootstrap(x, z, y, n_samples=3, n_jobs=2)
             self.assertEqual(result['gamma_samples'].shape, (3, 0))
             self.assertEqual(result['gamma_se'].shape, (0,))
             self.assertEqual('intercept_samples' in result, intercept)
-
-    def test_bootstrap_preserves_optimizer_split_and_alternation_controls(self):
-        x, z, y, *_ = simulate_data(140, seed=3)
-        for optimizer, fraction in (('alternating', .25), ('joint', .2), ('joint', 0.)):
-            with self.subTest(optimizer=optimizer, fraction=fraction):
-                model = NeuralPLSI(max_epoch=7, hidden_units=4, optimizer=optimizer,
-                    validation_fraction=fraction, link_epochs=3, beta_damping=.01,
-                    beta_max_step=.1).fit(x, z, y)
-                draws = model.inference_bootstrap(x, z, y, n_samples=3, random_state=7, n_jobs=2)
-                for replicate in range(3):
-                    rows = bootstrap_indices(len(x), 7, replicate)
-                    fitted = NeuralPLSI(**model.get_params()).fit(x[rows], z[rows], y[rows],
-                                                                  random_state=7+1337+replicate)
-                    np.testing.assert_array_equal(fitted.beta, draws['beta_samples'][replicate])
-                    np.testing.assert_array_equal(fitted.gamma, draws['gamma_samples'][replicate])
 
 
 if __name__ == '__main__':

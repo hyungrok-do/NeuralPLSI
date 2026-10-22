@@ -6,7 +6,7 @@ import numpy as np
 from scipy.special import logsumexp
 
 from models import NeuralPLSI, SplinePLSI
-from models.native import bootstrap_indices, outcome_loss_gradient, training_validation_indices
+from models.native import bootstrap_indices, outcome_loss_gradient
 from simulation import simulate_data
 from native_reference import cox_loss_and_grad
 
@@ -134,7 +134,7 @@ class ModelRegressionTest(unittest.TestCase):
 
     def test_serial_parallel_bootstrap_and_refit_clear_uncertainty(self):
         x, z, y, *_ = simulate_data(50, seed=1)
-        for model in (SplinePLSI(max_iter=1), NeuralPLSI(max_epoch=2, hidden_units=4)):
+        for model in (SplinePLSI(max_iter=1), NeuralPLSI(max_iter=2, hidden_units=4)):
             with self.subTest(model=type(model).__name__, backend=getattr(model, 'backend', None)):
                 model.fit(x, z, y, random_state=5)
                 serial = model.inference_bootstrap(x, z, y, n_samples=3, n_jobs=1, random_state=13, g_grid=[-1., 1.])
@@ -149,10 +149,9 @@ class ModelRegressionTest(unittest.TestCase):
         from sklearn.linear_model import LinearRegression
         x, z, y, *_ = simulate_data(50, seed=2)
         for intercept in (False, True):
-            model = NeuralPLSI(initial=True, max_epoch=0, add_intercept=intercept).fit(x, z, y, random_state=4)
-            train, _ = training_validation_indices(len(x), 4, validation_fraction=0)
+            model = NeuralPLSI(initial=True, max_iter=0, add_intercept=intercept).fit(x, z, y, random_state=4)
             design = np.column_stack([x, z]).astype('float32').astype(float)
-            reference = LinearRegression(fit_intercept=intercept).fit(design[train], y[train].astype('float32'))
+            reference = LinearRegression(fit_intercept=intercept).fit(design, y.astype('float32'))
             np.testing.assert_allclose(model.predict(x,z), reference.predict(design), rtol=1e-5, atol=2e-6)
 
     def test_binary_and_cox_initialization_match_independent_optimization(self):
@@ -161,7 +160,6 @@ class ModelRegressionTest(unittest.TestCase):
         rng = np.random.default_rng(24)
         x, z = rng.normal(size=(160, 3)), rng.normal(size=(160, 2))
         x, z = x.astype('float32'), z.astype('float32')
-        train, _ = training_validation_indices(len(x), 4, validation_fraction=0)
         for family, intercept in [('binary', False), ('binary', True), ('cox', False)]:
             with self.subTest(family=family, intercept=intercept):
                 y = rng.binomial(1, expit(.5*x[:, 0] + .3*z[:, 0]))
@@ -170,7 +168,7 @@ class ModelRegressionTest(unittest.TestCase):
                 design = np.column_stack([x, z]).astype(float)
                 if intercept:
                     design = np.column_stack([design, np.ones(len(x))])
-                d, target = design[train], y[train]
+                d, target = design, y
                 penalized = np.ones(design.shape[1])
                 if intercept:
                     penalized[-1] = 0
@@ -196,7 +194,7 @@ class ModelRegressionTest(unittest.TestCase):
                 reference = minimize(objective, np.zeros(design.shape[1]), jac=True,
                                      method='BFGS', options={'gtol': 1e-7})
                 self.assertLess(np.max(np.abs(objective(reference.x)[1])), 1e-5)
-                model = NeuralPLSI(family=family, initial=True, max_epoch=0,
+                model = NeuralPLSI(family=family, initial=True, max_iter=0,
                                    add_intercept=intercept).fit(x, z, y, random_state=4)
                 np.testing.assert_allclose(model.predict(x, z), design @ reference.x,
                                            rtol=1e-5, atol=2e-6)
@@ -215,7 +213,7 @@ class ModelRegressionTest(unittest.TestCase):
             NeuralPLSI(family='cox', add_intercept=True)
         x, z, y, *_ = simulate_data(20)
         x[0, 0] = np.nan
-        for model in (NeuralPLSI(max_epoch=1), SplinePLSI(max_iter=1)):
+        for model in (NeuralPLSI(max_iter=1), SplinePLSI(max_iter=1)):
             with self.assertRaisesRegex(ValueError, 'finite'):
                 model.fit(x, z, y)
 

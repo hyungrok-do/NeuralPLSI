@@ -6,8 +6,7 @@ from scipy.special import logsumexp, expit
 def forward(config, weights, X, Z, sign=1.):
     p,q,h,depth,intercept,family,activation=map(int,config[:7])
     w=np.asarray(weights,dtype=float)
-    epsilon=0. if config[11] else 1e-6
-    index=np.asarray(X,dtype=float)@(w[:p]/(np.linalg.norm(w[:p])+epsilon))*sign
+    index=np.asarray(X,dtype=float)@(w[:p]/(np.linalg.norm(w[:p])+1e-6))*sign
     a=np.r_[index,0.].reshape(-1,1)
     position=p+q+1
     for k in range(depth+1):

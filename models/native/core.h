@@ -8,24 +8,17 @@ extern "C" {
 /* All matrices are contiguous, row-major float32. Outcomes are n scalars,
    or n x 2 [duration, event] for Cox. Each model handle owns its parameters.
    Config: p, q, width, hidden_layers, intercept, family, activation,
-           parameter_count, batch_size, max_epochs, linear_init,
-           optimizer (0=joint AdamW, 1=alternating), link_epochs.
+           parameter_count, max_iter, linear_init.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
-   Hyper: learning_rate, link_decay, beta_decay (joint only), gradient_clip,
-          index_sign, validation_fraction, beta_damping, beta_max_step.
-   Diagnostics: neural epochs, gamma iterations, final validation loss,
-          accepted beta steps, final training loss, checkpoint epoch,
-          checkpoint loss, training rows, validation rows, skipped beta steps.
-   Absent validation losses/checkpoint epochs are stored as zero. */
-#define NPLSI_CONFIG_SIZE 13
-#define NPLSI_HYPER_SIZE 8
-#define NPLSI_DIAGNOSTICS_SIZE 10
+   Hyper: penalty (L2 on the link network), index_sign. */
+#define NPLSI_CONFIG_SIZE 10
+#define NPLSI_HYPER_SIZE 2
 const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
-int nplsi_split(int n, uint64_t seed, int32_t* indices);
-/* Every fit starts from a fresh initialization drawn from seed. */
+/* Every fit starts from a fresh initialization drawn from seed and runs
+   full-batch L-BFGS on all rows, then fits gamma exactly. */
 int nplsi_fit(void* handle, const float* x, const float* z, const float* y,
               int n, uint64_t seed);
 /* Prediction mode: 0=linear predictor, 1=probability, 2=partial hazard,
@@ -34,6 +27,7 @@ int nplsi_predict(void* handle, const float* x, const float* z, int n,
                   int batch_size, int mode, float* result);
 int nplsi_link(void* handle, const float* grid, int n, float* result);
 int nplsi_coefficients(void* handle, float* beta, float* gamma, float* intercept);
+/* diagnostics: L-BFGS iterations, gamma Newton iterations, penalized objective. */
 int nplsi_get_config(void* handle, int32_t* config, float* hyper, double* diagnostics);
 int nplsi_get_weights(void* handle, float* weights);
 int nplsi_set_weights(void* handle, const float* weights, float sign);
@@ -63,21 +57,11 @@ int nplsi_export_state(void* handle, char* buffer, size_t size);
 void* nplsi_import_state(const char* buffer, size_t size);
 int nplsi_save(void* handle, const char* path);
 void* nplsi_load(const char* path);
-/* Diagnostics for independently checking gradients and optimizer steps. */
+/* Diagnostics for independently checking the unpenalized loss and gradients. */
 int nplsi_loss_grad(const int32_t*, const float*, const float*, const float*,
                     const float*, const float*, int, int, double*, float*);
-int nplsi_adam_step(const int32_t*, const float*, float*, const float*, int);
-int nplsi_adam_updates(const int32_t*, const float*, float*, const float*, int, int);
 int nplsi_outcome(const float* risks, const float* y, int n, int family,
                   double* loss, float* gradient);
-/* Frozen-link sphere geometry. basis is p x (p-1), gradient is p-1 and
-   curvature is (p-1) x (p-1), all row-major doubles. Cox uses global risk sets.
-   beta_step changes only beta and returns the before/after outcome loss.
-   Adam diagnostic group: 0=all, 1=gamma/intercept, 2=link only. */
-int nplsi_beta_geometry(const int32_t*, const float*, const float*, const float*,
-                        const float*, const float*, int, double*, double*, double*, double*);
-int nplsi_beta_step(const int32_t*, const float*, float*, const float*,
-                    const float*, const float*, int, double*);
 /* SplinePLSI (spline.cpp): g(x'beta) + z'gamma with a B-spline g, double precision.
    Config: p, q, family, num_knots, degree, max_iter. Hyper: ridge alpha, tol.
    Knots sit at num_knots equally spaced order statistics of x'beta, clamped,
@@ -102,11 +86,6 @@ int splsi_bootstrap(const int32_t* config, const double* hyper, const double* x,
                     const double* y, int n, int B, uint64_t seed, int n_jobs, const double* grid,
                     int grid_size, double ci, int quantile_method, double* draws,
                     double* summary, int32_t* workers_used);
-/* Low-level trainer accepting an explicit order for numerical regression tests.
-   Normally use nplsi_fit, which handles splitting, initialization and shuffling. */
-int nplsi_train(const int32_t*, const float*, float*, const float*, const float*,
-                const float*, int, const float*, const float*, const float*, int,
-                const int32_t*, double*);
 #ifdef __cplusplus
 }
 #endif

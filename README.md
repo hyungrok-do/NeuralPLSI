@@ -86,9 +86,7 @@ This script performs data preprocessing, model fitting, and bootstrap inference,
 ## Standalone C++ NeuralPLSI
 
 NeuralPLSI is implemented entirely in C++17. Initialization, the network, analytic
-backpropagation, AdamW, sphere Gauss-Newton steps, gamma Newton fits, optional
-data splitting, minibatch shuffling, validation checkpoint selection,
-prediction, model serialization and the entire bootstrap workflow all run in
+backpropagation, the full-batch L-BFGS optimizer, the exact gamma fit, prediction, model serialization and the entire bootstrap workflow all run in
 C++. There is **no Torch or
 LibTorch dependency**, including in the Python examples and tests. The Python API
 passes NumPy arrays to a single native bootstrap call and formats the returned
@@ -156,105 +154,59 @@ only supported execution modes (`device="auto"` is a CPU alias).
 
 ### Optimization
 
-The default is **alternating optimization on all supplied rows**, keeping the
-same two hidden layers of 32 units. `max_epoch=200` counts neural epochs.
-Every fit, including a bootstrap refit, follows the same rule:
+Each fit uses **all rows**, with no validation split, and minimizes the penalized
+objective
 
-1. Fit gamma and the optional intercept by full-data Newton with the initial link
-   as an offset. Hold beta and gamma fixed while training the link with minibatch
-   AdamW for `link_epochs` epochs (default 1).
-2. Freeze the network. Refit gamma, then compute beta's score and generalized
-   Gauss-Newton curvature on all fitting rows at those fixed weights. A
-   Householder basis restricts the step to the unit sphere's tangent space.
-   Add `beta_damping * mean(diag(curvature))` to the diagonal, with a numerical
-   floor of 1e-10. Bound the tangent step by `beta_max_step=0.25`, renormalize beta,
-   and backtrack until the actual full-data outcome loss decreases.
-3. Refit gamma at the updated beta and repeat. A final partial block of neural
-   epochs still receives a coefficient update. Adam moments for the link persist
-   across blocks and reset for each new fit. An unsuccessful beta step leaves
-   the coefficients unchanged and is recorded, without claiming convergence.
+    outcome loss + g(0)^2 + (weight_decay / 2) * |link network|^2
 
-Coefficient updates still run after every neural epoch by default. The C++
-implementation evaluates the link and its input derivative together, reuses the
-link for gamma, and retains accepted beta-candidate link values for the second
-gamma fit. A usual coefficient cycle therefore needs two full-data network
-evaluations instead of five, with additional evaluations only for backtracking.
-The fixed gamma design, continuous-outcome Gram matrix and full-data Cox ordering
-are prepared once per fit. Bootstrap workers rebuild these caches for each
-resample. Newton backtracking avoids derivative calculations on further rejected
-trials after the first rejection. These changes preserve the update sequence,
-losses, tolerances, network size and neural epoch budget.
+by **full-batch L-BFGS** (memory 10, Armijo backtracking) with explicit C++
+backpropagation. The outcome loss is mean squared error, binary cross-entropy,
+or the negative Breslow Cox partial likelihood divided by the event count, with
+complete risk sets for tied times. The `g(0)^2` anchor identifies the level of
+the link. The penalty (`weight_decay`, default 1e-3) covers the link-network
+weights and biases and the linear skip weight, but not beta, gamma or the
+intercept. The loss does not depend on the length of beta, so beta is
+renormalized to unit length after every step instead of being penalized.
 
-Beta has no Adam moments, weight decay, or shared gradient clipping. Gamma uses
-double-precision damped Newton for least squares, logistic regression or Breslow
-Cox, with the existing tiny numerical ridge (1e-10 continuous, 1e-6 binary/Cox,
-on the summed objective). Link AdamW retains learning rate 0.001, weight decay
-0.0001, moments 0.9/0.999, epsilon 1e-8 and gradient norm limit 1.0. Clipping
-includes only link gradients. Batch size remains 64. `weight_decay_beta` applies
-only to the legacy joint optimizer.
+Network evaluations are float32. Training stops once the objective decreases by
+less than a relative 1e-5 over 10 iterations, when the gradient vanishes, or
+after `max_iter` iterations (5000 by default; `max_iter=0` performs
+initialization only). With beta and the link fixed, gamma and the optional
+intercept are then fitted exactly, with `g(x'beta)` as a fixed offset: least
+squares, logistic regression or the Breslow Cox partial likelihood, solved by
+double-precision damped Newton iterations. Original fits and all bootstrap
+refits use the same procedure.
 
-`validation_fraction=0` uses every observation for both blocks and returns the
-final iterate. There is no validation checkpoint selection or early stopping
-in this mode. A positive fraction (for example 0.2) reserves that fraction,
-rounded up to whole rows, and selects the best checkpoint after a complete
-alternating cycle. Neither the network nor coefficient updates use held-out
-rows. All neural epochs still execute. `max_epoch=0` performs initialization only.
-
-`fit_diagnostics` records neural epochs (`joint_epochs`, retained for API
-compatibility), cumulative accepted gamma iterations, accepted/skipped beta
-steps, fitting/validation row counts, final outcome losses, and the selected
-checkpoint's epoch and score. Checkpoint selection uses outcome loss plus the
-`g(0)^2` anchor. Absent validation losses and checkpoints are `None` in Python.
-
-The outcome objectives are MSE, binary cross-entropy, and negative Breslow Cox
-partial likelihood divided by event count. The network also receives the soft
-`g(0)^2` anchor. **Cox beta/gamma updates use global fitting risk sets, including
-ties. The network retains within-minibatch risk sets.** Consequently, for Cox
-this is not exact block descent on one full-data likelihood. Setting
-`batch_size` to at least the fitting sample size uses global risk sets for the
-network too, but changes its update count. More generally, a finite block of
-Adam epochs is not exact profiling of the link, and full-data fitting does not
-establish nominal bootstrap coverage or prevent overfitting.
-
-`optimizer="joint", validation_fraction=0.2` reproduces the previous training
-policy: joint minibatch AdamW, validation checkpoint selection, then a gamma fit
-on training plus validation rows. Its final `validation_loss` is therefore not
-held out for gamma. `optimizer="joint", validation_fraction=0` provides a
-full-data joint-Adam comparison. Joint Adam uses the historical gamma learning
-rate multiplier of 50 and beta decay of 1e-5.
+This replaced minibatch AdamW with an 80/20 training/validation split and
+best-validation checkpoints, and, briefly, an alternating optimizer (minibatch
+AdamW for the network with full-data Gauss-Newton beta and Newton gamma steps
+after every epoch, commits `114133d` and `3fd7fdb`). The alternating optimizer
+matched beta RMSE but its network kept minibatch noise: across fit seeds its g
+varied 2-7 times more than with L-BFGS, and fits took 1-9 times longer. At n = 2,000 that procedure learned beta and g from
+80% of the rows, which alone raised beta RMSE by about 12% (SplinePLSI fitted to
+80% subsets lost the same), and its minibatch noise made fits from different
+seeds disagree by half to four-fifths of the sampling SD of beta. Full-batch fits are nearly
+deterministic: across seeds beta moves by about 0.0002-0.002, against a sampling
+SD of 0.01-0.06. On 60 simulated datasets per setting, beta RMSE matched
+SplinePLSI for continuous and Cox outcomes and was lower for binary ones. The
+penalty replaces checkpoint selection as the regularizer. Its value, 1e-3, was
+chosen once from {3e-4, 1e-3, 3e-3, 1e-2} on those simulations and is fixed,
+like the spline's five knots. Stopping at 1e-7 over 20 iterations took 2-4
+times longer and changed beta and g RMSE by under 2%.
 
 `initial=True` optionally starts from a native linear/logistic/Cox regression
-on the fitting rows. It remains off by default. Sign canonicalization preserves
-the fitted predictor, with beta[0] nonnegative and the link orientation adjusted.
+fit to all rows; it is off by default. The original L2 index normalization,
+linear skip and sign canonicalization are retained.
 
-```python
-# Default: full-data coefficients, minibatch link, unchanged network size.
-model = NeuralPLSI(optimizer="alternating", validation_fraction=0,
-                   link_epochs=1, max_epoch=200, activation="ELU")
-# Optional checkpoint selection without early stopping:
-selected = NeuralPLSI(optimizer="alternating", validation_fraction=0.2)
-```
-
-Each native worker reuses its training, gradient, optimizer and inference
-buffers across minibatches and bootstrap refits. Shuffling keeps one permutation
-of the training rows and generates the next only when an epoch executes. The
-gamma fit reuses its design, offset and outcome buffers. Validation computes loss
-without unused derivatives, and its
-Cox ordering and tie groups are prepared once per fit.
-
-Validation prediction and link-grid evaluation use chunks of at most 256 rows
-and two reusable layer buffers. Cox validation still evaluates the full
-validation risk sets. Bootstrap workers gather train/validation rows directly
-from the shared original arrays using their sample indices. This removes the
-extra copy of the entire bootstrap sample. Input partitions, cached frozen-link
-values, and Cox risk-set storage still grow with the number of observations;
-per-worker memory therefore still matters when selecting `n_jobs`. The packed
-double-precision bootstrap output uses `8 * B * (p + q + intercept + grid_size)`
-bytes, shared across workers, plus its four-row summary.
-
-The earlier workspace-only changes preserved the native RNG streams, optimizer,
-stopping rules and bootstrap definition. Same-seed comparisons with commit `4637057`
-matched fitted states, predictions, bootstrap draws and summaries exactly.
+Each native worker reuses its training, gradient and inference buffers across
+bootstrap refits, and gathers each resampled dataset into one reusable buffer.
+The Cox ordering and tie groups are prepared once per fit. Prediction and
+link-grid evaluation use chunks of at most 256 rows and two reusable layer
+buffers. Input data, cached link values and Cox risk-set storage grow with the
+number of observations; per-worker memory therefore still matters when
+selecting `n_jobs`. The packed double-precision bootstrap output uses
+`8 * B * (p + q + intercept + grid_size)` bytes, shared across workers, plus its
+four-row summary.
 
 ### Native bootstrap
 
@@ -285,8 +237,7 @@ Resampling now uses `splitmix64_bootstrap_v1`. Replicate `b` resamples with a
 separate stream keyed by `random_state+b` and fits with `random_state+1337+b`.
 This preserves reproducibility across thread counts and when extending B, but
 changes the draws relative to the former NumPy RNG. Use a fresh simulation output
-directory. Alternating optimization changes the fitted estimator, so its
-results must also remain separate from joint-Adam results.
+directory. Point-fit initialization is unchanged.
 
 ### Use without Python
 
@@ -312,8 +263,9 @@ cmake --build /tmp/neuralplsi-build
 
 ### Reproducibility and timing
 
-The native RNG protocol is `splitmix64_v1`, with separate streams for weights,
-validation splits and minibatch permutations. Fixed seeds reproduce native fits
+The native RNG protocol is `splitmix64_v1`. With full-batch training it draws
+only the initial weights; validation splits and minibatch permutations were
+removed. Fixed seeds reproduce native fits
 without changing NumPy's global RNG state. The new protocol changes initialization
 and splitting relative to the former Torch implementation, so old and new fits
 need separate simulation directories. Simulation data generation itself is unchanged.
@@ -329,18 +281,9 @@ Despite its historical filename, this script now benchmarks only native C++ and
 writes `output/benchmark_native.json`. Compilation/loading is reported separately.
 These checks do not estimate coverage; run the full scenarios on HPC for that.
 
-The [coefficient-cache benchmark](results/coefficient_cache_benchmark.md) compares
-the current alternating implementation with `114133d`, retaining coefficient
-updates every epoch. On three repeats at n=2,000 and 200 neural epochs, median
-point-fit time fell 38–42% across continuous, binary and Cox outcomes. Fitted
-states, predictions, bootstrap draws and summaries matched bit-for-bit. The
-report includes serial and four-worker bootstrap timings and the command to
-reproduce them. `compare_native_revisions.py` now defaults to this compatible
-baseline revision and supports explicit optimizer, activation and split controls.
-
-The historical timings and memory comparisons below used patience-based early
-stopping and warm-start bootstrap refits, both since removed. They do not measure
-the current training and bootstrap procedure.
+The historical timings and memory comparisons below used minibatch AdamW with
+patience-based early stopping and warm-start bootstrap refits, all since removed.
+They do not measure the current training and bootstrap procedure.
 
 Before the workspace changes, a local check used n=2,000, the `sfun` scenario,
 data/fit seed 0, bootstrap seed 11,
@@ -360,8 +303,8 @@ Use `--bootstrap 24 --repeats 1 --bootstrap_seed 11 --g_grid_n 1000 --jobs 1`
 and then `--jobs 4` with the timing script to repeat the configuration.
 
 To reproduce the historical workspace comparison, run the following from a
-checkout of commit `7270f3c`. Both compared revisions must use the same training
-policy for its exact-result checks to be meaningful:
+checkout of commit `7270f3c` (the script has since been removed, because it
+compares exact results of revisions with the same training policy):
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
@@ -372,10 +315,9 @@ The script compiles commit `4637057` from the local git history with the current
 compiler and compares it with the working tree. Compilation and data generation
 are outside the timing intervals. It alternates the execution order and writes
 raw timings and memory measurements to `output/native_revision_comparison.json`.
-The standalone `reproduce/native_memory_check.cpp` measures peak process RSS
-without Python. Its learning rate is zero to hold the weights fixed; it tests
-allocations rather than estimation or convergence. Revisions before `aa80299`
-stopped after 6 joint and 21 gamma epochs.
+At that commit, `reproduce/native_memory_check.cpp` measured peak process RSS
+without Python, with a zero learning rate holding the weights fixed. It now takes
+n, B, workers and `max_iter` and runs real full-batch fits.
 Use `--memory-n 0` to skip this check.
 
 Local medians from three alternating runs used n=2,000, `sfun`, data/fit seed 0,
@@ -416,8 +358,6 @@ Existing cluster resource directives may need adjustment for another cluster.
 ```bash
 mkdir -p logs
 export NN_BACKEND=cpp
-export NN_OPTIMIZER=alternating
-export NN_VALIDATION_FRACTION=0
 export N_BOOTSTRAP=1000
 export N_REPLICATES=500
 export OUT_DIR=output/simulation
@@ -443,12 +383,11 @@ limited to one. Reduce `BOOTSTRAP_JOBS` when memory is limited.
 `SAVE_BOOTSTRAP_SAMPLES=1` retains beta/gamma draws in compressed NPZ files.
 The default B remains 100 unless `N_BOOTSTRAP` is set. Increasing B reduces
 bootstrap Monte Carlo error; it does not guarantee nominal coverage.
-`NN_LINK_EPOCHS`, `NN_EPOCHS`, `NN_BETA_DAMPING` and `NN_BETA_MAX_STEP` expose the
-same controls as the Python constructor. Results go to `output/simulation`, one file per estimator and scenario. Each
+Results go to `output/simulation`, one file per estimator and scenario. Each
 replicate records its run configuration, including a hash of the source code,
 and a run refuses to resume into a file written by different code or settings;
-remove the old results before rerunning after a code change. Full epoch budgets
-increase runtime, so check the cluster wall-time limit before a full run.
+remove the old results before rerunning after a code change. Check the cluster
+wall-time limit before a full run: every bootstrap draw is a complete fit.
 
 For a local run:
 
@@ -457,23 +396,6 @@ python reproduce/main_simulation.py --models NeuralPLSI --nn_backend cpp \
   --device cpu --n_instances 2000 --g_fn sfun --outcome binary \
   --n_bootstrap 1000 --bootstrap_jobs 8 --out output/simulation
 ```
-
-For a smaller point-estimation diagnostic that separates fitting sample size
-from optimizer changes, run:
-
-```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-  python reproduce/compare_optimizers.py --n 2000 --replicates 20 \
-  --optimizer_seeds 10 --jobs 4
-```
-
-This compares joint Adam with/without its validation split, alternating training
-on all rows, and SplinePLSI on the same datasets. Both neural methods retain
-2x32 networks and 200 neural epochs. A separate repeated-fit diagnostic varies
-optimizer seeds on fixed data, with no holdout in either method. Timings with
-multiple jobs include CPU contention. This does not estimate bootstrap coverage.
-The initial 10-dataset-per-cell pilot and optimizer-seed diagnostic are summarized
-in [results/optimizer_pilot](results/optimizer_pilot/README.md).
 
 Completed replicates are saved atomically. Failed replicates raise an error
 with their seed, and concurrent writers to the same result file are rejected.
@@ -502,25 +424,28 @@ replicates, not a bootstrap confidence band.
 
 - Bootstrap refits always start from a fresh seeded initialization and are
   canonicalized to the same index orientation. New fits clear uncertainty
-  estimates from previous fits. Saved model states use format version 3, including
-  optimizer/split settings and checkpoint diagnostics. Version 2 remains readable
-  with its original joint optimizer and 80/20 split. Version 1 files are rejected.
+  estimates from previous fits. Saved model states use format version 4, without
+  the removed warm-start flag (version 1), minibatch optimizer settings
+  (version 2) or the alternating optimizer's settings (version 3); older files
+  are rejected.
 - Cox likelihoods use complete Breslow risk sets for ties and stable log-space
   calculations in both estimators. Cox intercepts are rejected because the
   partial likelihood cannot identify them. The link output bias receives only
   its identifying g(0) anchor gradient for Cox, avoiding numerical drift.
-- Alternating training runs its full neural epoch budget, with full-data sphere
-  steps for beta and Newton fits for gamma. Validation selection is optional and
-  never ends training early. Bootstrap refits inherit the entire fitting policy.
+- Each fit trains on all rows by full-batch L-BFGS until the penalized
+  objective stops decreasing. The 80/20 validation split, minibatch AdamW and
+  checkpoint selection were removed. Gamma is then fitted exactly by Newton
+  iterations with the index and link frozen. Bootstrap refits use the same
+  training policy.
 - Spline coefficients and knots correspond to the returned index: the final
   linear part is exactly the profile fit at that index. Profiling and final
   fitting use the same penalized objective. Serial and threaded bootstrap draws
   are identical.
-- `initial=True` now performs linear-model initialization using the training
-  partition. It was previously ignored. It is still off by default.
+- `initial=True` now performs linear-model initialization using all rows. It
+  was previously ignored. It is still off by default.
 - Simulation data retain the historical seeded draws without changing the
-  caller's NumPy RNG state. Native initialization and minibatch shuffling use
-  the versioned C++ RNG protocol. Corrected fits need fresh simulation results.
+  caller's NumPy RNG state. Native initialization uses the versioned C++ RNG
+  protocol. Corrected fits need fresh simulation results.
 - NHANES preprocessing excludes incomplete observations explicitly; reported
   SEs use bootstrap sample SDs. Curve grids use the index, and curve-plus-intercept
   intervals include their joint bootstrap uncertainty. Plots preserve actual
@@ -536,16 +461,13 @@ inference on the common link-function scale.
 
 Run the regression tests with the command below. They independently verify
 forward values and analytic gradients for every outcome/activation combination,
-multi-step AdamW updates, linear initialization, full-budget/checkpoint behavior,
-the exact gamma fit, tangent scores/curvature against independent finite
-differences and explicit global Cox risk sets, descent of frozen-link beta steps,
-coefficient exclusion from link Adam/clipping, and validation isolation,
+linear initialization, the iteration cap, convergence, the effect of the penalty,
+the recorded penalized objective, the exact gamma fit,
 bootstrap orientation, serial/threaded reproducibility, native summaries and
 serialization. Gradient checks include different layer depths and widths.
-Workspace regressions compare lazy shuffling with an independently generated
-explicit schedule through the full joint epoch budget and check chunk boundaries
-and tied Cox validation losses. Training tests cover flat validation losses,
-restoration after worsening validation losses, and the gamma fit: least squares
+Workspace regressions check chunk boundaries and that the recorded objective
+equals the loss of chunked predictions, including tied Cox times. Training tests
+cover the gamma fit: least squares
 for continuous outcomes and a zero full-data gamma gradient for binary and Cox.
 A bootstrap test blocks Python refits, RNG calls, process/thread creation and
 percentile functions while asserting that exactly one native call completes the
