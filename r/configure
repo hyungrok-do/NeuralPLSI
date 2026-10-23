@@ -3,6 +3,8 @@
 # core/CMakeLists.txt and the Python build, so all bindings compute the same
 # float32 arithmetic on a machine. R CMD check rejects -f flags written into
 # src/Makevars as non-portable, so the flag is used only if the compiler takes it.
+# The engine uses std::filesystem, which GCC 8 keeps in a separate library,
+# libstdc++fs; it is linked only if a std::filesystem call needs it.
 : "${R_HOME:=$(R RHOME)}"
 if [ -z "$R_HOME" ]; then
   echo "configure: could not determine R_HOME" >&2
@@ -11,6 +13,9 @@ fi
 CXX=$("$R_HOME/bin/R" CMD config CXX17)
 CXXSTD=$("$R_HOME/bin/R" CMD config CXX17STD)
 CXXFLAGS=$("$R_HOME/bin/R" CMD config CXX17FLAGS)
+CPPFLAGS=$("$R_HOME/bin/R" CMD config CPPFLAGS)
+LDFLAGS=$("$R_HOME/bin/R" CMD config LDFLAGS)
+
 FP_CONTRACT=
 printf 'int main() { return 0; }\n' > conftest.cpp
 if $CXX $CXXSTD $CXXFLAGS -ffp-contract=off -Werror -c conftest.cpp -o conftest.o >/dev/null 2>&1; then
@@ -19,5 +24,30 @@ if $CXX $CXXSTD $CXXFLAGS -ffp-contract=off -Werror -c conftest.cpp -o conftest.
 else
   echo "checking whether $CXX accepts -ffp-contract=off... no"
 fi
-rm -f conftest.cpp conftest.o
-sed "s/@FP_CONTRACT@/$FP_CONTRACT/" src/Makevars.in > src/Makevars
+
+# The probe calls a library function, since constructing a path alone links
+# without libstdc++fs. Compiling and linking in separate steps leaves no debug
+# symbol bundle behind on macOS. Compiler errors are shown if a probe fails.
+FS_LIBS=
+cat > conftest.cpp <<'EOF'
+#include <filesystem>
+int main() { return std::filesystem::exists(std::filesystem::path("conftest.cpp")) ? 0 : 1; }
+EOF
+if ! $CXX $CXXSTD $CPPFLAGS $CXXFLAGS -c conftest.cpp -o conftest.o >/dev/null; then
+  echo "configure: $CXX $CXXSTD cannot compile std::filesystem, which the engine needs" >&2
+  rm -f conftest.cpp conftest.o
+  exit 1
+fi
+if $CXX $CXXSTD $CXXFLAGS conftest.o -o conftest $LDFLAGS >/dev/null 2>&1; then
+  echo "checking whether std::filesystem needs -lstdc++fs... no"
+elif $CXX $CXXSTD $CXXFLAGS conftest.o -o conftest $LDFLAGS -lstdc++fs >/dev/null; then
+  FS_LIBS=-lstdc++fs
+  echo "checking whether std::filesystem needs -lstdc++fs... yes"
+else
+  echo "configure: $CXX cannot link std::filesystem, which the engine needs" >&2
+  rm -f conftest.cpp conftest.o conftest
+  exit 1
+fi
+rm -f conftest.cpp conftest.o conftest
+
+sed -e "s/@FP_CONTRACT@/$FP_CONTRACT/" -e "s/@FS_LIBS@/$FS_LIBS/" src/Makevars.in > src/Makevars

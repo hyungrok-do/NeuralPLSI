@@ -185,6 +185,18 @@ def result_lock(path):
         lock.close()
 
 
+def publish(temporary, path):
+    """Rename a finished temporary file into place, readable as the umask allows.
+
+    Temporary files are created 0600; results in a shared directory must be
+    readable by collaborators like any other file the job writes.
+    """
+    mask = os.umask(0)
+    os.umask(mask)
+    os.chmod(temporary, 0o666 & ~mask)
+    os.replace(temporary, path)
+
+
 def atomic_json(path, records):
     """A terminated job must not destroy its last complete checkpoint."""
     path = Path(path)
@@ -196,7 +208,7 @@ def atomic_json(path, records):
             json.dump(to_json(records), stream, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        publish(temporary, path)
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
@@ -265,7 +277,7 @@ def run_replicate(args, mname, seed, configuration):
             temporary = stream.name
             np.savez_compressed(stream, beta_samples=boot['beta_samples'],
                                 gamma_samples=boot['gamma_samples'])
-        os.replace(temporary, path)
+        publish(temporary, path)
         row['bootstrap_samples_file'] = str(path)
     print(f'{mname} seed={seed} performance={performance:.4f} fit={time_fit:.2f}s bootstrap={time_boot:.2f}s', flush=True)
     return to_json(row)

@@ -32,15 +32,29 @@ function extent(arrays) {
   return [lo, hi];
 }
 
-// A tooltip in the chart's container, kept inside its bounds.
+// A tooltip in the chart's container, kept inside its bounds. Its content is
+// built from text nodes and never parsed as HTML: row names are CSV headers.
+// lines: [{label, value, color?, truth?, lo?, hi?}] under a muted title.
 function tooltip(host) {
   const tip = document.createElement('div');
   tip.className = 'tooltip';
   tip.hidden = true;
   host.appendChild(tip);
+  const span = (className, text) => Object.assign(document.createElement('span'), {className, textContent: text});
+  const line = ({label, value, color, truth, lo, hi}) => {
+    const row = document.createElement('div'), swatch = span(truth ? 'swatch truth-swatch' : 'swatch', '');
+    if (color) swatch.style.background = color;
+    row.append(swatch, `${label}: `, Object.assign(document.createElement('b'), {textContent: fmt(value)}));
+    if (lo !== undefined) row.append(' ', span('muted', `(${fmt(lo)}, ${fmt(hi)})`));
+    return row;
+  };
   return {
-    show(html, x, y) {
-      tip.innerHTML = html; tip.hidden = false;
+    show(title, lines, x, y) {
+      const heading = document.createElement('div');
+      heading.className = 'muted';
+      heading.textContent = title;
+      tip.replaceChildren(heading, ...lines.map(line));
+      tip.hidden = false;
       const w = tip.offsetWidth, h = tip.offsetHeight, W = host.clientWidth;
       tip.style.left = `${Math.max(0, Math.min(W-w, x+12 > W-w ? x-w-12 : x+12))}px`;
       tip.style.top = `${Math.max(0, y-h-8)}px`;
@@ -116,14 +130,14 @@ export function linkChart(host, {series, truth, index, indexLabel}) {
     const box = svg.getBoundingClientRect(), px = (event.clientX-box.left)*W/box.width;
     const u = xs[0]+(px-x(xs[0]))/(x(xs[1])-x(xs[0]))*(xs[1]-xs[0]);
     cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('visibility', 'visible');
-    const rows = series.map(s => {
-      const i = nearest(s.x, u), inside = u >= s.x[0] && u <= s.x[s.x.length-1];
-      return inside ? `<div><span class="swatch" style="background:${s.color}"></span>${s.name}: <b>${fmt(s.y[i])}</b>` +
-        (s.lo ? ` <span class="muted">(${fmt(s.lo[i])}, ${fmt(s.hi[i])})</span>` : '')+'</div>' : '';
+    const lines = series.flatMap(s => {
+      const i = nearest(s.x, u);
+      return u >= s.x[0] && u <= s.x[s.x.length-1] ?
+        [{label: s.name, value: s.y[i], color: s.color, lo: s.lo?.[i], hi: s.hi?.[i]}] : [];
     });
-    if (truth) rows.push(`<div><span class="swatch truth-swatch"></span>Truth: <b>${fmt(truth.y[nearest(truth.x, u)])}</b></div>`);
-    tip.show(`<div class="muted">u = ${fmt(u)}</div>${rows.join('')}`, event.clientX-host.getBoundingClientRect().left,
-             event.clientY-host.getBoundingClientRect().top);
+    if (truth) lines.push({label: 'Truth', value: truth.y[nearest(truth.x, u)], truth: true});
+    const at = host.getBoundingClientRect();
+    tip.show(`u = ${fmt(u)}`, lines, event.clientX-at.left, event.clientY-at.top);
   });
   hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); tip.hide(); });
 }
@@ -138,7 +152,7 @@ export function forestChart(host, {rows, series}) {
   const xs = pad(extent([[0], ...series.flatMap(s => [s.estimate, s.lo, s.hi]), rows.map(r => r.truth)]));
   const x = scale(xs[0], xs[1], m.left, W-m.right);
   const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img',
-                         'aria-label': 'Exposure weights beta with 95% bootstrap intervals'}, host);
+                         'aria-label': 'Chemical exposure weights beta with 95% bootstrap intervals'}, host);
   const xt = niceTicks(xs[0], xs[1], Math.max(3, Math.round((W-m.left)/80)));
   xAxis(svg, xt.values, x, m.top, rows.length*rowH, xt.decimals);
   el('line', {x1: x(0), x2: x(0), y1: m.top, y2: m.top+rows.length*rowH, class: 'axis'}, svg);
@@ -158,11 +172,10 @@ export function forestChart(host, {rows, series}) {
     });
     const hit = el('rect', {x: 0, y: cy-rowH/2, width: W, height: rowH, fill: 'transparent'}, svg);
     hit.addEventListener('pointerenter', event => {
-      const lines = series.map((s, k) => `<div><span class="swatch" style="background:${s.color}"></span>${s.name}: ` +
-        `<b>${fmt(s.estimate[i])}</b>${s.lo ? ` <span class="muted">(${fmt(s.lo[i])}, ${fmt(s.hi[i])})</span>` : ''}</div>`);
-      if (r.truth !== undefined) lines.push(`<div><span class="swatch truth-swatch"></span>Truth: <b>${fmt(r.truth)}</b></div>`);
+      const lines = series.map(s => ({label: s.name, value: s.estimate[i], color: s.color, lo: s.lo?.[i], hi: s.hi?.[i]}));
+      if (r.truth !== undefined) lines.push({label: 'Truth', value: r.truth, truth: true});
       const box = host.getBoundingClientRect();
-      tip.show(`<div class="muted">${r.name}</div>${lines.join('')}`, event.clientX-box.left, cy*box.height/H);
+      tip.show(r.name, lines, event.clientX-box.left, cy*box.height/H);
     });
     hit.addEventListener('pointerleave', () => tip.hide());
   });

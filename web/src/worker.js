@@ -1,5 +1,5 @@
 // One single-threaded engine instance per Web Worker, driven by numbered requests.
-import {loadEngine, fromCompiled} from './engine.js';
+import {loadEngine, fromCompiled, errorMessage} from './engine.js';
 import {fitNeural, fitSpline, NeuralReplicate, SplineReplicate} from './models.js';
 
 let engine = null, replicates = {};
@@ -26,6 +26,6 @@ self.onmessage = async ({data: {id, op, args}}) => {
     const result = await operations[op](...args);
     self.postMessage({id, result}, result?.buffer instanceof ArrayBuffer ? [result.buffer] : []);
   } catch (error) {
-    self.postMessage({id, error: error?.message || String(error)});
+    self.postMessage({id, error: errorMessage(error)});
   }
 };

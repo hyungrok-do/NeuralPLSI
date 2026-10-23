@@ -104,9 +104,9 @@ print.summary.plsi <- function(x, digits = max(3L, getOption("digits") - 3L), ..
   b <- x$bootstrap
   if (length(b))
     cat(sprintf(paste("Bootstrap: B = %d pairs resamples with cold-start refits, seed %s,",
-                      "%s%% percentile intervals (%s quantiles), %d threads.\n"),
+                      "%s%% percentile intervals (%s quantiles), %d thread%s.\n"),
                 b$B, format(b$seed, scientific = FALSE), format(100 * b$level), b$quantile,
-                b$workers))
+                b$workers, if (b$workers == 1L) "" else "s"))
   else
     cat("No bootstrap: run plsi_bootstrap() for standard errors and intervals.\n")
   invisible(x)
@@ -127,14 +127,19 @@ confint.plsi <- function(object, parm, level = NULL, ...) {
 
 #' Predictions from a NeuralPLSI or SplinePLSI fit
 #'
-#' NeuralPLSI predictions come from the engine in float32, as in Python;
-#' SplinePLSI predictions are computed in double precision.
+#' NeuralPLSI predictions come from the engine in float32 and equal Python's.
+#' SplinePLSI predictions are computed in double precision from the engine's
+#' spline basis with R's matrix products, which sum in a different order from
+#' numpy's: they agree with Python's to rounding error (absolute differences of
+#' a few times \eqn{10^{-15}} on the package's test data), not bit for bit.
 #'
 #' @param object A \code{neuralplsi} or \code{splineplsi} fit.
-#' @param newx,newz New exposures and covariates. Columns are matched to the
-#'   fit by name when \code{newx} or \code{newz} has all of the fitted names, by
-#'   position otherwise. Without \code{newx}, the training data are used.
-#'   \code{newz} is not needed for \code{type = "index"} or without covariates.
+#' @param newx,newz New exposures and covariates, with as many columns as the
+#'   fit. Columns are matched to the fit by name when \code{newx} or \code{newz}
+#'   has any of the fitted names, and it must then have all of them; by position
+#'   when it has none of them or no column names. Without \code{newx}, the
+#'   training data are used, and \code{newz} must be omitted too. \code{newz} is
+#'   not needed for \code{type = "index"} or without covariates.
 #' @param type \code{"link"}: the linear predictor \eqn{g(x'\beta) + z'\gamma}
 #'   (plus the intercept). \code{"response"}: the linear predictor for continuous
 #'   outcomes, the probability for binary outcomes, and the relative risk
@@ -148,6 +153,7 @@ predict.plsi <- function(object, newx, newz = NULL, type = c("link", "response",
                          ...) {
   type <- match.arg(type)
   if (missing(newx)) {
+    if (!is.null(newz)) stop("newz given without newx", call. = FALSE)
     data <- stored_data(object)
     newx <- data$x
     newz <- data$z
@@ -177,7 +183,8 @@ predict.plsi <- function(object, newx, newz = NULL, type = c("link", "response",
 #' @examples
 #' set.seed(1)
 #' x <- matrix(rnorm(600), 200, 3)
-#' y <- sin(2 * x %*% c(0.6, -0.6, 0.5)) + rnorm(200, sd = 0.2)
+#' g <- function(u) 5 * (plogis(2 * u) - 0.5)
+#' y <- g(drop(x %*% c(2, 2, -1) / 3)) + rnorm(200, sd = 0.5)
 #' fit <- splineplsi(x, NULL, y)
 #' g_function(fit, seq(-1, 1, by = 0.5))
 #' @export

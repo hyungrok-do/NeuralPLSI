@@ -4,11 +4,11 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "neuralplsi"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Neural-network partial-linear single-index models with bootstrap inference, on a C++ engine."
 readme = "python/README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Hyungrok Do" }]
 keywords = ["single-index model", "environmental mixtures", "neural network", "bootstrap", "survival"]
 classifiers = [
@@ -44,5 +44,11 @@ sdist.exclude = ["/.claude", "/.github", "/NHANES", "/logs", "/output", "/r", "/
                  "/results", "/web", "/python/examples", "/python/tests",
                  "__pycache__", "*.py[cod]", ".DS_Store"]
 
+[tool.scikit-build.metadata.version]
+# The version is set once, in python/neuralplsi/_version.py.
+provider = "scikit_build_core.metadata.regex"
+input = "python/neuralplsi/_version.py"
+
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "reproduce/tests"]
+# reproduce/tests need reproduce/requirements.txt: python -m pytest reproduce/tests
+testpaths = ["python/tests"]

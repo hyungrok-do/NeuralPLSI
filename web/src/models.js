@@ -87,15 +87,22 @@ export function fitSpline(engine, data, randomState) {
 export class NeuralReplicate {
   constructor(engine, {state, x, z, y, n, grid, seed}) {
     const e = this.engine = engine;
-    this.handle = e.importState(state);
-    const {config} = e.getConfig(this.handle);
-    [this.p, this.q] = config; this.intercept = config[4] === 1; this.yd = config[5] === 2 ? 2 : 1;
-    Object.assign(this, {x, z, y, n, seed: BigInt(seed), ng: grid.length});
-    this.D = this.p+this.q+(this.intercept ? 1 : 0)+this.ng;
-    this.buffers = {x: e.alloc(Float32Array, n*this.p), z: e.alloc(Float32Array, n*this.q),
-                    y: e.alloc(Float32Array, n*this.yd), rows: e.alloc(Int32Array, n), grid: e.put(grid),
-                    beta: e.alloc(Float32Array, this.p), gamma: e.alloc(Float32Array, this.q),
-                    intercept: e.alloc(Float32Array, 1), link: e.alloc(Float32Array, this.ng)};
+    this.handle = 0;
+    this.buffers = {};
+    try {
+      this.handle = e.importState(state);
+      const {config} = e.getConfig(this.handle);
+      [this.p, this.q] = config; this.intercept = config[4] === 1; this.yd = config[5] === 2 ? 2 : 1;
+      Object.assign(this, {x, z, y, n, seed: BigInt(seed), ng: grid.length});
+      this.D = this.p+this.q+(this.intercept ? 1 : 0)+this.ng;
+      allocate(this.buffers, {x: () => e.alloc(Float32Array, n*this.p), z: () => e.alloc(Float32Array, n*this.q),
+        y: () => e.alloc(Float32Array, n*this.yd), rows: () => e.alloc(Int32Array, n), grid: () => e.put(grid),
+        beta: () => e.alloc(Float32Array, this.p), gamma: () => e.alloc(Float32Array, this.q),
+        intercept: () => e.alloc(Float32Array, 1), link: () => e.alloc(Float32Array, this.ng)});
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   run(b) {
@@ -114,8 +121,9 @@ export class NeuralReplicate {
   }
 
   close() {
-    for (const pointer of Object.values(this.buffers)) this.engine.m._free(pointer);
-    this.engine.destroy(this.handle);
+    free(this.engine, this.buffers);
+    if (this.handle) this.engine.destroy(this.handle);
+    this.handle = 0;
   }
 }
 
@@ -128,12 +136,18 @@ export class SplineReplicate {
     Object.assign(this, {x, z, y, n, p, q, yd: family === 'cox' ? 2 : 1, seed: BigInt(seed), grid: Float64Array.from(grid)});
     this.knots = s.config[3]+2*s.degree;
     this.D = p+q+s.bases+grid.length;
-    this.buffers = {config: e.put(s.config), hyper: e.put(s.hyper), x: e.alloc(Float64Array, n*p),
-                    z: e.alloc(Float64Array, n*q), y: e.alloc(Float64Array, n*this.yd), rows: e.alloc(Int32Array, n),
-                    beta: e.alloc(Float64Array, p), gamma: e.alloc(Float64Array, q),
-                    coef: e.alloc(Float64Array, s.bases), t: e.alloc(Float64Array, this.knots),
-                    diag: e.alloc(Float64Array, 3), grid: e.put(this.grid),
-                    basis: e.alloc(Float64Array, grid.length*s.bases)};
+    this.buffers = {};
+    try {
+      allocate(this.buffers, {config: () => e.put(s.config), hyper: () => e.put(s.hyper),
+        x: () => e.alloc(Float64Array, n*p), z: () => e.alloc(Float64Array, n*q), y: () => e.alloc(Float64Array, n*this.yd),
+        rows: () => e.alloc(Int32Array, n), beta: () => e.alloc(Float64Array, p), gamma: () => e.alloc(Float64Array, q),
+        coef: () => e.alloc(Float64Array, s.bases), t: () => e.alloc(Float64Array, this.knots),
+        diag: () => e.alloc(Float64Array, 3), grid: () => e.put(this.grid),
+        basis: () => e.alloc(Float64Array, grid.length*s.bases)});
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   run(b) {
@@ -153,7 +167,20 @@ export class SplineReplicate {
   }
 
   close() {
-    for (const pointer of Object.values(this.buffers)) this.engine.m._free(pointer);
+    free(this.engine, this.buffers);
+  }
+}
+
+// Allocates engine buffers one at a time into `buffers`, so that when one
+// allocation fails, every buffer made before it is there for close() to free.
+function allocate(buffers, makers) {
+  for (const [name, make] of Object.entries(makers)) buffers[name] = make();
+}
+
+function free(engine, buffers) {
+  for (const [name, pointer] of Object.entries(buffers)) {
+    engine.m._free(pointer);
+    delete buffers[name];
   }
 }
 

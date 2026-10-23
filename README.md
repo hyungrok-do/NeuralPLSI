@@ -33,7 +33,7 @@ protocol, the model file format and the history of the implementation.
 
 ### Python
 
-Needs Python 3.9 or later, a C++17 compiler and CMake 3.16 or later.
+Needs Python 3.10 or later, a C++17 compiler and CMake 3.16 or later.
 
 ```bash
 git clone https://github.com/hyungrok-do/NeuralPLSI.git
@@ -64,14 +64,21 @@ R CMD INSTALL r
 ```r
 library(neuralplsi)
 set.seed(1)
-n <- 500
-x <- matrix(rnorm(3 * n), n, 3, dimnames = list(NULL, c("lead", "cadmium", "mercury")))
+n <- 1000
+x <- matrix(rnorm(6 * n), n, 6) * sqrt(0.7) + rnorm(n) * sqrt(0.3)
+colnames(x) <- c("lead", "cadmium", "mercury", "arsenic", "pfoa", "bpa")
 z <- cbind(age = rnorm(n), sex = rbinom(n, 1, 0.5))
-y <- sin(2 * drop(x %*% c(0.6, -0.6, 0.5))) + 0.5 * z[, "age"] - 0.3 * z[, "sex"] + rnorm(n, sd = 0.3)
+beta <- c(0.5, 0.5, -0.5, 0.4, 0.3, 0)
+g <- function(u) 5 * (plogis(2 * u) - 0.5)
+y <- g(drop(x %*% beta)) + 0.5 * z[, "age"] - 0.3 * z[, "sex"] + rnorm(n)
 
 fit <- plsi_bootstrap(neuralplsi(x, z, y), B = 1000, seed = 0)
 summary(fit)
 ```
+
+This is the sigmoid design of the paper's simulations with six correlated
+exposures. The 1000 bootstrap refits took about 50 seconds on a 10-core laptop;
+[`r/README.md`](r/README.md) shows the summary.
 
 ### C++
 
@@ -90,7 +97,12 @@ which fits, bootstraps, saves and reloads a model through the C API in
 
 https://hyungrok-do.github.io/NeuralPLSI/ fits NeuralPLSI and SplinePLSI with
 bootstrap inference in the browser, on simulated data, the NHANES example or a
-CSV file; the data stay on the visitor's machine. The page is live once GitHub
+CSV file; the data stay on the visitor's machine. For a CSV file the page lists
+the columns and the user gives each one a role: exposure (X), confounder (Z),
+outcome, event (Cox outcomes) or ignore. Each exposure can be logged, and all
+of them standardized; a numeric confounder can be treated as categorical; a
+continuous outcome can be logged and standardized.
+[`web/README.md`](web/README.md) has the details. The page is live once GitHub
 Pages is enabled for the repository (Settings > Pages > Source: GitHub
 Actions). To build and serve it locally, with Emscripten and Node:
 
@@ -103,26 +115,37 @@ and open http://localhost:8000.
 
 ## One engine
 
-Every binding calls the same C API; none reimplements the models. Python loads
-the engine library through ctypes. The R package compiles copies of the two
-engine sources, kept identical by `r/tools/sync-core.sh`, and calls them
-through `.Call`. The web demo compiles them to WebAssembly. All of them follow
-the same bootstrap protocol: replicate `b` resamples rows with seed `seed + b`
-and refits from a fresh initialization with seed `seed + 1337 + b`, so the
-draws do not depend on the number of threads or on B.
+Every binding calls the same C API. Fitting, the bootstrap, NeuralPLSI
+predictions and model files run in the engine. SplinePLSI predictions are
+`Z gamma` plus the engine's B-spline basis (`splsi_basis`) times the spline
+coefficients, computed in each language. Python loads the engine library
+through ctypes. The R package compiles copies of the engine's two sources and
+its header, kept identical to `core/` by `r/tools/sync-core.sh`, and calls them
+through `.Call`. The web demo compiles the sources in `core/` to WebAssembly.
+All of them follow the same bootstrap protocol: replicate `b` resamples rows
+with seed `seed + b` and refits from a fresh initialization with seed
+`seed + 1337 + b`, so the draws do not depend on the number of threads or on B.
 
 Every GCC, Clang and Emscripten build compiles with `-ffp-contract=off`, so the
-compiler does not fuse multiply-adds. On one machine the same data and seed then give the same fit
-from the C++, Python and R builds. On macOS arm64 with Apple clang, the pip-installed
-library, the CMake build, the library the Python package compiles from a
-checkout and the R package (built at `-O2`) gave identical coefficients,
-predictions and bootstrap draws. Model files (`.nplsi`) written by the C++
-example load in Python and R, and Python and R read each other's. Other CPUs,
+compiler does not fuse multiply-adds. On macOS arm64 with Apple clang, the
+pip-installed library, the CMake build, the library the Python package compiles
+from a checkout and the R package (built at `-O2`) gave identical fits,
+bootstrap draws and NeuralPLSI predictions for the same data and seeds. Model
+files (`.nplsi`) written by the C++ example load in Python and R, and Python
+and R read each other's. SplinePLSI predictions and `g` values agree to
+rounding error (a few times 1e-15 in the R package's comparison with Python),
+because NumPy and R sum the final products in different orders. Other CPUs,
 compilers or math libraries can give slightly different fits.
 
-The WebAssembly build is close but not bit-identical, because its math library
-differs. For the binary Python example above, its `beta` differed from the
-native fit by at most 0.0015.
+The WebAssembly build uses Emscripten's math library, which rounds some results
+of `exp`, `expm1`, `log1p` and `tanh` differently from the native one. In a
+check on simulated data (n = 1000, sigmoid g, seed 0, all three outcomes),
+LeakyReLU and ReLU fits, whose networks call none of these functions, were
+identical to the native fits, and so were 20 LeakyReLU bootstrap replicates.
+ELU and Tanh fits differed by up to 0.003 in `beta` (0.0015 for the binary
+Python example above), and SplinePLSI fits by at most 1e-9. Single bootstrap
+replicates can differ more than point fits: by up to 0.009 in `beta` for ELU,
+and by up to 0.004 for SplinePLSI with a binary outcome.
 
 ## Reproducing the paper
 

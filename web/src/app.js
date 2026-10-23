@@ -1,7 +1,9 @@
 // The page: reads the controls, runs fits and the bootstrap in the worker pool,
 // and renders estimates, plots and downloads. Nothing leaves the browser.
-import {simulate, parseCsv, describeColumns, prepareTable, prepareNhanes, LINKS, NHANES_SETTINGS} from './data.js';
-import {NEURAL_DEFAULTS} from './engine.js';
+import {simulate, parseCsv, describeColumns, prepareNhanes, LINKS, NHANES_SETTINGS, MAX_LEVELS} from './data.js';
+import {ROLES, blockedRole, blockedCategorical, initialRoles, roleOf, assignRole, setRoleForMany, selection, suggestFamily,
+        changeFamily, planCsv, planFacts, summaryRows} from './roles.js';
+import {NEURAL_DEFAULTS, networkProblem} from './engine.js';
 import {Pool, Cancelled} from './pool.js';
 import {linkChart, forestChart} from './charts.js';
 import {fmt, duration, toCsv, linspace, mergeRows} from './stats.js';
@@ -10,10 +12,19 @@ const form = document.getElementById('controls');
 const $ = id => document.getElementById(id);
 const field = name => form.elements[name];
 const pool = new Pool();
-const state = {table: null, columns: null, fileName: '', nhanes: null, fit: null, boot: null, busy: false};
+// table, columns and roles describe the open CSV file, logged and categorical
+// name its exposures to log and numeric confounders to dummy-code; familyAuto is
+// true until the visitor picks its outcome type, which until then follows the
+// outcome column. nhanesError keeps why the NHANES file did not load.
+const state = {table: null, columns: null, roles: null, logged: new Set(), categorical: new Set(), familyAuto: true,
+               fileName: '', nhanes: null, nhanesError: null, nhanesLoading: null, fit: null, boot: null, busy: false,
+               family: null};
 // Seeds must leave room for the bootstrap fit seeds seed+1337+b below 2**64.
 const MAX_SEED = 2n**64n-1n-1337n-1000n;
 const MODELS = [['neural', 'NeuralPLSI', 'var(--series-1)'], ['spline', 'SplinePLSI', 'var(--series-2)']];
+// The intercept each source starts with: Python's default for the simulation,
+// reproduce/nhanes.py for NHANES, and one for other data, since g(0) = 0.
+const INTERCEPT = {simulated: NEURAL_DEFAULTS.intercept, nhanes: NHANES_SETTINGS.intercept, csv: true};
 
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -30,6 +41,7 @@ function h(tag, attrs = {}, ...children) {
 // ---- Controls
 
 const source = () => form.elements.source.value;
+const plural = (k, word, many = `${word}s`) => `${k} ${k === 1 ? word : many}`;
 
 function integer(name, lo, hi, label) {
   const raw = field(name).value.trim(), v = Number(raw);
@@ -48,54 +60,96 @@ function settings() {
           spline: field('spline').checked, seed: BigInt(seed)};
 }
 
-const checkedNames = list => [...$(list).querySelectorAll('input:checked')].map(input => input.value);
+const csvFamily = () => field('csvFamily').value;
+
+function csvPlan() {
+  return planCsv(state.table, state.columns, {family: csvFamily(), roles: state.roles, log: [...state.logged],
+    standardize: field('standardize').checked, categorical: [...state.categorical],
+    logOutcome: field('logOutcome').checked, standardizeOutcome: field('standardizeOutcome').checked});
+}
 
 function readData() {
   if (source() === 'simulated')
     return simulate({n: integer('n', 20, 20000, 'Rows'), g: field('g').value, outcome: field('outcome').value,
                      seed: integer('simSeed', 0, Number.MAX_SAFE_INTEGER, 'The simulation seed')});
   if (source() === 'nhanes') {
+    if (state.nhanesError) throw new Error(`${state.nhanesError}. Press Retry under Data to load it again`);
     if (!state.nhanes) throw new Error('The NHANES file is still loading');
     return state.nhanes;
   }
   if (!state.table) throw new Error('Open a CSV file');
-  return prepareTable(state.table, {family: field('family').value, outcome: field('outcomeColumn').value,
-    event: field('eventColumn').value, exposures: checkedNames('exposure-list'), covariates: checkedNames('covariate-list'),
-    log: field('logExposures').checked, standardize: field('standardize').checked});
+  const plan = csvPlan();
+  if (!plan.ready) throw new Error(plan.reason);
+  return plan.data;
 }
 
+// summaryRows input for prepared simulated or NHANES data (CSV files use planFacts).
+function dataFacts(d) {
+  const total = (from, step) => { let s = 0; for (let i = from; i < d.y.length; i += step) s += d.y[i]; return s; };
+  const nhanes = d.source === 'nhanes';
+  return {family: d.family, outcomeLabel: d.names.y.join(', '), p: d.p, q: d.q, rows: d.rows, n: d.n, dropped: d.dropped,
+          cases: d.family === 'binary' ? total(0, 1) : null, events: d.family === 'cox' ? total(1, 2) : null,
+          xNote: nhanes ? 'logged (except retinol), then standardized' : '',
+          zNote: nhanes ? 'age, female and 4 race indicators' : ''};
+}
+
+// One line for the results: rows, X, Z and cases or events.
 function describe(d) {
-  const parts = [d.rows ? `${d.n} of ${d.rows} rows used` : `${d.n} rows`];
-  const dropped = Object.entries(d.dropped || {}).filter(([, k]) => k);
-  if (dropped.length) parts[0] += ` (dropped: ${dropped.map(([why, k]) =>
-    `${k} ${{missing: 'missing or text', nonfinite: 'non-finite', nonpositive: 'non-positive for log'}[why]}`).join(', ')})`;
-  parts.push(`${d.p} exposure${d.p === 1 ? '' : 's'}`, `${d.q} covariate column${d.q === 1 ? '' : 's'}`);
-  if (d.family === 'binary') parts.push(`${d.y.reduce((s, v) => s+v, 0)} cases`);
-  if (d.family === 'cox') parts.push(`${d.y.filter((v, i) => i % 2).reduce((s, v) => s+v, 0)} events`);
+  const facts = dataFacts(d), [, rows] = summaryRows(facts).at(-1);
+  const parts = [d.rows ? rows.replace(' used', ' rows used') : `${d.n} rows`,
+                 `${plural(d.p, 'chemical exposure')} (X)`, `${plural(d.q, 'confounder')} (Z)`];
+  if (facts.cases !== null) parts.push(plural(facts.cases, 'case'));
+  if (facts.events !== null) parts.push(plural(facts.events, 'event'));
   return parts.join(' · ');
 }
 
+// The Model card's Family follows the data: the simulated outcome, continuous
+// for NHANES, or the CSV outcome type. Leaving Cox restores the source's intercept.
 function syncFamily() {
-  const s = source(), family = field('family');
-  if (s === 'simulated') family.value = field('outcome').value;
-  if (s === 'nhanes') family.value = 'continuous';
-  family.disabled = s !== 'csv';
+  const s = source(), family = field('family'), intercept = field('intercept');
+  family.value = s === 'simulated' ? field('outcome').value : s === 'nhanes' ? 'continuous' : csvFamily();
   const cox = family.value === 'cox';
-  field('intercept').disabled = cox;
-  if (cox) field('intercept').checked = false;
-  $('event-field').hidden = !cox;
-  $('outcome-label').textContent = cox ? 'Time' : 'Outcome';
+  if (state.family === 'cox' && !cox) intercept.checked = INTERCEPT[s];
+  state.family = family.value;
+  intercept.disabled = cox;
+  if (cox) intercept.checked = false;
+  $('column-table').classList.toggle('cox', csvFamily() === 'cox');
+  $('outcome-options').hidden = csvFamily() !== 'continuous';
+  $('head-outcome').textContent = csvFamily() === 'cox' ? 'Time' : 'Outcome';
+  $('head-outcome').title = csvFamily() === 'cox' ? 'Survival time (the outcome)' : 'Outcome';
 }
 
-function updateSummary() {
-  const out = $('data-summary');
-  try {
-    out.textContent = describe(readData());
-    out.classList.remove('warning');
-  } catch (error) {
-    out.textContent = error.message;
-    out.classList.add('warning');
+// What the data step would fit, or why it cannot: summary facts and a reason.
+function dataStatus() {
+  if (source() === 'csv') {
+    if (!state.table) return {facts: null, reason: 'Open a CSV file'};
+    const plan = csvPlan();
+    return {facts: planFacts(plan), reason: plan.reason};
   }
+  try {
+    return {facts: dataFacts(readData()), reason: null};
+  } catch (error) {
+    return {facts: null, reason: error.message};
+  }
+}
+
+function renderSummary(facts) {
+  $('data-summary').replaceChildren(...(facts ? summaryRows(facts) : []).map(([label, text]) =>
+    h('div', {}, h('dt', {}, label), h('dd', {}, text))));
+}
+
+function familyNote() {
+  const note = $('family-note');
+  let text = '';
+  if (source() === 'csv' && state.columns) {
+    const {outcome} = selection(state.roles, state.columns), column = state.columns.find(c => c.name === outcome);
+    if (column?.binary && csvFamily() === 'binary' && state.familyAuto)
+      text = `Binary (logistic), because ${outcome} is coded 0/1.`;
+    else if (column?.binary && csvFamily() === 'continuous')
+      text = `${outcome} is coded 0/1: the binary (logistic) outcome type usually fits it.`;
+  }
+  note.textContent = text;
+  note.hidden = !text;
 }
 
 // Everything that defines a fit, to tell when results no longer match the controls.
@@ -110,7 +164,13 @@ function controlsKey() {
 
 function onControls() {
   syncFamily();
-  updateSummary();
+  const status = dataStatus();
+  let reason = status.reason;
+  if (!reason) try { reason = networkProblem(status.facts.p, status.facts.q, settings()); } catch (error) { reason = error.message; }
+  renderSummary(status.facts);
+  familyNote();
+  $('fit-status').textContent = reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '';
+  $('fit').disabled = state.busy || Boolean(reason);
   const stale = state.fit && controlsKey() !== state.fit.key;
   $('bootstrap').disabled = !state.fit || stale || state.busy;
   document.querySelector('.stale')?.toggleAttribute('hidden', !stale);
@@ -120,53 +180,202 @@ async function onSource() {
   for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== source();
   // Presets: Python's defaults for the simulation, reproduce/nhanes.py for NHANES,
   // and an intercept for other data, since g is anchored at g(0) = 0.
-  if (source() === 'simulated') {
-    field('activation').value = NEURAL_DEFAULTS.activation; field('intercept').checked = NEURAL_DEFAULTS.intercept;
-  } else if (source() === 'nhanes') {
-    field('activation').value = NHANES_SETTINGS.activation; field('intercept').checked = NHANES_SETTINGS.intercept;
-  } else field('intercept').checked = true;
+  if (source() === 'simulated') field('activation').value = NEURAL_DEFAULTS.activation;
+  else if (source() === 'nhanes') field('activation').value = NHANES_SETTINGS.activation;
+  field('intercept').checked = INTERCEPT[source()];
   onControls();
-  if (source() === 'nhanes' && !state.nhanes) {
+  if (source() === 'nhanes') await loadNhanes();
+}
+
+// The NHANES file loads when NHANES is first chosen. A failure is kept and shown
+// with a Retry button until a retry starts.
+function loadNhanes() {
+  if (state.nhanes || state.nhanesLoading) return state.nhanesLoading;
+  state.nhanesError = null;
+  state.nhanesLoading = (async () => {
     try {
       const response = await fetch('nhanes.csv');
-      if (!response.ok) throw new Error(`Could not load the NHANES file (${response.status})`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       state.nhanes = prepareNhanes(await response.text());
     } catch (error) {
-      message(error.message);
+      state.nhanesError = `Could not load the NHANES file (${error.message})`;
+    } finally {
+      state.nhanesLoading = null;
     }
+    showNhanesError();
     onControls();
+  })();
+  showNhanesError();
+  onControls();
+  return state.nhanesLoading;
+}
+
+function showNhanesError() {
+  $('nhanes-error').hidden = !state.nhanesError;
+  $('nhanes-error-text').textContent = state.nhanesError ? `${state.nhanesError}.` : '';
+}
+
+// ---- The CSV step: one row per column with its type, missing values, examples
+// and a role chosen with one radio group per row. Under the name, X rows show
+// their position in the index and a log box, numeric Z rows a categorical box.
+
+const short = text => text.length > 16 ? `${text.slice(0, 15)}…` : text;
+// A column name with line break opportunities after its punctuation (a3.Retinyl.|palmitate).
+const breakable = name => name.split(/(?<=[._\-/])/).flatMap((part, k) => k ? [h('wbr'), part] : [part]);
+
+function columnNotes(c) {
+  const absent = c.missing+c.nonfinite, beyond = c.beyond ? ` (${c.beyond} beyond ±3.4e38)` : '';
+  const missing = !absent ? 'none missing' : c.kind === 'mostly missing' ? `${absent} of ${state.table.rows.length} missing` :
+    [c.missing ? `${c.missing} missing` : '', c.nonfinite ? `${c.nonfinite} non-finite${beyond}` : ''].filter(Boolean).join(', ');
+  const kind = c.kind === 'text' ? `text, ${plural(c.levels.length, 'level')}` :
+    c.kind === 'mostly missing' ? `mostly missing (${c.numeric ? 'numeric' : 'text'})` :
+    c.codes ? `numeric, ${c.distinct} integer codes` : c.kind;
+  const notes = [h('span', {class: c.kind === 'mostly missing' ? 'col-meta warn' : 'col-meta'}, `${kind} · ${missing}`)];
+  if (c.examples.length) notes.push(h('span', {class: 'col-examples'}, `e.g. ${c.examples.map(short).join(', ')}`));
+  if (!c.numeric && c.present) notes.push(h('span', {class: 'col-text'}, c.levels.length > MAX_LEVELS ?
+    `Too many levels to use; text cannot be X` :
+    `Text: Z only, as ${plural(c.levels.length-1, 'indicator')} vs “${short(c.levels[0])}”`));
+  return notes;
+}
+
+// The categorical box of a column of codes says it is suggested; the column's
+// notes say how many codes it has.
+function columnOptions(c, j) {
+  return h('div', {class: 'col-options'},
+    h('span', {class: 'col-order', title: 'Position in the index X′β; the first X has a positive weight'}),
+    h('label', {class: 'opt opt-log'}, h('input', {type: 'checkbox', name: `log-${j}`, 'aria-label': `Log-transform ${c.name}`}), 'log'),
+    c.numeric ? h('label', {class: 'opt opt-categorical'},
+      h('input', {type: 'checkbox', name: `cat-${j}`,
+                  'aria-label': `Treat ${c.name} as categorical${c.codes ? ` (suggested: ${c.distinct} integer codes)` : ''}`}),
+      'categorical', c.codes ? h('span', {class: 'suggest'}, '(suggested)') : null) : null);
+}
+
+function renderColumns() {
+  const rows = state.columns.map((c, j) => h('tr', {'data-column': c.name, 'data-index': j},
+    h('th', {scope: 'row'}, h('span', {class: 'col-name', id: `col-${j}`}, breakable(c.name)), columnNotes(c),
+      columnOptions(c, j)),
+    ROLES.map(role => h('td', {class: `role role-${role}`},
+      h('label', {}, h('input', {type: 'radio', name: `role-${j}`, value: role, 'aria-labelledby': `col-${j} head-${role}`}))))));
+  $('column-table').tBodies[0].replaceChildren(...rows);
+  $('column-filter').value = '';
+  applyFilter();
+}
+
+// Checks each row's role and disables the roles its column cannot take; shows
+// each X's position and the log and categorical boxes as chosen.
+function syncRoles() {
+  const family = csvFamily(), {exposures} = selection(state.roles, state.columns);
+  for (const row of $('column-table').tBodies[0].rows) {
+    const j = Number(row.dataset.index), c = state.columns[j], role = roleOf(state.roles, c.name);
+    row.dataset.role = role;
+    for (const input of row.querySelectorAll('input[type=radio]')) {
+      const blocked = blockedRole(c, input.value, family);
+      input.checked = input.value === role;
+      input.disabled = Boolean(blocked);
+      input.title = input.parentElement.title = blocked || '';
+    }
+    const at = exposures.indexOf(c.name);
+    row.querySelector('.col-order').textContent = at < 0 ? '' : `X${at+1}`;
+    field(`log-${j}`).checked = state.logged.has(c.name);
+    const categorical = field(`cat-${j}`);
+    if (categorical) {
+      const blocked = blockedCategorical(c);
+      categorical.checked = !blocked && state.categorical.has(c.name);
+      categorical.disabled = Boolean(blocked);
+      // Columns with too many values to dummy-code do not offer the box.
+      categorical.parentElement.classList.toggle('blocked', Boolean(blocked));
+    }
   }
 }
 
-function columnOption(c) {
-  return h('option', {value: c.name}, c.name);
+const shownColumns = () => [...$('column-table').tBodies[0].rows].filter(row => !row.hidden).map(row => row.dataset.column);
+
+function applyFilter() {
+  const query = $('column-filter').value.trim().toLowerCase(), rows = [...$('column-table').tBodies[0].rows];
+  for (const row of rows) row.hidden = Boolean(query) && !row.dataset.column.toLowerCase().includes(query);
+  const shown = rows.filter(row => !row.hidden).length;
+  $('column-filter').closest('fieldset').classList.toggle('filtered', Boolean(query));
+  $('filter-count').textContent = !query ? `${plural(rows.length, 'column')} in the file.` :
+    shown ? `Showing ${shown} of ${plural(rows.length, 'column')}; All and None apply to these.` :
+    `No column name contains “${query}”.`;
+}
+
+// Until the visitor picks the outcome type, it follows the outcome: binary for 0/1.
+function followOutcome() {
+  if (!state.familyAuto || csvFamily() === 'cox') return;
+  const {outcome} = selection(state.roles, state.columns);
+  field('csvFamily').value = suggestFamily(state.columns.find(c => c.name === outcome));
+}
+
+function onRole(input) {
+  const c = state.columns[Number(input.name.slice(5))];
+  try {
+    state.roles = assignRole(state.roles, state.columns, c.name, input.value, csvFamily());
+  } catch (error) {
+    message(error.message);
+  }
+  followOutcome();
+  syncRoles();
+  onControls();
+}
+
+function onCsvFamily() {
+  state.familyAuto = false;
+  state.roles = changeFamily(state.roles, state.columns, csvFamily());
+  syncRoles();
+  onControls();
+}
+
+function onBulk(button) {
+  state.roles = setRoleForMany(state.roles, state.columns, shownColumns(), button.dataset.bulk, button.dataset.on === '1', csvFamily());
+  syncRoles();
+  onControls();
+}
+
+// Log-transform X, All or None: every chemical exposure among the rows shown.
+function onBulkLog(button) {
+  const shown = new Set(shownColumns()), on = button.dataset.log === '1';
+  for (const name of selection(state.roles, state.columns).exposures)
+    if (shown.has(name)) state.logged[on ? 'add' : 'delete'](name);
+  syncRoles();
+  onControls();
+}
+
+// A row's log or categorical box.
+function onOption(input) {
+  const [kind, j] = input.name.split('-'), name = state.columns[Number(j)].name;
+  const chosen = kind === 'log' ? state.logged : state.categorical;
+  chosen[input.checked ? 'add' : 'delete'](name);
+  onControls();
 }
 
 async function onFile() {
   const file = field('file').files[0];
   if (!file) return;
   try {
-    state.table = parseCsv(await file.text());
-    state.columns = describeColumns(state.table);
+    const table = parseCsv(await file.text());
+    if (!table.rows.length) throw new Error('the file has a header but no data rows');
+    state.table = table;
+    state.columns = describeColumns(table);
     state.fileName = file.name;
   } catch (error) {
-    state.table = state.columns = null;
+    state.table = state.columns = state.roles = null;
+    state.fileName = '';
     $('csv-columns').hidden = true;
     message(`${file.name}: ${error.message}`);
     return onControls();
   }
-  const numeric = state.columns.filter(c => c.numeric);
-  if (!numeric.length) message(`${file.name} has no numeric columns`);
-  field('outcomeColumn').replaceChildren(...numeric.map(columnOption));
-  field('eventColumn').replaceChildren(...numeric.map(columnOption));
-  const event = numeric.find(c => /^(event|status|dead|death|died|delta)$/i.test(c.name)) || numeric[1];
-  if (event) field('eventColumn').value = event.name;
-  const check = (c, name) => h('label', {title: c.name}, h('input', {type: 'checkbox', name, value: c.name}),
-    h('span', {}, c.name, c.numeric ? null : h('span', {class: 'kind'}, ` (text, ${c.levels.length})`)));
-  $('exposure-list').replaceChildren(...numeric.map(c => check(c, 'exposure')));
-  $('covariate-list').replaceChildren(...state.columns.map(c => check(c, 'covariate')));
+  // A new file starts with every column ignored, nothing logged or categorical,
+  // and a continuous outcome.
+  state.roles = initialRoles(state.columns);
+  state.logged = new Set();
+  state.categorical = new Set();
+  state.familyAuto = true;
+  field('csvFamily').value = 'continuous';
+  renderColumns();
+  syncRoles();
   $('csv-columns').hidden = false;
-  message(null);
+  message(state.columns.some(c => c.numeric && c.present) ? null : `${file.name} has no numeric columns`);
   onControls();
 }
 
@@ -182,7 +391,6 @@ function message(text, kind = 'error') {
 let timer = null;
 function busy(on, text = '') {
   state.busy = on;
-  $('fit').disabled = on;
   $('progress').hidden = !on;
   const bar = $('progress').querySelector('progress');
   bar.removeAttribute('value');
@@ -199,15 +407,22 @@ function busy(on, text = '') {
 
 async function runFit() {
   let data, s;
-  try { data = readData(); s = settings(); } catch (error) { return message(error.message); }
+  try {
+    data = readData(); s = settings();
+    const problem = networkProblem(data.p, data.q, s);
+    if (problem) throw new Error(problem);
+  } catch (error) {
+    return message(error.message);
+  }
   message(null);
-  const key = controlsKey();
+  // The file is named as it was when the fit started: another may be open by the time it ends.
+  const key = controlsKey(), fileName = data.source === 'csv' ? state.fileName : null;
   busy(true, s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…');
   try {
     const workers = await pool.ensure(s.spline ? 2 : 1);
     const [neural, spline] = await Promise.all([pool.call(workers[0], 'fitNeural', [data, s, s.seed]),
       s.spline ? pool.call(workers[1], 'fitSpline', [data, s.seed]) : null]);
-    state.fit = {data, settings: s, key, neural, spline};
+    state.fit = {data, settings: s, key, fileName, neural, spline};
     state.boot = null;
     render();
   } catch (error) {
@@ -249,6 +464,8 @@ async function runBootstrap() {
     const boot = {B, seconds: (performance.now()-started)/1000, workers: pool.workers.length};
     for (const kind of kinds) {
       const D = rows[kind][0].length, draws = mergeRows(rows[kind], D);
+      // Cancel empties the pool; it may have done so since the last replicate.
+      if (!pool.workers.length) throw new Cancelled();
       boot[kind] = {draws, D, summary: await pool.call(pool.workers[0], 'summary', [draws.slice(), B, D])};
     }
     state.boot = boot;
@@ -282,21 +499,26 @@ function coefficientTable(title, names, block, truth) {
   const f = state.fit, models = MODELS.filter(([k]) => f[k]), p = f.data.p;
   const head1 = h('tr', {class: 'group'}, h('th'), truth ? h('th') : null,
     models.map(([, name]) => h('th', {colspan: 4, style: 'text-align:center'}, name)));
-  const head2 = h('tr', {}, h('th', {}, block === 'beta' ? 'Exposure' : 'Covariate'), truth ? h('th', {}, 'Truth') : null,
+  const head2 = h('tr', {}, h('th', {}, cellName(block === 'beta' ? 'Chemical exposure (X)' : 'Confounder (Z)')),
+    truth ? h('th', {}, 'Truth') : null,
     models.map(() => ['Estimate', 'SE', '2.5%', '97.5%'].map(t => h('th', {}, t))));
   const cells = (kind, i) => {
     const ci = interval(kind, (block === 'beta' ? 0 : p)+i, 1);
     return estimateCells((block === 'beta' ? f[kind].beta : f[kind].gamma)[i], ci);
   };
-  const body = names.map((name, i) => h('tr', {}, h('td', {}, name), truth ? h('td', {}, fmt(truth[i])) : null,
+  const body = names.map((label, i) => h('tr', {}, h('td', {}, cellName(label)), truth ? h('td', {}, fmt(truth[i])) : null,
     models.map(([kind]) => cells(kind, i))));
   if (block === 'gamma' && f.settings.intercept)
-    body.push(h('tr', {}, h('td', {}, 'Intercept'), truth ? h('td', {}, '0') : null,
+    body.push(h('tr', {}, h('td', {}, cellName('Intercept')), truth ? h('td', {}, '0') : null,
       models.map(([kind]) => kind === 'neural' ? estimateCells(f.neural.intercept, interval(kind, p+f.data.q, 1))
                                                : h('td', {class: 'na', colspan: 4}, 'part of g'))));
   return h('div', {class: 'card'}, h('h3', {}, title),
-    h('div', {class: 'table-wrap'}, h('table', {}, h('thead', {}, head1, head2), h('tbody', {}, body))));
+    h('div', {class: 'table-wrap', role: 'region', 'aria-label': title}, h('table', {}, h('thead', {}, head1, head2), h('tbody', {}, body))));
 }
+
+// The first cell of a result row: long names wrap inside a bounded width, so a
+// sticky first column never covers the numbers on a phone.
+const cellName = text => h('span', {class: 'cell-name'}, breakable(text));
 
 function estimateCells(estimate, ci) {
   return [h('td', {}, fmt(estimate)), ci ? [ci.se[0], ci.lo[0], ci.hi[0]].map(v => h('td', {}, fmt(v)))
@@ -320,9 +542,9 @@ function diagnostics() {
     }], ['RMSE of g vs truth', m => fmt(Math.sqrt(m.g.reduce((s, v, i) => s+(v-link(m.grid[i]))**2, 0)/m.g.length))]);
   }
   if (state.boot) rows.push(['Bootstrap', () => `B = ${state.boot.B}, ${duration(state.boot.seconds)}, ${state.boot.workers} workers`]);
-  return h('div', {class: 'card'}, h('h3', {}, 'Fit diagnostics'), h('div', {class: 'table-wrap'}, h('table', {},
+  return h('div', {class: 'card'}, h('h3', {}, 'Fit diagnostics'), h('div', {class: 'table-wrap', role: 'region', 'aria-label': 'Fit diagnostics'}, h('table', {},
     h('thead', {}, h('tr', {}, h('th'), models.map(([, name]) => h('th', {}, name)))),
-    h('tbody', {}, rows.map(([label, value]) => h('tr', {}, h('td', {}, label), models.map(([k]) => h('td', {}, value(f[k])))))))));
+    h('tbody', {}, rows.map(([label, value]) => h('tr', {}, h('td', {}, cellName(label)), models.map(([k]) => h('td', {}, value(f[k])))))))));
 }
 
 function download(name, text, type = 'text/csv') {
@@ -363,11 +585,28 @@ function drawsCsv(kind) {
   return toCsv(header, rows);
 }
 
+// How each column of the fitted data was made from the file, for using the
+// model on new data.
+function preprocessingJson() {
+  const f = state.fit, d = f.data, nhanes = d.source === 'nhanes';
+  return JSON.stringify({
+    description: 'How the columns of the NeuralPLSI fit were made from the data file, in model order. The model ' +
+      'takes inputs in this form. x: the column, its natural log when log is true, then (value - mean) / sd when ' +
+      'mean and sd are given. z: the column, or an indicator that is 1 where the column equals `equals` and 0 ' +
+      'elsewhere (reference: the level without one). y likewise. Means and SDs (population SD) are over ' +
+      (nhanes ? 'every row with a value in that column, as in reproduce/nhanes.py.' : 'the rows used.') +
+      ' Rows with a missing or non-finite value' + (nhanes ? '' : ', or a value of zero or below in a logged column,') +
+      ' were dropped.',
+    source: d.source, file: nhanes ? '12940_2020_644_MOESM2_ESM.csv' : f.fileName, family: d.family,
+    intercept: f.settings.intercept, rows: {file: d.rows, used: d.n, dropped: d.dropped},
+    x: d.transforms.x, z: d.transforms.z, y: d.transforms.y}, null, 2)+'\n';
+}
+
 function render() {
   const results = $('results'), f = state.fit;
   if (!f) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
-  const label = {simulated: `Simulated, g = ${d.truth?.g}`, nhanes: 'NHANES', csv: state.fileName}[d.source];
+  const label = {simulated: `Simulated, g = ${d.truth?.g}`, nhanes: 'NHANES', csv: f.fileName}[d.source];
   const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {}, 'Results'),
       h('span', {class: 'facts'}, `${label} · ${d.family}`)),
     h('p', {class: 'facts'}, describe(d)),
@@ -378,7 +617,7 @@ function render() {
       state.boot ? h('span', {}, h('i', {class: 'key band', style: `background:${models[0][2]}`}), '95% bootstrap band') : null,
       d.truth ? h('span', {}, h('i', {class: 'key dashed'}), 'Truth') : null),
     h('div', {class: 'chart', id: 'link-chart'}));
-  const fCard = h('div', {class: 'card'}, h('h3', {}, 'Exposure weights β'),
+  const fCard = h('div', {class: 'card'}, h('h3', {}, 'Chemical exposure weights β'),
     h('div', {class: 'legend'}, models.map(([, name, color]) => h('span', {}, h('i', {class: 'swatch', style: `background:${color}`}), name)),
       state.boot ? h('span', {}, 'lines: 95% intervals') : null, d.truth ? h('span', {}, h('i', {class: 'key diamond'}), 'Truth') : null),
     h('div', {class: 'chart', id: 'forest-chart'}));
@@ -387,14 +626,19 @@ function render() {
     models.filter(([k]) => state.boot?.[k]).map(([k, name]) => h('button', {type: 'button', class: 'small',
       onclick: () => download(`${k === 'neural' ? 'neuralplsi' : 'splineplsi'}-bootstrap-draws.csv`, drawsCsv(k))}, `${name} draws (CSV)`)),
     h('button', {type: 'button', class: 'small', onclick: () => download('neuralplsi.nplsi', f.neural.state, 'text/plain')},
-      'NeuralPLSI model (.nplsi)')),
+      'NeuralPLSI model (.nplsi)'),
+    d.transforms ? h('button', {type: 'button', class: 'small',
+      onclick: () => download('neuralplsi-preprocessing.json', preprocessingJson(), 'application/json')}, 'Preprocessing (JSON)') : null),
     h('p', {class: 'help'}, 'The model file loads with NeuralPLSI.load(path) in the Python package and nplsi_load in C++.' +
+      (d.transforms ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
+        '(column order, logs, means and SDs, indicators) before predicting.' : '') +
       ' Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
   results.replaceChildren(head, h('div', {class: 'figures'}, gCard, fCard),
-    h('div', {class: 'tables'}, coefficientTable('Exposure weights β', d.names.x, 'beta', d.truth?.beta),
-      coefficientTable('Covariate effects γ', d.names.z, 'gamma', d.truth?.gamma)),
+    h('div', {class: 'tables'}, coefficientTable('Chemical exposure weights β', d.names.x, 'beta', d.truth?.beta),
+      coefficientTable('Confounder effects γ', d.names.z, 'gamma', d.truth?.gamma)),
     diagnostics(), downloads);
   drawCharts();
+  markScrollable();
   onControls();
 }
 
@@ -420,19 +664,48 @@ function drawCharts() {
     })});
 }
 
+// Tables wider than their card scroll sideways inside it. Those that do get a
+// tab stop (to scroll with the keyboard), a sticky first column and edge shadows.
+function markScrollable() {
+  for (const wrap of document.querySelectorAll('.results .table-wrap')) {
+    const scrolls = wrap.scrollWidth > wrap.clientWidth+1;
+    wrap.classList.toggle('scrolls', scrolls);
+    if (scrolls) wrap.tabIndex = 0; else wrap.removeAttribute('tabindex');
+    wrap.onscroll ??= () => wrap.classList.toggle('scrolled', wrap.scrollLeft > 0);
+  }
+}
+
 // ---- Wiring
 
-form.addEventListener('input', onControls);
+const ROW_OPTION = /^(log|cat)-\d+$/;
+form.addEventListener('input', event => {
+  const target = event.target;
+  if (target.id === 'column-filter') applyFilter();
+  else if (target.name === 'csvFamily') onCsvFamily();
+  else if (target.name?.startsWith('role-')) onRole(target);
+  else if (ROW_OPTION.test(target.name)) onOption(target);
+  else if (target.name !== 'source' && target.name !== 'file') onControls();
+});
 form.addEventListener('change', event => {
-  if (event.target.name === 'source') onSource();
-  else if (event.target.name === 'file') onFile();
+  const target = event.target;
+  if (target.name === 'source') onSource();
+  else if (target.name === 'file') onFile();
+  else if (target.name === 'csvFamily' || target.name?.startsWith('role-') || ROW_OPTION.test(target.name) ||
+           target.id === 'column-filter') return;
   else onControls();
 });
+form.addEventListener('submit', event => event.preventDefault());
+form.addEventListener('click', event => {
+  const bulk = event.target.closest('[data-bulk]'), log = event.target.closest('[data-log]');
+  if (bulk) onBulk(bulk);
+  if (log) onBulkLog(log);
+});
+$('nhanes-retry').addEventListener('click', loadNhanes);
 $('fit').addEventListener('click', runFit);
 $('bootstrap').addEventListener('click', runBootstrap);
 $('cancel').addEventListener('click', () => pool.cancel());
 let resize = 0;
-addEventListener('resize', () => { clearTimeout(resize); resize = setTimeout(drawCharts, 150); });
+addEventListener('resize', () => { clearTimeout(resize); resize = setTimeout(() => { drawCharts(); markScrollable(); }, 150); });
 onSource();
 if ('serviceWorker' in navigator && location.protocol !== 'file:')
   navigator.serviceWorker.register('sw.js').catch(() => {});

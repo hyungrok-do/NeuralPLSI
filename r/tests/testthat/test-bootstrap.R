@@ -64,7 +64,8 @@ test_that("summary, confint and plot use the bootstrap", {
   table <- summary(fit)$coefficients
   expect_identical(colnames(table), c("Estimate", "Std. Error", "5 %", "95 %"))
   expect_identical(table[, "Std. Error"], fit$bootstrap$summary[, "se"])
-  expect_output(print(summary(fit)), "B = 20")
+  expect_output(print(summary(fit)), "B = 20 .*, 2 threads\\.")
+  expect_output(print(summary(plsi_bootstrap(fit, B = 3, n_jobs = 1))), "B = 3 .*, 1 thread\\.")
   expect_output(print(fit), "B = 20")
   intervals <- confint(fit)
   expect_identical(unname(intervals), unname(fit$bootstrap$summary[, c("lower", "upper")]))
@@ -85,6 +86,25 @@ test_that("summary, confint and plot use the bootstrap", {
   expect_identical(curve$index, fit$bootstrap$g_grid)
   expect_identical(curve$lower, unname(fit$bootstrap$g_summary[, "lower"]))
   expect_named(plot(fit, grid = c(-1, 0, 1)), c("index", "g"))
+})
+
+test_that("explicit data are matched to the fitted columns as in predict()", {
+  data <- simulate()
+  for (fit in list(small_fit(data, "continuous"), splineplsi(data$x, data$z, data$y))) {
+    boot <- plsi_bootstrap(fit, B = 3, n_jobs = 2)$bootstrap
+    permuted <- plsi_bootstrap(fit, data$x[, 3:1], data$z[, 2:1], data$y, B = 3, n_jobs = 2)
+    expect_identical(permuted$bootstrap[c("draws", "g_grid", "g_draws")],
+                     boot[c("draws", "g_grid", "g_draws")])
+    frame <- as.data.frame(data$x)[c("mercury", "lead", "cadmium")]
+    expect_identical(plsi_bootstrap(fit, frame, data$z, data$y, B = 3, n_jobs = 2)$bootstrap$draws,
+                     boot$draws)
+    expect_identical(plsi_bootstrap(fit, unname(data$x), unname(data$z), data$y, B = 3,
+                                    n_jobs = 2)$bootstrap$draws, boot$draws)
+    other <- data$x
+    colnames(other)[3] <- "arsenic"
+    expect_error(plsi_bootstrap(fit, other, data$z, data$y, B = 3),
+                 "x has some of the fitted column names but not mercury")
+  }
 })
 
 test_that("a custom grid and explicit data are used", {

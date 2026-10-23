@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(neuralplsi VERSION 0.1.0 LANGUAGES CXX)
+project(neuralplsi LANGUAGES CXX)
 
 # The C++ engine. `pip install .` builds it through scikit-build-core and puts
 # the library inside the Python package; `cmake -S . -B build` builds it and

@@ -40,5 +40,7 @@ for family in ('continuous', 'binary', 'cox'):
     write(f'{family}.draws', np.hstack([boot['beta_samples'], boot['gamma_samples']]))
     spline = SplinePLSI(family=family).fit(x, z, y, random_state=7)
     write(f'{family}.spline', np.concatenate([spline.beta, spline.gamma, spline.spline_coeffs]))
+    write(f'{family}.spline_link', spline.predict(x, z))
+    write(f'{family}.spline_g', spline.g_function(np.arange(-30, 31)/10))
     boot = spline.inference_bootstrap(x, z, y, n_samples=4, random_state=3, n_jobs=2)
     write(f'{family}.spline_draws', np.hstack([boot['beta_samples'], boot['gamma_samples']]))

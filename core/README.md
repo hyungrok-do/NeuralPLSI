@@ -1,7 +1,8 @@
 # NeuralPLSI engine (C++)
 
-The C++17 engine behind the `neuralplsi` Python package. It fits two partial
-linear single-index models, `g(X @ beta) + Z @ gamma`, with `|beta| = 1`:
+The C++17 engine behind the `neuralplsi` Python and R packages and the web
+demo. It fits two partial linear single-index models, `g(X @ beta) + Z @ gamma`,
+with `|beta| = 1`:
 
 - **NeuralPLSI** (`src/neuralplsi.cpp`): a neural-network link `g`, float32.
 - **SplinePLSI** (`src/spline.cpp`): the B-spline comparator of Wang et al.
@@ -11,8 +12,13 @@ Initialization, the network, analytic backpropagation, the optimizers, the
 exact gamma fit, prediction, serialization and the whole bootstrap (resampling,
 refits, threads, SEs and intervals) run here. The engine uses only the C++
 standard library and threads: no Torch or LibTorch, Eigen, BLAS or pybind11.
-The Python package ([`python/`](../python/README.md)) is a ctypes binding to the plain C
-API in [`include/neuralplsi.h`](include/neuralplsi.h).
+Every binding calls the plain C API in
+[`include/neuralplsi.h`](include/neuralplsi.h): the Python package
+([`python/`](../python/README.md)) through ctypes, the R package
+([`r/`](../r/README.md)) through `.Call` on copies of these sources, and the
+web demo ([`web/`](../web/README.md)) compiled to WebAssembly. SplinePLSI has
+no prediction function: the bindings multiply the basis from `splsi_basis` by
+the spline coefficients and add `Z gamma`.
 
 | Path | Contents |
 |---|---|
@@ -60,8 +66,12 @@ g++ -O3 -std=c++17 -shared -fPIC -ffp-contract=off -pthread -I core/include \
 
 GCC and Clang builds use `-O3 -std=c++17 -ffp-contract=off`. Fused
 multiply-add stays off, so the CMake build, the checkout build and the
-installed wheel produce the same float32 arithmetic on one machine. Results on other CPUs, compilers or
-math libraries can differ in the last bits.
+pip-installed library produce the same float32 arithmetic on one machine. The R
+package compiles at R's default optimization (`-O2` on macOS arm64), and its
+`configure` adds `-ffp-contract=off` when the compiler accepts it; the web demo
+uses `em++ -O3 -std=c++17 -ffp-contract=off`. Results on other CPUs, compilers
+or math libraries can differ in the last bits; the root
+[`README.md`](../README.md#one-engine) lists what was compared.
 
 ## C API
 
@@ -121,14 +131,14 @@ by full-batch L-BFGS (memory 10, Armijo backtracking). The outcome loss is mean
 squared error, binary cross-entropy, or the negative Breslow Cox partial
 likelihood divided by the number of events, with complete risk sets for tied
 times. The `g(0)^2` anchor identifies the level of the link. The penalty (1e-3
-in the Python package) covers the link-network weights and biases and the skip
-weight, but not beta, gamma or the intercept. The loss does not depend on the
-length of beta, so beta is renormalized to unit length after every step instead
-of being penalized.
+in the Python and R packages) covers the link-network weights and biases and
+the skip weight, but not beta, gamma or the intercept. The loss does not depend
+on the length of beta, so beta is renormalized to unit length after every step
+instead of being penalized.
 
 Training stops once the objective decreases by less than a relative 1e-5 over
-10 iterations, when the gradient vanishes, or after `max_iter` iterations
-(5000 in the Python package; `max_iter=0` performs initialization only). With
+10 iterations, when the gradient vanishes, or after `max_iter` iterations (5000
+in the Python and R packages; `max_iter=0` performs initialization only). With
 beta and the link fixed, gamma and the optional intercept are then fitted
 exactly, with `g(x'beta)` as a fixed offset: least squares, logistic regression
 or the Breslow Cox partial likelihood, by double-precision damped Newton
@@ -172,11 +182,12 @@ and patience 10.
 
 ## SplinePLSI
 
-For each unit index beta, the knots (five in the Python package) sit at equally spaced
-order statistics of `x'beta` (Wang et al., 2020), and clamped cubic B-splines
-give seven basis functions. Gamma and the spline coefficients are the exact
-ridge-penalized fit on `[Z, B(x'beta)]` (alpha = 1e-6): least squares by
-Cholesky, logistic regression and the Breslow Cox partial likelihood by Newton.
+For each unit index beta, the knots (five in the Python and R packages) sit at
+equally spaced order statistics of `x'beta` (Wang et al., 2020), and clamped
+cubic B-splines give seven basis functions. Gamma and the spline coefficients
+are the exact ridge-penalized fit on `[Z, B(x'beta)]` (alpha = 1e-6): least
+squares by Cholesky, logistic regression and the Breslow Cox partial
+likelihood by Newton.
 Beta is profiled over the unit sphere by BFGS with central finite differences
 (step 1e-3, which averages over the small kinks that order-statistic knots
 create), followed by a compass search on the profile loss, from a seeded random

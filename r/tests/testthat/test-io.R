@@ -41,6 +41,11 @@ test_that("save_model and load_model round trip the engine model", {
     expect_identical(plsi_bootstrap(loaded, data$x, data$z, data$y, B = 3, n_jobs = 2)$bootstrap$draws,
                      unname(plsi_bootstrap(fit, B = 3, n_jobs = 2)$bootstrap$draws),
                      ignore_attr = TRUE)
+    # A blank name is not matched to the loaded model's x2: columns go by position.
+    blank <- data$x
+    colnames(blank)[2] <- ""
+    expect_identical(plsi_bootstrap(loaded, blank, data$z, data$y, B = 3, n_jobs = 2)$bootstrap$draws,
+                     plsi_bootstrap(loaded, data$x, data$z, data$y, B = 3, n_jobs = 2)$bootstrap$draws)
   }
 })
 

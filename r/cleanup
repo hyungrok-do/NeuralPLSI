@@ -1,2 +1,3 @@
 #!/bin/sh
-rm -f src/Makevars src/*.o src/*.so src/*.dll
+rm -f src/Makevars src/*.o src/*.so src/*.dll conftest.cpp conftest.o conftest
+rm -rf conftest.dSYM

@@ -74,13 +74,40 @@ test_that("Cox outcomes accept Surv objects and two-column matrices", {
   expect_null(fit$intercept)
 })
 
-test_that("prediction matches columns by name", {
+test_that("prediction matches columns by name, or by position without fitted names", {
   data <- simulate()
   fit <- small_fit(data, "continuous")
   shuffled <- predict(fit, data$x[, 3:1], data$z[, 2:1])
   expect_identical(shuffled, predict(fit))
+  expect_identical(predict(fit, as.data.frame(data$x[, 3:1]), as.data.frame(data$z)), predict(fit))
   expect_identical(predict(fit, unname(data$x), unname(data$z)), predict(fit))
   expect_identical(predict(fit, data$x[1:5, ], data$z[1:5, ]), predict(fit)[1:5])
+  other <- data$x
+  colnames(other) <- c("a", "b", "c")
+  expect_identical(predict(fit, other, data$z), predict(fit))
+  colnames(other) <- c("mercury", "lead", "arsenic")
+  expect_error(predict(fit, other, data$z),
+               "newx has some of the fitted column names but not cadmium")
+  expect_error(predict(fit, data$x, cbind(age = data$z[, 1], weight = 0)),
+               "newz has some of the fitted column names but not sex")
+  expect_error(predict(fit, cbind(data$x, arsenic = 0), data$z), "newx must have 3 columns")
+})
+
+test_that("an (Intercept) column is refused only next to a fitted intercept", {
+  data <- simulate("binary")
+  z <- stats::model.matrix(~ age + sex, as.data.frame(data$z))
+  expect_identical(colnames(z), c("(Intercept)", "age", "sex"))
+  expect_error(small_fit(list(x = data$x, z = z, y = data$y), "binary", add_intercept = TRUE),
+               "column named \\(Intercept\\).*model.matrix\\(...\\)\\[, -1\\]")
+  x <- cbind(data$x, `(Intercept)` = 1)
+  expect_error(small_fit(list(x = x, z = data$z, y = data$y), "binary", add_intercept = TRUE),
+               "column named \\(Intercept\\)")
+  fit <- small_fit(list(x = data$x, z = z, y = data$y), "binary")
+  expect_identical(names(coef(fit)), c("lead", "cadmium", "mercury", "(Intercept)", "age", "sex"))
+  fit <- small_fit(list(x = data$x, z = z[, -1], y = data$y), "binary", add_intercept = TRUE)
+  expect_identical(names(coef(fit)), c("lead", "cadmium", "mercury", "age", "sex", "(Intercept)"))
+  spline <- splineplsi(data$x, z, data$y, family = "binary")
+  expect_identical(names(coef(spline)), c("lead", "cadmium", "mercury", "(Intercept)", "age", "sex"))
 })
 
 test_that("plot draws g and returns the curve", {

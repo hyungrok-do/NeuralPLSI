@@ -61,3 +61,41 @@ test('a failing replicate raises the engine error', () => {
   assert.throws(() => { for (let b = 0; b < 50; ++b) worker.run(b); }, /Cox data need at least one event/);
   worker.close();
 });
+
+// An engine whose k-th buffer allocation fails, recording what is allocated,
+// freed, created and destroyed.
+function failingEngine(engine, k) {
+  const log = {allocated: [], freed: [], handles: [], destroyed: []};
+  const e = Object.create(engine);
+  e.m = Object.create(engine.m, {_free: {value: pointer => { log.freed.push(pointer); engine.m._free(pointer); }}});
+  e.alloc = (Type, length) => {
+    if (log.allocated.length+1 === k) throw new Error('Out of memory: test');
+    const pointer = engine.alloc.call(e, Type, length);
+    log.allocated.push(pointer);
+    return pointer;
+  };
+  e.importState = text => { const h = engine.importState.call(e, text); log.handles.push(h); return h; };
+  e.destroy = handle => { log.destroyed.push(handle); engine.destroy(handle); };
+  return {e, log};
+}
+
+test('a replicate whose allocation fails frees every buffer and the model it made', () => {
+  const data = simulate({n: 40, outcome: 'continuous', seed: 3}), {x, z, y} = neuralArrays(data);
+  const fit = fitNeural(first, data, {hiddenUnits: 4, layers: 1, maxIter: 20}, 0);
+  const jobs = [[NeuralReplicate, {state: fit.state, x, z, y, n: data.n, grid: Float32Array.of(-1, 0, 1), seed: 0}],
+                [SplineReplicate, {x: data.x, z: data.z, y: data.y, n: data.n, p: data.p, q: data.q, family: 'continuous',
+                                   grid: Float64Array.of(-1, 0, 1), seed: 0}]];
+  for (const [Kind, job] of jobs) {
+    let failures = 0;
+    for (let k = 1; ; ++k) {
+      const {e, log} = failingEngine(first, k);
+      let replicate = null;
+      try { replicate = new Kind(e, job); } catch (error) { assert.match(error.message, /Out of memory/); ++failures; }
+      if (replicate) replicate.close();
+      assert.deepEqual([...log.freed].sort(), [...log.allocated].sort(), `${Kind.name}, allocation ${k} fails`);
+      assert.deepEqual(log.destroyed, log.handles, `${Kind.name}, allocation ${k} fails`);
+      if (replicate) break;
+    }
+    assert.ok(failures >= 9, `${Kind.name}: ${failures} failing allocations tried`);
+  }
+});

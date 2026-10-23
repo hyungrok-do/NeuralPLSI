@@ -122,15 +122,25 @@ model_data <- function(x, z, y, family) {
   list(x = x, z = z, y = y)
 }
 
-# New data for prediction, matched to the fitted columns by name when it has
-# all of them, by position otherwise.
-new_data <- function(value, names, label) {
-  value <- if (is.null(value)) matrix(0, 0L, 0L) else numeric_matrix(value, label)
-  if (!is.null(colnames(value)) && all(names %in% colnames(value)))
-    value <- value[, names, drop = FALSE]
+# The columns of a matrix in the fitted order: by name when its column names as
+# given (held) include any of the fitted names, and then they must include all
+# of them; by position when they include none of them or there are no names.
+fitted_columns <- function(value, names, label, held = colnames(value)) {
   if (ncol(value) != length(names))
     stop(sprintf("%s must have %d columns (%s)", label, length(names),
                  paste(names, collapse = ", ")), call. = FALSE)
+  if (!any(names %in% held)) return(value)
+  missing <- setdiff(names, held)
+  if (length(missing))
+    stop(sprintf("%s has some of the fitted column names but not %s", label,
+                 paste(missing, collapse = ", ")), call. = FALSE)
+  value[, match(names, held), drop = FALSE]
+}
+
+# New data for prediction, in the fitted column order.
+new_data <- function(value, names, label) {
+  value <- if (is.null(value)) matrix(0, 0L, 0L) else numeric_matrix(value, label)
+  value <- fitted_columns(value, names, label)
   if (!all(is.finite(value))) stop(label, " must contain only finite values", call. = FALSE)
   value
 }

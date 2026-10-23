@@ -12,9 +12,9 @@
 <body>
 <header class="intro">
   <h1>NeuralPLSI</h1>
-  <p>NeuralPLSI models an outcome as <i>g</i>(<i>X</i>′β) + <i>Z</i>′γ. The exposures <i>X</i> (a mixture)
-    enter through one weighted index <i>X</i>′β, with β of unit length and a positive first weight, and an
-    unknown function <i>g</i> learned by a small neural network. The covariates <i>Z</i> enter linearly. The
+  <p>NeuralPLSI models an outcome as <i>g</i>(<i>X</i>′β) + <i>Z</i>′γ. The chemical exposures (<i>X</i>, a
+    mixture) enter through one weighted index <i>X</i>′β, with β of unit length and a positive first weight, and
+    an unknown function <i>g</i> learned by a small neural network. The confounders (<i>Z</i>) enter linearly. The
     outcome can be continuous, binary (logistic) or a survival time (Cox). A pairs bootstrap gives standard
     errors and percentile intervals. Method: Do, Wang, Liu and Lee (2025),
     <a href="https://arxiv.org/abs/2512.11593">arXiv:2512.11593</a>.</p>
@@ -33,9 +33,9 @@
       </div>
 
       <div data-panel="simulated">
-        <p class="help">The simulation design of the paper: 8 exposures with correlation 0.3, three covariates,
-          β ∝ (1, 0.7, −0.5, 0.5, 0.3, −0.1, 0, 0) and γ = (1, −0.5, 0.5). The generator is seeded but does
-          not reproduce the draws of the Python package.</p>
+        <p class="help">The simulation design of the paper: 8 chemical exposures (<i>X</i>) with correlation 0.3,
+          three confounders (<i>Z</i>), β ∝ (1, 0.7, −0.5, 0.5, 0.3, −0.1, 0, 0) and γ = (1, −0.5, 0.5). The
+          generator is seeded but does not reproduce the draws of the Python package.</p>
         <div class="fields">
           <label><span>Rows <i>n</i></span><input name="n" type="number" min="20" max="20000" step="1" value="500"></label>
           <label>Seed<input name="simSeed" type="number" min="0" step="1" value="0"></label>
@@ -47,40 +47,101 @@
       </div>
 
       <div data-panel="nhanes" hidden>
-        <p class="help">Log triglyceride of 800 NHANES participants against 8 exposures
-          (α- and γ-tocopherol, retinyl stearate, retinol, two PCBs, a furan, trans-β-carotene), adjusted for
-          age, sex and race. Prepared as in <code>reproduce/nhanes.py</code>: exposures logged (except retinol)
-          and standardized. Selecting it sets the activation to ELU and adds an intercept, as that script does.</p>
+        <p class="help">Log triglyceride of 800 NHANES participants against 8 chemical exposures (<i>X</i>:
+          α- and γ-tocopherol, retinyl stearate, retinol, two PCBs, a furan, trans-β-carotene), with age, sex and
+          race as confounders (<i>Z</i>). Prepared as in <code>reproduce/nhanes.py</code>: exposures logged (except
+          retinol) and standardized, race coded as indicators. Selecting it sets the activation to ELU and adds an
+          intercept, as that script does.</p>
         <p class="help">Data: supplementary material of Wang et al. (2020),
           <a href="https://doi.org/10.1186/s12940-020-00644-4"><i>Environmental Health</i> 19:96</a>,
           licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+        <div id="nhanes-error" class="load-error" role="alert" hidden><span id="nhanes-error-text"></span>
+          <button type="button" id="nhanes-retry" class="small">Retry</button></div>
       </div>
 
       <div data-panel="csv" hidden>
         <label class="file">CSV file<input name="file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
+        <p class="help">The file is read on this device and never uploaded. It needs a header row; commas,
+          semicolons or tabs separate the fields.</p>
         <div id="csv-columns" hidden>
           <div class="fields">
-            <label><span id="outcome-label">Outcome</span><select name="outcomeColumn"></select></label>
-            <label id="event-field" hidden>Event (0/1)<select name="eventColumn"></select></label>
+            <label>Outcome type
+              <select name="csvFamily"><option value="continuous">continuous</option><option value="binary">binary (0/1)</option><option value="cox">survival time (Cox)</option></select></label>
           </div>
-          <fieldset><legend>Exposures (the index)</legend><div class="checks" id="exposure-list"></div></fieldset>
-          <fieldset><legend>Covariates (linear)</legend><div class="checks" id="covariate-list"></div></fieldset>
-          <div class="options">
-            <label class="check"><input type="checkbox" name="logExposures">Log exposures</label>
-            <label class="check"><input type="checkbox" name="standardize" checked>Standardize exposures</label>
-          </div>
-          <p class="help">Rows with a missing or non-numeric value in a chosen column are dropped. Log drops
-            non-positive values. Standardizing uses the mean and SD of the remaining rows. Text covariates are
-            coded as indicators against their first level. Set the outcome type with Family under Model.</p>
+          <p id="family-note" class="note" hidden></p>
+          <fieldset class="roles">
+            <legend>Column roles</legend>
+            <p class="help">Give each column one role. <b>X</b>: chemical exposures, combined into the index
+              <i>X</i>′β inside <i>g</i>. <b>Z</b>: confounders, which enter linearly. One <b>outcome</b>
+              (for Cox, the survival time and a 0/1 <b>event</b> column). Leave IDs and survey weights on
+              <b>ignore</b>: the fit is unweighted.</p>
+            <p class="help">X and Z columns enter the model in the order you give them their role; X rows show
+              their position (X1, X2, …), and β has a positive weight on X1. Each X row has a <b>log</b> box. A
+              numeric Z column of codes, such as race coded 1 to 5, can be marked <b>categorical</b>: it then
+              becomes indicators against its lowest value. Columns with 2 to 10 integer codes, other than 0/1, are suggested.</p>
+            <div class="role-tools">
+              <input type="search" id="column-filter" placeholder="Filter columns by name" aria-label="Filter columns by name"
+                     aria-controls="column-table" autocomplete="off" spellcheck="false">
+              <div class="bulk" role="group" aria-label="Chemical exposures (X) among the columns shown">
+                <span aria-hidden="true">Chemical exposures (X)</span>
+                <button type="button" class="small" data-bulk="exposure" data-on="1" aria-label="Mark every column shown that has no role as a chemical exposure (X)">All</button>
+                <button type="button" class="small" data-bulk="exposure" data-on="0" aria-label="Clear the chemical exposures (X) among the columns shown">None</button>
+              </div>
+              <div class="bulk" role="group" aria-label="Confounders (Z) among the columns shown">
+                <span aria-hidden="true">Confounders (Z)</span>
+                <button type="button" class="small" data-bulk="confounder" data-on="1" aria-label="Mark every column shown that has no role as a confounder (Z)">All</button>
+                <button type="button" class="small" data-bulk="confounder" data-on="0" aria-label="Clear the confounders (Z) among the columns shown">None</button>
+              </div>
+              <div class="bulk" role="group" aria-label="Log-transform the chemical exposures (X) among the columns shown">
+                <span aria-hidden="true">Log-transform X</span>
+                <button type="button" class="small" data-log="1" aria-label="Log-transform every chemical exposure (X) shown">All</button>
+                <button type="button" class="small" data-log="0" aria-label="Log-transform none of the chemical exposures (X) shown">None</button>
+              </div>
+            </div>
+            <div class="table-wrap role-wrap">
+              <table id="column-table" class="role-table">
+                <thead><tr>
+                  <th scope="col" class="h-name">Column</th>
+                  <th scope="col" class="h-role h-exposure" id="head-exposure" title="Chemical exposure (X)">X<span class="sr-only">, chemical exposure</span></th>
+                  <th scope="col" class="h-role h-confounder" id="head-confounder" title="Confounder (Z)">Z<span class="sr-only">, confounder</span></th>
+                  <th scope="col" class="h-role h-outcome" id="head-outcome">Outcome</th>
+                  <th scope="col" class="h-role h-event" id="head-event" title="Event indicator (0/1)">Event</th>
+                  <th scope="col" class="h-role h-ignore" id="head-ignore">Ignore</th>
+                </tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p id="filter-count" class="help count"></p>
+          </fieldset>
+          <fieldset>
+            <legend>Chemical exposures (X)</legend>
+            <div class="options">
+              <label class="check"><input type="checkbox" name="standardize" checked>Standardize every X (after its log)</label>
+            </div>
+            <p class="help">Environmental concentrations are usually right-skewed: unlogged, a few high values can
+              dominate the index. Log them with the <b>log</b> box of each X row, or Log-transform X: All. The log
+              drops rows with a value of zero or below. Standardizing uses the mean and SD of the rows kept.</p>
+          </fieldset>
+          <fieldset id="outcome-options">
+            <legend>Outcome (continuous)</legend>
+            <div class="options">
+              <label class="check"><input type="checkbox" name="logOutcome">Log-transform</label>
+              <label class="check"><input type="checkbox" name="standardizeOutcome">Standardize (after the log)</label>
+            </div>
+            <p class="help">The log drops rows with an outcome of zero or below. Estimates are on the scale of the
+              transformed outcome.</p>
+          </fieldset>
+          <p class="help">Rows with a missing or non-finite value in any chosen column are dropped; so are numbers
+            beyond ±3.4 × 10<sup>38</sup>, the float32 range NeuralPLSI computes in. Text confounders, and numeric
+            ones marked categorical, become indicator columns against their first level (at most 20 levels).</p>
         </div>
       </div>
-      <p id="data-summary" class="summary" aria-live="polite"></p>
     </section>
 
     <section class="card" aria-labelledby="model-title">
       <h2 id="model-title"><span class="step">2</span>Model</h2>
       <div class="fields">
-        <label>Family<select name="family" disabled><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">Cox</option></select></label>
+        <label>Family<select name="family" disabled aria-describedby="family-help"><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">Cox</option></select></label>
         <label>Activation
           <select name="activation"><option>LeakyReLU</option><option>ELU</option><option>ReLU</option><option>Tanh</option></select></label>
         <label>Hidden units<input name="hiddenUnits" type="number" min="1" max="1024" step="1" value="32"></label>
@@ -95,8 +156,9 @@
       </div>
       <details class="help">
         <summary>What these do</summary>
-        <p><b>Family</b> sets the loss: squared error, logistic likelihood or Cox partial likelihood. It
-          follows the simulated outcome and is continuous for NHANES.
+        <p id="family-help"><b>Family</b> sets the loss: squared error, logistic likelihood or Cox partial
+          likelihood. It follows the outcome chosen under Data: the simulated outcome, continuous for NHANES, or
+          the outcome type of your CSV.
           <b>Activation</b>, <b>hidden units</b> and <b>hidden layers</b> shape the network for <i>g</i>.
           <b>Weight decay</b> is the L2 penalty on the network; larger values give a smoother <i>g</i>.
           Full-batch L-BFGS runs until the objective stops improving or <b>max iterations</b>; γ is then fitted
@@ -109,8 +171,10 @@
 
     <section class="card" aria-labelledby="run-title">
       <h2 id="run-title"><span class="step">3</span>Run</h2>
+      <dl id="data-summary" class="summary"></dl>
+      <p id="fit-status" class="status" role="status"></p>
       <div class="run-row">
-        <button type="button" id="fit" class="primary">Fit</button>
+        <button type="button" id="fit" class="primary" aria-describedby="fit-status">Fit</button>
         <label class="inline"><span>Bootstrap <i>B</i></span><input name="B" type="number" min="2" max="1000" step="1" value="200"></label>
         <button type="button" id="bootstrap" disabled>Bootstrap</button>
       </div>

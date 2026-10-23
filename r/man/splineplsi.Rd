@@ -68,7 +68,8 @@ knots \eqn{g} is constant.
 set.seed(1)
 x <- matrix(rnorm(600), 200, 3)
 z <- matrix(rnorm(200), 200, 1)
-y <- rbinom(200, 1, plogis(sin(2 * x \%*\% c(0.6, -0.6, 0.5)) + z[, 1]))
+g <- function(u) 5 * (plogis(2 * u) - 0.5)
+y <- rbinom(200, 1, plogis(g(drop(x \%*\% c(2, 2, -1) / 3)) + z[, 1]))
 fit <- splineplsi(x, z, y, family = "binary")
 summary(fit)
 }

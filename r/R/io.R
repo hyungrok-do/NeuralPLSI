@@ -18,7 +18,8 @@
 #' @examples
 #' set.seed(1)
 #' x <- matrix(rnorm(400), 200, 2)
-#' y <- rbinom(200, 1, plogis(2 * sin(x %*% c(0.8, 0.6))))
+#' g <- function(u) 5 * (plogis(2 * u) - 0.5)
+#' y <- rbinom(200, 1, plogis(g(drop(x %*% c(0.8, 0.6)))))
 #' fit <- neuralplsi(x, NULL, y, family = "binary")
 #' file <- tempfile(fileext = ".nplsi")
 #' save_model(fit, file)

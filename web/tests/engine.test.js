@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {loadBuiltEngine, sameBytes} from './helpers.js';
 import {simulate, TRUE_BETA} from '../src/data.js';
 
-const {neuralConfig, splineConfig, NEURAL_DEFAULTS} = await import('../dist/engine.js');
+const {neuralConfig, splineConfig, NEURAL_DEFAULTS, Engine, LIMITS, OUT_OF_MEMORY, errorMessage, networkProblem,
+       parameterCount} = await import('../dist/engine.js');
 const {fitNeural, fitSpline, neuralArrays} = await import('../dist/models.js');
 const engine = await loadBuiltEngine();
 const cosine = beta => beta.reduce((s, v, j) => s+v*TRUE_BETA[j], 0);
@@ -62,4 +63,26 @@ test('engine errors surface as exceptions with the native message', () => {
   assert.throws(() => neuralConfig(8, 3, {family: 'cox', intercept: true}), /cannot identify an intercept/);
   // The engine still works after a caught C++ exception.
   assert.equal(engine.bootstrapIndices(5, 1, 0).length, 5);
+});
+
+test('out-of-memory errors get one message', () => {
+  const failing = new Engine({UTF8ToString: () => 'std::bad_alloc', _nplsi_error: () => 0, _malloc: () => 0});
+  assert.throws(() => failing.check(1), {message: OUT_OF_MEMORY});
+  assert.throws(() => failing.alloc(Float32Array, 10), {message: OUT_OF_MEMORY});
+  for (const text of ['std::bad_alloc', 'Aborted(OOM)', 'Array buffer allocation failed'])
+    assert.equal(errorMessage(new RangeError(text)), OUT_OF_MEMORY, text);
+  assert.equal(errorMessage(new Error('Invalid outcome')), 'Invalid outcome');
+});
+
+test('networks the engine would reject are caught before a fit', () => {
+  const settings = {hiddenUnits: 1024, layers: 16, intercept: true};
+  assert.ok(parameterCount(8, 6, 1024, 16, true) > LIMITS.parameters);
+  assert.match(networkProblem(8, 6, settings), /^The network would have 15,7\d\d,\d{3} parameters, more than the engine's 10,000,000/);
+  assert.equal(networkProblem(8, 6, {hiddenUnits: 1024, layers: 9, intercept: true}), null);
+  assert.match(networkProblem(LIMITS.p+1, 0, {hiddenUnits: 1, layers: 1}), /at most 100,000/);
+  // The engine agrees: one parameter over its limit is refused, the limit itself is not checked further here.
+  const width = 1000, depth = 11, count = parameterCount(8, 3, width, depth, false);
+  assert.ok(count > LIMITS.parameters && networkProblem(8, 3, {hiddenUnits: width, layers: depth}) !== null);
+  const {config, hyper} = neuralConfig(8, 3, {hiddenUnits: width, layers: depth});
+  assert.throws(() => engine.create(config, hyper, 0), /Invalid native network configuration/);
 });

@@ -8,6 +8,7 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +54,14 @@ static void attach(SEXP pointer, void* handle) {
 static uint64_t seed_of(SEXP seed) { return (uint64_t) REAL(seed)[0]; }
 static int columns(SEXP matrix) { return Rf_isMatrix(matrix) ? Rf_ncols(matrix) : 1; }
 
+/* Rounding to nearest float32, as numpy's astype(float32) does, takes doubles
+   of magnitude at or above this midpoint between FLT_MAX and 2^128 to infinity
+   (the midpoint itself ties to even, upward). Values are tested before the
+   cast, because casting an out-of-range double to float is undefined in C. */
+static const double float32_overflow = 0x1.ffffffp+127;
+
+static int fits_float32(double value) { return fabs(value) < float32_overflow; }
+
 /* Column-major R doubles to row-major float32, rounded to nearest as numpy's
    astype(float32) does. NULL for an empty matrix. */
 static const float* rows_float(SEXP matrix, const char* name) {
@@ -62,11 +71,31 @@ static const float* rows_float(SEXP matrix, const char* name) {
     const double* value = REAL(matrix);
     for (int j = 0; j < k; ++j)
         for (int i = 0; i < n; ++i) {
-            float v = (float) value[i + (size_t) j * n];
-            if (!isfinite(v)) Rf_error("%s has values outside the float32 range", name);
-            result[(size_t) i * k + j] = v;
+            double v = value[i + (size_t) j * n];
+            if (!fits_float32(v)) Rf_error("%s has values outside the float32 range", name);
+            result[(size_t) i * k + j] = (float) v;
         }
     return result;
+}
+
+/* An R length, refused before allocation if it does not fit an int. */
+static int dimension(int64_t size, const char* error) {
+    if (size < 0 || size > INT_MAX) Rf_error("%s", error);
+    return (int) size;
+}
+
+static const char* invalid_spline = "Invalid SplinePLSI configuration";
+
+/* SplinePLSI config (p, q, family, num_knots, degree, max_iter) and hyper
+   (alpha, tol), checked before the result sizes derived from them are allocated. */
+static const int* spline_config(SEXP config, SEXP hyper) {
+    if (TYPEOF(config) != INTSXP || Rf_length(config) != 6 || TYPEOF(hyper) != REALSXP ||
+        Rf_length(hyper) != 2)
+        Rf_error("%s", invalid_spline);
+    const int* c = INTEGER(config);
+    for (int i = 0; i < 6; ++i)
+        if (c[i] < 0) Rf_error("%s", invalid_spline);
+    return c;
 }
 
 static const double* rows_double(SEXP matrix) {
@@ -187,7 +216,8 @@ static SEXP r_bootstrap(SEXP pointer, SEXP x, SEXP z, SEXP y, SEXP B, SEXP seed,
     float hyper[NPLSI_HYPER_SIZE];
     double diagnostics[4];
     check(nplsi_get_config(handle, config, hyper, diagnostics));
-    int b = Rf_asInteger(B), g = Rf_length(grid), D = config[0] + config[1] + config[4] + g;
+    int b = Rf_asInteger(B), g = Rf_length(grid),
+        D = dimension((int64_t) config[0] + config[1] + config[4] + g, "g_grid is too long");
     const float *xs = rows_float(x, "x"), *zs = rows_float(z, "z"), *ys = rows_float(y, "y");
     const float* gs = rows_float(grid, "g_grid");
     SEXP draws, summary, result = PROTECT(bootstrap_result(b, D, &draws, &summary));
@@ -227,17 +257,22 @@ static SEXP r_load(SEXP path) {
     return pointer;
 }
 
+/* The rounding of rows_float, with infinity where rows_float reports an error. */
 static SEXP r_as_float32(SEXP x) {
     int n = Rf_length(x);
     SEXP result = PROTECT(Rf_allocVector(REALSXP, n));
-    for (int i = 0; i < n; ++i) REAL(result)[i] = (float) REAL(x)[i];
+    for (int i = 0; i < n; ++i) {
+        double v = REAL(x)[i];
+        REAL(result)[i] = fits_float32(v) ? (float) v : isnan(v) ? v : copysign(INFINITY, v);
+    }
     UNPROTECT(1);
     return result;
 }
 
 static SEXP r_spline_fit(SEXP config, SEXP hyper, SEXP x, SEXP z, SEXP y, SEXP seed) {
-    const int* c = INTEGER(config);
-    int p = c[0], q = c[1], bases = c[3] + c[4] - 1, knots = c[3] + 2 * c[4];
+    const int* c = spline_config(config, hyper);
+    int p = c[0], q = c[1], bases = dimension((int64_t) c[3] + c[4] - 1, invalid_spline),
+        knots = dimension((int64_t) c[3] + 2 * (int64_t) c[4], invalid_spline);
     const double *xs = rows_double(x), *zs = rows_double(z), *ys = rows_double(y);
     const char* names[] = {"beta", "gamma", "spline", "knots", "diagnostics"};
     SEXP result = PROTECT(named_list(5, names));
@@ -262,8 +297,9 @@ static SEXP r_spline_basis(SEXP knots, SEXP degree, SEXP x) {
 
 static SEXP r_spline_bootstrap(SEXP config, SEXP hyper, SEXP x, SEXP z, SEXP y, SEXP B, SEXP seed,
                                SEXP jobs, SEXP grid, SEXP level, SEXP method) {
-    const int* c = INTEGER(config);
-    int b = Rf_asInteger(B), g = Rf_length(grid), D = c[0] + c[1] + c[3] + c[4] - 1 + g;
+    const int* c = spline_config(config, hyper);
+    int b = Rf_asInteger(B), g = Rf_length(grid),
+        D = dimension((int64_t) c[0] + c[1] + c[3] + c[4] - 1 + g, invalid_spline);
     const double *xs = rows_double(x), *zs = rows_double(z), *ys = rows_double(y);
     SEXP draws, summary, result = PROTECT(bootstrap_result(b, D, &draws, &summary));
     check_spline(splsi_bootstrap((const int32_t*) c, REAL(hyper), xs, zs, ys, Rf_nrows(x), b,

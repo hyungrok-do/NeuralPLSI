@@ -21,7 +21,8 @@ Evaluate the link function
 \examples{
 set.seed(1)
 x <- matrix(rnorm(600), 200, 3)
-y <- sin(2 * x \%*\% c(0.6, -0.6, 0.5)) + rnorm(200, sd = 0.2)
+g <- function(u) 5 * (plogis(2 * u) - 0.5)
+y <- g(drop(x \%*\% c(2, 2, -1) / 3)) + rnorm(200, sd = 0.5)
 fit <- splineplsi(x, NULL, y)
 g_function(fit, seq(-1, 1, by = 0.5))
 }

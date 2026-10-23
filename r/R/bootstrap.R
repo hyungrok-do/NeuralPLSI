@@ -20,6 +20,8 @@
 #' @param object A \code{neuralplsi} or \code{splineplsi} fit.
 #' @param x,z,y Data to resample, by default the training data kept in the fit.
 #'   A model read with \code{\link{load_model}} keeps no data, so pass them.
+#'   Columns of \code{x} and \code{z} are matched to the fit as in
+#'   \code{\link{predict.plsi}}.
 #' @param B Number of bootstrap draws (at least 2).
 #' @param seed Integer seed in \eqn{[0, 2^{53}]}.
 #' @param n_jobs Native threads: -1 for all available CPUs, -2 for all but one,
@@ -42,8 +44,10 @@
 #' set.seed(1)
 #' x <- matrix(rnorm(600), 200, 3)
 #' z <- matrix(rnorm(200), 200, 1)
-#' y <- sin(x %*% c(0.6, -0.6, 0.5)) + 0.5 * z[, 1] + rnorm(200, sd = 0.2)
-#' fit <- plsi_bootstrap(neuralplsi(x, z, y), B = 20, n_jobs = 2)
+#' g <- function(u) 5 * (plogis(2 * u) - 0.5)
+#' y <- g(drop(x %*% c(2, 2, -1) / 3)) + 0.5 * z[, 1] + rnorm(200, sd = 0.5)
+#' # A smaller network than the default keeps the example fast.
+#' fit <- plsi_bootstrap(neuralplsi(x, z, y, hidden_units = 16), B = 20, n_jobs = 2)
 #' summary(fit)
 #' confint(fit, level = 0.9)
 #' @export
@@ -64,6 +68,9 @@ plsi_bootstrap.plsi <- function(object, x = object$data$x, z = object$data$z,
   data <- model_data(x, z, y, object$family)
   if (ncol(data$x) != length(object$beta) || ncol(data$z) != length(object$gamma))
     stop("Bootstrap dimensions differ from the fitted model", call. = FALSE)
+  # Matched on the names as given, before model_data() named unnamed columns.
+  data$x <- fitted_columns(data$x, names(object$beta), "x", colnames(x))
+  data$z <- fitted_columns(data$z, names(object$gamma), "z", colnames(z))
   if (is.null(g_grid)) {
     g_grid <- range(data$x %*% object$beta)
     g_grid <- seq(g_grid[1L], g_grid[2L], length.out = 101L)

@@ -3,7 +3,7 @@ import ctypes
 import numpy as np
 from scipy.special import expit
 
-from .base import _SummaryMixin, validate_data
+from .base import _SummaryMixin, covariates, validate_data
 from .native import (BOOTSTRAP_RNG_PROTOCOL, FAMILIES, bootstrap_options, library, seed_value,
                      spline_checked)
 
@@ -107,9 +107,15 @@ class SplinePLSI(_SummaryMixin):
         return result
 
     def predict(self, X, Z):
-        """Predict raw output (linear predictor)."""
+        """Predict raw output (linear predictor). Z=None means no covariates."""
         self._ensure_fitted()
-        X = np.asarray(X, dtype=np.float64); Z = np.asarray(Z, dtype=np.float64)
+        X = np.asarray(X, dtype=np.float64)
+        if X.ndim != 2 or X.shape[1] != len(self.beta):
+            raise ValueError('X must match the fitted exposure dimensions')
+        Z = covariates(Z, X)
+        if Z.shape != (len(X), len(self.gamma)):
+            raise ValueError(f'Z must have shape ({len(X)}, {len(self.gamma)}) to match the '
+                             'fitted covariates (None when there are none)')
         return Z @ self.gamma + self.basis(X @ self.beta) @ self.spline_coeffs
 
     def predict_proba(self, X, Z):

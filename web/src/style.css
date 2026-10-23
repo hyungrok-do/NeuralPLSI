@@ -94,14 +94,27 @@ h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
 .help { color: var(--ink-2); font-size: 0.86rem; margin: 0.6rem 0; }
 details.help summary { cursor: pointer; color: var(--ink); }
 details.help p { margin: 0.5rem 0 0; }
-.summary { font-size: 0.86rem; margin: 0.75rem 0 0; color: var(--ink); }
+.summary {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px;
+  font-size: 0.86rem; margin: 0 0 12px; color: var(--ink);
+}
+.summary div { display: contents; }
+.summary dt { color: var(--ink-2); }
+.summary dd { margin: 0; overflow-wrap: anywhere; }
 .summary:empty { display: none; }
-.summary.warning { color: var(--critical); }
+.status { margin: 0 0 12px; padding: 6px 10px; border-radius: 8px; font-size: 0.86rem;
+  background: color-mix(in srgb, var(--critical) 12%, transparent); color: var(--ink); }
+.status:empty { display: none; }
+.note { margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 0.84rem; background: var(--raised); color: var(--ink); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
 label { display: grid; gap: 4px; font-size: 0.86rem; color: var(--ink-2); }
 input, select, button { font: inherit; color: inherit; }
-input[type="number"], input[type="text"], select {
+input[type="number"], input[type="text"], input[type="search"], select {
   width: 100%; min-width: 0; padding: 6px 8px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--page); color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -113,13 +126,51 @@ input[type="file"] { max-width: 100%; color: var(--ink-2); }
 .options { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }
 fieldset { border: 0; padding: 0; margin: 12px 0 0; min-width: 0; }
 legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px; }
-.checks {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 10px;
-  max-height: 168px; overflow: auto; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+
+/* The CSV step: one row per column, one role per row. */
+.roles .help { margin-top: 0; }
+.role-tools { display: grid; gap: 6px; margin-bottom: 8px; }
+.bulk { display: flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--ink-2); }
+.bulk span { flex: 1; }
+.role-wrap { max-height: 28rem; overflow: auto; border: 1px solid var(--border); border-radius: 8px; overscroll-behavior: contain; }
+.role-table { table-layout: fixed; font-size: 0.84rem; }
+.role-table th, .role-table td { white-space: normal; padding: 0; vertical-align: middle; }
+.role-table thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--raised); color: var(--ink-2);
+  font-size: 0.75rem; font-weight: 600; text-align: center; padding: 6px 2px;
 }
-.checks label { display: flex; align-items: center; gap: 6px; color: var(--ink); font-size: 0.84rem; }
-.checks label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.checks .kind { color: var(--muted); }
+.role-table thead th.h-name { text-align: left; padding-left: 8px; }
+.role-table .h-exposure, .role-table .h-confounder { width: 2.25rem; }
+.role-table .h-outcome { width: 3.6rem; }
+.role-table .h-event, .role-table .h-ignore { width: 3.1rem; }
+.role-table:not(.cox) .h-event, .role-table:not(.cox) .role-event { display: none; }
+.role-table tbody th { text-align: left; font-weight: 400; padding: 6px 4px 6px 8px; box-shadow: inset 3px 0 0 transparent; }
+.role-table tbody tr:last-child > * { border-bottom: 0; }
+.col-name { display: block; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.col-meta, .col-examples, .col-text { display: block; color: var(--muted); font-size: 0.75rem; line-height: 1.35; overflow-wrap: anywhere; }
+.col-meta.warn { color: var(--critical); }
+.col-text { color: var(--ink-2); }
+/* Under the name: an X row's position and log box, a numeric Z row's categorical box. */
+.col-options { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; font-size: 0.75rem; line-height: 1.35; }
+.col-order, .opt { display: none; }
+.role-table tr[data-role="exposure"] .col-order { display: inline; font-weight: 600; color: var(--series-1); }
+.role-table tr[data-role="exposure"] .opt-log,
+.role-table tr[data-role="confounder"] .opt-categorical { display: inline-flex; }
+.opt { flex-wrap: wrap; align-items: center; gap: 0 5px; min-height: 1.75rem; color: var(--ink); cursor: pointer; }
+.opt input { margin: 0; width: 0.95rem; height: 0.95rem; accent-color: var(--accent); cursor: inherit; }
+.role-table tr[data-role="confounder"] .opt-categorical.blocked { display: none; }
+.opt .suggest { color: var(--muted); white-space: nowrap; }
+.role label { display: flex; align-items: center; justify-content: center; min-height: 2.75rem; cursor: pointer; }
+.role input { margin: 0; width: 1rem; height: 1rem; accent-color: var(--accent); cursor: inherit; }
+.role input:disabled { opacity: 0.3; }
+.role label:has(input:disabled) { cursor: not-allowed; }
+.role-table tr[data-role="exposure"] > * { background: color-mix(in srgb, var(--series-1) 9%, transparent); }
+.role-table tr[data-role="exposure"] > th { box-shadow: inset 3px 0 0 var(--series-1); }
+.role-table tr[data-role="confounder"] > * { background: color-mix(in srgb, var(--series-2) 9%, transparent); }
+.role-table tr[data-role="confounder"] > th { box-shadow: inset 3px 0 0 var(--series-2); }
+.role-table tr[data-role="outcome"] > *, .role-table tr[data-role="event"] > * { background: var(--raised); }
+.role-table tr[data-role="outcome"] > th, .role-table tr[data-role="event"] > th { box-shadow: inset 3px 0 0 var(--ink-2); }
+.count { margin: 6px 0 0; }
 
 .segmented { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--raised); border-radius: 9px; padding: 3px; }
 .segmented label { display: block; }
@@ -148,6 +199,12 @@ button.small { padding: 4px 10px; font-size: 0.84rem; }
 .message { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 0.86rem;
   background: color-mix(in srgb, var(--critical) 12%, transparent); color: var(--ink); }
 .message.info { background: var(--raised); }
+.load-error {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px;
+  margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 0.86rem;
+  background: color-mix(in srgb, var(--critical) 12%, transparent); color: var(--ink);
+}
+.load-error[hidden] { display: none; }
 
 .results-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
 .facts { color: var(--ink-2); font-size: 0.86rem; margin: 0.25rem 0 0; }
@@ -184,10 +241,28 @@ button.small { padding: 4px 10px; font-size: 0.84rem; }
 .truth-swatch { border: 1.5px solid var(--ink-2); border-radius: 1px; transform: rotate(45deg); }
 .muted { color: var(--muted); }
 
+/* Result tables scroll sideways inside their card; edge shadows show there is more. */
 .table-wrap { overflow-x: auto; }
+.results .table-wrap.scrolls {
+  --shade: color-mix(in srgb, var(--ink) 22%, transparent);
+  background:
+    linear-gradient(to left, var(--surface) 40%, transparent) right center / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 100% 50%, var(--shade), transparent) right center / 12px 100% no-repeat scroll;
+}
+.results .table-wrap.scrolls th:first-child, .results .table-wrap.scrolls td:first-child {
+  position: sticky; left: 0; z-index: 1; background: var(--surface);
+}
+.results .table-wrap.scrolled th:first-child, .results .table-wrap.scrolled td:first-child {
+  box-shadow: inset -1px 0 0 var(--axis), 5px 0 6px -3px var(--shade);
+}
 table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
 th, td { padding: 5px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
 th:first-child, td:first-child { text-align: left; }
+/* The first column of a result table wraps long names within a bounded width,
+   so on a phone the sticky column leaves room for the numbers. The bounds sit on
+   an inner block: table cells ignore max-width in WebKit and Firefox. */
+.results th:first-child, .results td:first-child { white-space: normal; }
+.cell-name { display: block; min-width: 8rem; max-width: 45vw; overflow-wrap: anywhere; word-break: break-word; }
 thead th { color: var(--ink-2); font-weight: 500; }
 thead tr.group th { border-bottom: 0; padding-bottom: 0; }
 td.na { color: var(--muted); }

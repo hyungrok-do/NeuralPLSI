@@ -1,7 +1,8 @@
 // Web Workers, each with its own WebAssembly instance. The engine runs single
 // threaded (n_jobs = 1) inside each worker; parallelism comes from the pool.
 // Terminating the workers is the only way to stop a running fit, so cancel()
-// discards the pool and the next request starts a new one.
+// discards the pool and the next request starts a new one; calls to a discarded
+// worker fail with Cancelled.
 
 export class Cancelled extends Error {
   constructor() { super('Cancelled'); this.name = 'Cancelled'; }
@@ -52,6 +53,7 @@ export class Pool {
   }
 
   call(w, op, args, transfer = []) {
+    if (w.closed) return Promise.reject(new Cancelled());
     return new Promise((resolve, reject) => {
       const id = w.next++;
       w.pending.set(id, {resolve, reject});
@@ -66,6 +68,7 @@ export class Pool {
 
   cancel() {
     for (const w of this.workers) {
+      w.closed = true;
       w.worker.terminate();
       for (const call of w.pending.values()) call.reject(new Cancelled());
     }

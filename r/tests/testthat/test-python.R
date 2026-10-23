@@ -1,6 +1,8 @@
 # Runs from a checkout, with PYTHON or python3 able to import the checkout's
 # python/neuralplsi; skipped otherwise, or fails if NEURALPLSI_REQUIRE_PYTHON=true.
-test_that("R and Python give identical fits, bootstrap draws and model files", {
+# SplinePLSI predictions multiply the engine's basis in R and in numpy, which sum
+# in different orders, so they are compared to rounding error, not exactly.
+test_that("R and Python agree on fits, bootstrap draws, predictions and model files", {
   unavailable <- function(message) {
     if (identical(Sys.getenv("NEURALPLSI_REQUIRE_PYTHON"), "true")) stop(message)
     skip(message)
@@ -48,6 +50,11 @@ test_that("R and Python give identical fits, bootstrap draws and model files", {
     save_model(fit, path(family, "r.nplsi"))
     spline <- splineplsi(d$x, d$z, d$y, family = family, seed = 7)
     expect_identical(unname(c(coef(spline), spline$spline)), read(family, "spline"))
+    for (values in list(list(predict(spline), read(family, "spline_link")),
+                        list(g_function(spline, (-30:30) / 10), read(family, "spline_g")))) {
+      expect_true(all(is.finite(values[[2]])))
+      expect_equal(values[[1]], values[[2]], tolerance = 1e-12)
+    }
     boot <- plsi_bootstrap(spline, B = 4, seed = 3, n_jobs = 2)$bootstrap
     expect_identical(unname(boot$draws), read(family, "spline_draws", 5))
   }

@@ -23,19 +23,21 @@ args=(reproduce/main_simulation.py --n_instances "$n"
       --device cpu --nn_backend "$backend" --out "$out" --save_every 1)
 [[ ${SAVE_BOOTSTRAP_SAMPLES:-0} == 1 ]] && args+=(--save_bootstrap_samples)
 [[ ${NPLSI_INITIAL:-0} == 1 ]] && args+=(--initial)
+# Set NPLSI_CONTAINER for Singularity, or omit it to use the active Python env.
+if [[ -n ${NPLSI_CONTAINER:-} ]]; then
+    options=(exec --bind "$project")
+    [[ -n ${NPLSI_OVERLAY:-} ]] && options+=(--overlay "${NPLSI_OVERLAY}:ro")
+    run=(singularity "${options[@]}" "$NPLSI_CONTAINER" "${NPLSI_PYTHON:-/ext3/miniconda3/bin/python}" "${args[@]}")
+else
+    run=("${NPLSI_PYTHON:-python}" "${args[@]}")
+fi
 if [[ ${NPLSI_DRY_RUN:-0} == 1 ]]; then
-    printf '%q ' "${NPLSI_PYTHON:-python}" "${args[@]}"
+    printf '%q ' "${run[@]}"
     printf '\n'
     exit 0
 fi
-# Set NPLSI_CONTAINER for Singularity, or omit it to use the active Python env.
-if [[ -n ${NPLSI_CONTAINER:-} ]]; then
-    if ! command -v singularity >/dev/null 2>&1; then
-        source /etc/profile.d/modules.sh
-        module load singularity/3.9.8 2>/dev/null || module load singularity/3.9.8_rhel9 2>/dev/null || module load singularity/3.11.5
-    fi
-    options=(exec --bind "$project")
-    [[ -n ${NPLSI_OVERLAY:-} ]] && options+=(--overlay "${NPLSI_OVERLAY}:ro")
-    exec singularity "${options[@]}" "$NPLSI_CONTAINER" "${NPLSI_PYTHON:-/ext3/miniconda3/bin/python}" "${args[@]}"
+if [[ -n ${NPLSI_CONTAINER:-} ]] && ! command -v singularity >/dev/null 2>&1; then
+    source /etc/profile.d/modules.sh
+    module load singularity/3.9.8 2>/dev/null || module load singularity/3.9.8_rhel9 2>/dev/null || module load singularity/3.11.5
 fi
-exec "${NPLSI_PYTHON:-python}" "${args[@]}"
+exec "${run[@]}"

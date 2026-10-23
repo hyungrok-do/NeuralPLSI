@@ -45,7 +45,8 @@ indicators.}
 
 \item{max_iter}{L-BFGS iterations, or AdamW epochs. 0 only initializes.}
 
-\item{add_intercept}{Fit an intercept (not for Cox outcomes).}
+\item{add_intercept}{Fit an intercept (not for Cox outcomes). \code{x} and
+\code{z} then cannot have a column named \code{(Intercept)}.}
 
 \item{initial}{Start from a linear, logistic or Cox regression fit.}
 
@@ -87,9 +88,10 @@ engine state, so it survives \code{saveRDS}/\code{readRDS}.
 }
 \examples{
 set.seed(1)
-x <- matrix(rnorm(600), 200, 3, dimnames = list(NULL, c("a", "b", "c")))
+x <- matrix(rnorm(600), 200, 3, dimnames = list(NULL, c("lead", "cadmium", "mercury")))
 z <- cbind(age = rnorm(200))
-y <- sin(x \%*\% c(0.6, -0.6, 0.5)) + 0.5 * z[, 1] + rnorm(200, sd = 0.2)
+g <- function(u) 5 * (plogis(2 * u) - 0.5)
+y <- g(drop(x \%*\% c(2, 2, -1) / 3)) + 0.5 * z[, 1] + rnorm(200, sd = 0.5)
 fit <- neuralplsi(x, z, y)
 fit
 head(predict(fit))

@@ -8,7 +8,10 @@ The scripts use this checkout's package in `python/neuralplsi` (each adds
 `python/` to `sys.path`), which compiles `core/` on first use with `$CXX`
 (default `g++`) into `NEURALPLSI_CACHE_DIR` (default `~/.cache/neuralplsi`).
 The package does not need to be installed; see
-[`python/README.md`](../python/README.md#running-from-a-checkout). The scripts
+[`python/README.md`](../python/README.md#running-from-a-checkout). After an
+editable install of this checkout (`python -m pip install -e .`), the scripts
+import that install instead, with the same Python files, and use the library it
+built with CMake. The scripts
 need a C++17 compiler and the packages in `requirements.txt`:
 
 ```bash
@@ -31,9 +34,10 @@ minibatch AdamW baseline: at most 200 epochs, batch size 64, learning rate
 The scenario is set by `--n_instances`, `--g_fn` (`linear`, `sfun`, `sigmoid`),
 `--outcome` (`continuous`, `binary`, `cox`) and `--exposure_dist` (`normal`,
 `uniform`, `t`). The defaults are 500 replicates (`--n_replicates`) and B = 100
-(`--n_bootstrap`); the current results in `results/simulation` use n = 2000,
-500 replicates and B = 1000. `--bootstrap_jobs` sets the bootstrap threads
-(`auto` by default).
+(`--n_bootstrap`). The current results in `results/simulation` use n = 2000 and
+500 replicates, with B = 1000 for NeuralPLSI and NeuralPLSI-Adam and B = 999
+for SplinePLSI, whose earlier run was not repeated. `--bootstrap_jobs` sets the
+bootstrap threads (`auto` by default).
 
 A small local run, which takes a few seconds:
 
@@ -92,7 +96,7 @@ sbatch --array=18-26 reproduce/run_simulation_2000.slurm   # NeuralPLSI-Adam
 | `NPLSI_PROJECT_DIR` | the submission directory | The checkout to run. |
 | `NPLSI_PYTHON` | `python`; `/ext3/miniconda3/bin/python` in a container | The interpreter. |
 | `NPLSI_CONTAINER`, `NPLSI_OVERLAY` | unset | A Singularity image and an overlay mounted read-only. |
-| `NPLSI_DRY_RUN` | 0 | 1 prints the command instead of running it. |
+| `NPLSI_DRY_RUN` | 0 | 1 prints the command instead of running it, including the `singularity exec` prefix when `NPLSI_CONTAINER` is set. |
 
 The jobs limit BLAS and OpenMP to one thread. Without `NPLSI_CONTAINER` they use
 the active Python environment. To use the Singularity environment on
@@ -108,10 +112,12 @@ export NPLSI_PYTHON=/ext3/miniconda3/bin/python
 The C++ compiler must be available inside the container. The first job compiles
 the engine into the cache; a file lock makes concurrent jobs wait for it. The
 `#SBATCH` resource lines (20 CPUs, 32 GB, 12 hours, partition `cpu_short`,
-excluded nodes) are for BigPurple and may need changes elsewhere. Every
-bootstrap draw is a complete fit, so check the wall-time limit before a full
-run. A larger B reduces bootstrap Monte Carlo error; it does not guarantee
-nominal coverage.
+excluded nodes) are for BigPurple and may need changes elsewhere; options on
+the `sbatch` command line override them. The current results were run with
+`--cpus-per-task=40` added to each `sbatch` line, so the bootstrap used 40
+threads, and SplinePLSI with `N_BOOTSTRAP=999`. Every bootstrap draw is a
+complete fit, so check the wall-time limit before a full run. A larger B
+reduces bootstrap Monte Carlo error; it does not guarantee nominal coverage.
 
 To see the command an array ID runs, without Slurm:
 
@@ -203,8 +209,9 @@ and the earlier timing and memory history is in
 coverage; that needs the full scenarios.
 
 `native_memory_check.cpp` measures the peak RSS of a native process without
-Python (arguments: n, B, workers, max_iter; B = 0 measures one fit). It reads
-`VmHWM` from `/proc/self/status`, so the peak is reported on Linux only:
+Python (arguments: n, B, workers, max_iter; B = 0 measures one fit) and prints
+it as `peak_rss_mib`. On Linux it reads `VmHWM` from `/proc/self/status`, on
+macOS `ru_maxrss` from `getrusage`; elsewhere it prints -1:
 
 ```bash
 g++ -O3 -pthread -ffp-contract=off -std=c++17 -I core/include core/src/neuralplsi.cpp \

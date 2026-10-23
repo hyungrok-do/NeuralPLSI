@@ -13,6 +13,30 @@ export function parameterCount(p, q, width, depth, intercept) {
   return p+q+1+2*width+(depth-1)*(width*width+width)+width+1+(intercept ? 1 : 0);
 }
 
+// The network sizes the engine accepts (the Model checks in core/src/neuralplsi.cpp).
+export const LIMITS = {p: 100000, q: 100000, hiddenUnits: 10000, layers: 128, parameters: 10000000};
+
+// Why the engine would reject a network for p exposures and q confounders, or null.
+export function networkProblem(p, q, {hiddenUnits, layers, intercept}) {
+  const count = parameterCount(p, q, hiddenUnits, layers, intercept), number = v => v.toLocaleString('en-US');
+  if (p > LIMITS.p) return `${number(p)} chemical exposures (X): the engine takes at most ${number(LIMITS.p)}`;
+  if (q > LIMITS.q) return `${number(q)} confounder columns (Z): the engine takes at most ${number(LIMITS.q)}`;
+  if (count > LIMITS.parameters)
+    return `The network would have ${number(count)} parameters, more than the engine's ${number(LIMITS.parameters)}; ` +
+      'use fewer hidden units or layers';
+  return null;
+}
+
+export const OUT_OF_MEMORY = 'Out of memory: this browser could not allocate the memory the fit needs. ' +
+  'Use fewer hidden units or layers, or fewer rows';
+
+// An error as the page shows it: std::bad_alloc from the engine and failed
+// allocations in WebAssembly or JavaScript become OUT_OF_MEMORY.
+export function errorMessage(error) {
+  const text = error?.message ?? String(error);
+  return /bad_alloc|Out of memory|Aborted\(OOM\)|allocation failed|Cannot enlarge memory/i.test(text) ? OUT_OF_MEMORY : text;
+}
+
 // [p, q, width, depth, intercept, family, activation, parameter_count, max_iter,
 //  linear_init, optimizer (L-BFGS), batch_size, patience]; hyper [penalty, sign, learning rate].
 export function neuralConfig(p, q, settings) {
@@ -50,7 +74,7 @@ export class Engine {
   version() { return this.m.UTF8ToString(this.m._nplsi_version()); }
 
   check(status, spline = false) {
-    if (status) throw new Error(this.m.UTF8ToString(spline ? this.m._splsi_error() : this.m._nplsi_error()));
+    if (status) throw new Error(errorMessage(this.m.UTF8ToString(spline ? this.m._splsi_error() : this.m._nplsi_error())));
   }
 
   // Heap views are re-read on every use: any allocation may grow memory and detach them.
@@ -61,7 +85,7 @@ export class Engine {
 
   alloc(Type, length) {
     const pointer = this.m._malloc(Math.max(length, 1)*Type.BYTES_PER_ELEMENT);
-    if (!pointer) throw new Error('Out of WebAssembly memory');
+    if (!pointer) throw new Error(OUT_OF_MEMORY);
     return pointer;
   }
 

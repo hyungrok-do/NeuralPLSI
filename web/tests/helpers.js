@@ -18,7 +18,7 @@ export const sameBytes = (a, b) =>
                                           Buffer.from(b.buffer, b.byteOffset, b.byteLength)) === 0;
 
 // The first interpreter with the reference package's dependencies: $PYTHON, then
-// python3 and the system Python. Tests that need it are skipped without one.
+// python3, /usr/bin/python3 and python. Tests that need it are skipped without one.
 const candidates = [process.env.PYTHON, 'python3', '/usr/bin/python3', 'python'].filter(Boolean);
 export const python = candidates.find(exe => spawnSync(exe, ['-c', 'import numpy, pandas, scipy, sklearn, matplotlib'],
                                                       {stdio: 'ignore'}).status === 0) || null;

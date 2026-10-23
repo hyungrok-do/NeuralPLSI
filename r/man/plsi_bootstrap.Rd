@@ -27,7 +27,9 @@ plsi_bootstrap(object, ...)
 \item{...}{Unused.}
 
 \item{x, z, y}{Data to resample, by default the training data kept in the fit.
-A model read with \code{\link{load_model}} keeps no data, so pass them.}
+A model read with \code{\link{load_model}} keeps no data, so pass them.
+Columns of \code{x} and \code{z} are matched to the fit as in
+\code{\link{predict.plsi}}.}
 
 \item{B}{Number of bootstrap draws (at least 2).}
 
@@ -77,8 +79,10 @@ The name avoids \code{boot::boot()} and \code{bootstrap::bootstrap()}.
 set.seed(1)
 x <- matrix(rnorm(600), 200, 3)
 z <- matrix(rnorm(200), 200, 1)
-y <- sin(x \%*\% c(0.6, -0.6, 0.5)) + 0.5 * z[, 1] + rnorm(200, sd = 0.2)
-fit <- plsi_bootstrap(neuralplsi(x, z, y), B = 20, n_jobs = 2)
+g <- function(u) 5 * (plogis(2 * u) - 0.5)
+y <- g(drop(x \%*\% c(2, 2, -1) / 3)) + 0.5 * z[, 1] + rnorm(200, sd = 0.5)
+# A smaller network than the default keeps the example fast.
+fit <- plsi_bootstrap(neuralplsi(x, z, y, hidden_units = 16), B = 20, n_jobs = 2)
 summary(fit)
 confint(fit, level = 0.9)
 }

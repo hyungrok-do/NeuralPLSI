@@ -11,9 +11,11 @@ time-to-event (Cox). The package has two estimators:
 - `NeuralPLSI`: `g` is a small neural network, fitted by full-batch L-BFGS.
 - `SplinePLSI`: `g` is a cubic B-spline (Wang et al., 2020), the comparator.
 
-Both fit, predict and run the pairs bootstrap in a C++ engine
+Both fit and run the pairs bootstrap in a C++ engine
 ([`core/`](https://github.com/hyungrok-do/NeuralPLSI/blob/main/core/README.md)),
-on native threads. There is no Torch dependency. Paper: Do, Wang, Liu and Lee,
+on native threads, which also computes NeuralPLSI predictions; SplinePLSI
+predictions multiply the engine's spline basis by the coefficients in NumPy.
+There is no Torch dependency. Paper: Do, Wang, Liu and Lee,
 [Neural Network-based Partial-Linear Single-Index Models for Environmental
 Mixtures Analysis](https://arxiv.org/abs/2512.11593), arXiv:2512.11593 (2025).
 
@@ -25,11 +27,16 @@ cd NeuralPLSI
 python -m pip install .
 ```
 
-This needs Python 3.9 or later, a C++17 compiler and CMake 3.16 or later, on
+This needs Python 3.10 or later, a C++17 compiler and CMake 3.16 or later, on
 Linux or macOS. pip builds the engine with CMake (through scikit-build-core) and
 installs the library inside the package, in `neuralplsi/_lib`. The runtime
 dependencies are NumPy, pandas and SciPy. pip leaves its CMake build files in
 `build/` in the checkout.
+
+An editable install, `python -m pip install -e .`, also installs the CMake-built
+library in `neuralplsi/_lib` in site-packages and uses the Python files of the
+checkout. Changes to the Python files take effect without reinstalling; changes
+to `core/` need `python -m pip install -e .` again.
 
 ```bash
 python -m neuralplsi
@@ -64,8 +71,9 @@ NEURALPLSI_LIBRARY=build/libneuralplsi.dylib PYTHONPATH=python python -m neuralp
 ```
 
 (`libneuralplsi.so` on Linux.) The library is chosen in this order:
-`NEURALPLSI_LIBRARY`, the library installed with the package, the checkout
-build. The engine version must equal the package version.
+`NEURALPLSI_LIBRARY`, which must name an existing file, the library installed
+with the package, the checkout build. The engine version must equal the package
+version.
 
 ## Quick start
 
@@ -95,7 +103,7 @@ print(spline.summary())
 ```
 
 `X` and `Z` are matrices with one row per observation; `Z` may have no
-columns. `y` is a vector, coded
+columns, and `Z=None` means no covariates. `y` is a vector, coded
 0/1 for binary outcomes, or an `n x 2` array `[time, event]` for Cox outcomes,
 with 0/1 events and at least one event. All values must be finite. NeuralPLSI
 works in float32 and SplinePLSI in float64.
@@ -107,14 +115,18 @@ has `predict_gxb(X)`. `beta[0] >= 0` fixes the sign of the index.
 
 `inference_bootstrap` resamples rows with replacement and refits each draw from
 a fresh seeded initialization, in one call to the engine. It returns a
-dictionary with the estimates (`beta_hat`, `gamma_hat`), the draws
-(`beta_samples`, `gamma_samples`, `g_samples`, and `intercept_samples` or
-`spline_samples`) and, for each block, `_mean`, `_se` (sample SD), `_lb` and
-`_ub`, plus `n_workers`, `bootstrap_rng` and the settings. `summary()` then
-includes the SEs and intervals; a new fit clears them. The draws do not depend
-on `n_jobs` or on the number of draws: for the same `random_state`, the first
-B draws of a longer run are identical. For the same `random_state`, both
-estimators are refitted on the same resampled rows.
+dictionary with the estimates `beta_hat` and `gamma_hat`, `n_workers`,
+`bootstrap_rng` and the settings, and five entries for each block: the draws
+(`beta_samples`), their mean (`beta_mean`), SE (`beta_se`, the sample SD) and
+interval endpoints (`beta_lb`, `beta_ub`). The `beta` and `gamma` blocks are
+always there. NeuralPLSI with `add_intercept=True` adds `intercept_hat` and the
+`intercept` block; SplinePLSI adds `spline_hat` and the `spline` block (the
+spline coefficients). Only when `g_grid` is given are there a `g` block, the
+link on that grid, and `g_grid`. `summary()` then includes the SEs and
+intervals; a new fit clears them. The draws do not depend on `n_jobs` or on the
+number of draws: for the same `random_state`, the first B draws of a longer run
+are identical. For the same `random_state`, both estimators are refitted on the
+same resampled rows.
 
 `save` writes the network weights, settings and index orientation to a text
 file that round-trips float32 exactly; bootstrap results are not saved with it.
@@ -187,12 +199,14 @@ so the global NumPy random state is unchanged.
 ## Tests
 
 ```bash
-python -m pip install ".[test]" scikit-learn
+python -m pip install ".[test]"
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest python/tests
 ```
 
-Two tests also need scikit-learn (and the joblib it installs). Without the
-package installed, the tests use the checkout and compile `core/` on first use.
+Without the package installed, the tests use the checkout and compile `core/`
+on first use. A plain `python -m pytest` from the repository root runs the same
+tests; the tests of the reproduction scripts need `reproduce/requirements.txt`
+and run with `python -m pytest reproduce/tests`.
 
 The tests check forward values and analytic gradients against independent
 NumPy references for every outcome and activation, and for several depths and
@@ -202,17 +216,18 @@ squares for continuous outcomes, a zero full-data gamma gradient for binary and
 Cox). They check bootstrap orientation, serial and threaded reproducibility,
 that each draw equals an explicit refit of its resampled rows, native summaries
 against NumPy percentiles, Cox risk sets with ties, prediction chunk boundaries,
-serialization, the AdamW baseline, and the spline fit and bootstrap. One test
-blocks Python refits, random number generation, process and thread creation and
-percentile functions, and asserts that exactly one native call completes the
-whole bootstrap.
+serialization, the AdamW baseline, the spline fit and bootstrap, `Z=None`, the
+library search and that the installed version, the package version and the
+engine version agree. One test blocks Python refits, random number generation,
+process and thread creation and percentile functions, and asserts that exactly
+one native call completes the whole bootstrap.
 
 ## Tutorial
 
 [`python/examples/tutorial.ipynb`](https://github.com/hyungrok-do/NeuralPLSI/blob/main/python/examples/tutorial.ipynb)
 simulates continuous data, fits both models and plots the estimated links and
-coefficients against the truth. It also needs matplotlib, seaborn and
-scikit-learn, which the package does not install.
+coefficients against the truth. It also needs matplotlib, which the package does
+not install.
 
 ## License and citation
 

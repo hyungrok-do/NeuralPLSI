@@ -34,7 +34,8 @@
 #' @param activation \code{"LeakyReLU"}, \code{"ELU"}, \code{"ReLU"} or \code{"Tanh"}.
 #' @param weight_decay L2 penalty on the link network (decoupled weight decay for AdamW).
 #' @param max_iter L-BFGS iterations, or AdamW epochs. 0 only initializes.
-#' @param add_intercept Fit an intercept (not for Cox outcomes).
+#' @param add_intercept Fit an intercept (not for Cox outcomes). \code{x} and
+#'   \code{z} then cannot have a column named \code{(Intercept)}.
 #' @param initial Start from a linear, logistic or Cox regression fit.
 #' @param optimizer \code{"lbfgs"} or the \code{"adam"} baseline.
 #' @param batch_size,learning_rate,patience AdamW settings.
@@ -47,9 +48,10 @@
 #'   \code{\link{save_model}}, \code{\link{splineplsi}}
 #' @examples
 #' set.seed(1)
-#' x <- matrix(rnorm(600), 200, 3, dimnames = list(NULL, c("a", "b", "c")))
+#' x <- matrix(rnorm(600), 200, 3, dimnames = list(NULL, c("lead", "cadmium", "mercury")))
 #' z <- cbind(age = rnorm(200))
-#' y <- sin(x %*% c(0.6, -0.6, 0.5)) + 0.5 * z[, 1] + rnorm(200, sd = 0.2)
+#' g <- function(u) 5 * (plogis(2 * u) - 0.5)
+#' y <- g(drop(x %*% c(2, 2, -1) / 3)) + 0.5 * z[, 1] + rnorm(200, sd = 0.5)
 #' fit <- neuralplsi(x, z, y)
 #' fit
 #' head(predict(fit))
@@ -77,9 +79,13 @@ neuralplsi <- function(x, z, y, family = c("continuous", "binary", "cox"),
   initial <- as_flag(initial, "initial")
   seed <- as_seed(seed)
   data <- model_data(x, z, y, family)
+  if (add_intercept && "(Intercept)" %in% c(colnames(data$x), colnames(data$z)))
+    stop("A column named (Intercept) would be confused with the fitted intercept: drop it ",
+         "(model.matrix(...)[, -1]) or use add_intercept = FALSE", call. = FALSE)
   p <- ncol(data$x)
   q <- ncol(data$z)
-  w <- hidden_units
+  # In double precision, so that large networks are refused rather than overflowing.
+  w <- as.double(hidden_units)
   size <- p + q + 1 + 2 * w + (n_hidden_layers - 1) * (w * w + w) + w + 1 + add_intercept
   if (size > .Machine$integer.max) stop("The network is too large", call. = FALSE)
   config <- c(p, q, w, n_hidden_layers, add_intercept, families[[family]],

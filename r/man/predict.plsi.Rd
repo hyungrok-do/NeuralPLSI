@@ -15,10 +15,12 @@
 \arguments{
 \item{object}{A \code{neuralplsi} or \code{splineplsi} fit.}
 
-\item{newx, newz}{New exposures and covariates. Columns are matched to the
-fit by name when \code{newx} or \code{newz} has all of the fitted names, by
-position otherwise. Without \code{newx}, the training data are used.
-\code{newz} is not needed for \code{type = "index"} or without covariates.}
+\item{newx, newz}{New exposures and covariates, with as many columns as the
+fit. Columns are matched to the fit by name when \code{newx} or \code{newz}
+has any of the fitted names, and it must then have all of them; by position
+when it has none of them or no column names. Without \code{newx}, the
+training data are used, and \code{newz} must be omitted too. \code{newz} is
+not needed for \code{type = "index"} or without covariates.}
 
 \item{type}{\code{"link"}: the linear predictor \eqn{g(x'\beta) + z'\gamma}
 (plus the intercept). \code{"response"}: the linear predictor for continuous
@@ -33,6 +35,9 @@ exponentiated linear predictor (the partial hazard). \code{"index"}:
 A numeric vector with one value per row.
 }
 \description{
-NeuralPLSI predictions come from the engine in float32, as in Python;
-SplinePLSI predictions are computed in double precision.
+NeuralPLSI predictions come from the engine in float32 and equal Python's.
+SplinePLSI predictions are computed in double precision from the engine's
+spline basis with R's matrix products, which sum in a different order from
+numpy's: they agree with Python's to rounding error (absolute differences of
+a few times \eqn{10^{-15}} on the package's test data), not bit for bit.
 }

@@ -18,10 +18,33 @@ test_that("model settings are validated", {
   expect_error(fit(seed = 0.5), "seed must be an integer")
   expect_error(fit(seed = 2^54), "seed must be an integer")
   expect_error(fit(hidden_units = 20000), "Invalid native network configuration")
+  # 50000^2 overflows R integers; the size is computed in double precision.
+  expect_no_warning(expect_error(fit(hidden_units = 50000), "The network is too large"))
   expect_error(splineplsi(d$x, d$z, d$y, num_knots = 1), "num_knots must be an integer >= 2")
   expect_error(splineplsi(d$x, d$z, d$y, degree = -1), "degree must be an integer >= 0")
   expect_error(splineplsi(d$x, d$z, d$y, max_iter = 0), "max_iter must be an integer >= 1")
   expect_error(splineplsi(d$x, d$z, d$y, alpha = -1), "alpha must be finite and nonnegative")
+  # num_knots + 2 * degree exceeds the int range: refused before allocating.
+  expect_error(splineplsi(d$x, d$z, d$y, num_knots = 2^30, degree = 2^30),
+               "Invalid SplinePLSI configuration")
+})
+
+test_that("the native SplinePLSI entry points check their configuration", {
+  d <- simulate(n = 30)
+  call <- function(config, hyper = c(1e-6, 1e-6))
+    .Call(neuralplsi:::C_spline_fit, config, hyper, d$x, d$z, d$y, 0)
+  expect_error(call(c(3, 2, 0, 5, 3, 200)), "Invalid SplinePLSI configuration")
+  expect_error(call(c(3L, 2L, 0L, 5L, 3L)), "Invalid SplinePLSI configuration")
+  expect_error(call(c(3L, 2L, 0L, 5L, -3L, 200L)), "Invalid SplinePLSI configuration")
+  expect_error(call(c(3L, 2L, 0L, 5L, NA, 200L)), "Invalid SplinePLSI configuration")
+  expect_error(call(c(3L, 2L, 0L, 5L, 3L, 200L), 1e-6), "Invalid SplinePLSI configuration")
+  expect_error(call(c(3L, 2L, 0L, .Machine$integer.max, 2L, 200L)),
+               "Invalid SplinePLSI configuration")
+  expect_named(call(c(3L, 2L, 0L, 5L, 3L, 200L)), c("beta", "gamma", "spline", "knots",
+                                                     "diagnostics"))
+  expect_error(.Call(neuralplsi:::C_spline_bootstrap, c(3L, 2L, 0L, .Machine$integer.max, 1L, 200L),
+                     c(1e-6, 1e-6), d$x, d$z, d$y, 2L, 0, 1L, 0, 0.95, 0L),
+               "Invalid SplinePLSI configuration")
 })
 
 test_that("data are validated as in Python", {
@@ -60,6 +83,7 @@ test_that("prediction and bootstrap arguments are validated", {
   fit <- neuralplsi(d$x, d$z, d$y, max_iter = 1)
   expect_error(predict(fit, d$x[, 1:2], d$z), "newx must have 3 columns")
   expect_error(predict(fit, d$x), "newz is required")
+  expect_error(predict(fit, newz = d$z), "newz given without newx")
   expect_error(predict(fit, d$x, d$z[1:5, ]), "same number of rows")
   expect_error(predict(fit, replace(d$x, 1, NaN), d$z), "only finite values")
   expect_error(predict(fit, type = "class"), "should be one of")
@@ -84,8 +108,17 @@ test_that("Cox resamples without events fail the whole bootstrap", {
 test_that("float32 conversion rounds to nearest", {
   # Ties go to even, also at the top of the range, where they overflow.
   values <- c(1 / 3, 0.1, 2^-149, 2^24 + 1, 2^24 + 3, -2^-151, (2 - 2^-23 + 2^-25) * 2^127,
-              (2 - 2^-24) * 2^127)
+              (2 - 2^-24) * 2^127, -(2 - 2^-24) * 2^127, 1e300)
   expect_identical(.Call(neuralplsi:::C_as_float32, values),
                    c(11184811 / 2^25, 13421773 / 2^27, 2^-149, 2^24, 2^24 + 4, -0,
-                     (2 - 2^-23) * 2^127, Inf))
+                     (2 - 2^-23) * 2^127, Inf, -Inf, Inf))
+  # Data are refused exactly where they would round to infinity. Below that,
+  # they pass the conversion, and here the engine refuses the overflowing index.
+  d <- simulate(n = 30)
+  fit <- neuralplsi(d$x, d$z, d$y, max_iter = 1)
+  expect_error(g_function(fit, (2 - 2^-24) * 2^127), "index has values outside the float32 range")
+  expect_error(g_function(fit, -(2 - 2^-24) * 2^127), "index has values outside the float32 range")
+  expect_error(g_function(fit, (2 - 2^-23 + 2^-25) * 2^127), "Nonfinite link prediction")
+  expect_error(predict(fit, replace(d$x, 1, (2 - 2^-24) * 2^127), d$z),
+               "newx has values outside the float32 range")
 })

@@ -164,19 +164,57 @@ export function parseNumber(text, decimalComma = false) {
   return undefined;
 }
 
+// More than this share of missing or non-finite values marks a column as mostly missing.
+export const MOSTLY_MISSING = 0.5;
+// NeuralPLSI computes in float32: larger magnitudes would become infinite there,
+// so they count as non-finite.
+export const FLOAT32_MAX = 3.4028234663852886e38;
+// Text confounders and numeric confounders marked categorical are dummy-coded
+// up to this many levels; numeric columns with at most CODE_LEVELS distinct
+// integer values (other than 0/1) are suggested as categorical.
+export const MAX_LEVELS = 20;
+export const CODE_LEVELS = 10;
+
 // Numeric columns parse as numbers wherever a value is present; others are text.
+// Per column: values (NaN for missing and text, +-Infinity beyond FLOAT32_MAX),
+// numeric, missing (missing tokens), nonfinite (+-Inf and values beyond the
+// float32 range, in numeric columns), beyond (those beyond the float32 range),
+// levels (the distinct non-missing values of a text column, as they are
+// dummy-coded), distinct (distinct finite values of a numeric column, counted up
+// to MAX_LEVELS+1), codes (numeric, not 0/1, with 2 to CODE_LEVELS distinct
+// integer values: suggested as categorical), binary (numeric with every finite
+// value 0 or 1), present (rows with a usable value), up to three distinct example
+// values, and kind: 'numeric', '0/1', 'text' or 'mostly missing'.
 export function describeColumns(table) {
-  const decimalComma = table.delimiter !== ',';
+  const decimalComma = table.delimiter !== ',', n = table.rows.length;
   return table.header.map((name, j) => {
-    const values = new Float64Array(table.rows.length);
-    let text = 0, missing = 0;
-    const levels = new Set();
+    const values = new Float64Array(n), examples = [], seen = new Set();
+    let text = 0, missing = 0, nonfinite = 0, beyond = 0, binary = true, integers = true;
     table.rows.forEach((row, i) => {
-      const v = parseNumber(row[j], decimalComma);
-      if (v === undefined) { ++text; levels.add(row[j].trim()); values[i] = NaN; }
-      else { if (Number.isNaN(v)) ++missing; values[i] = v; }
+      const raw = row[j].trim(), v = parseNumber(raw, decimalComma);
+      if (v === undefined) { ++text; values[i] = NaN; }
+      else if (Number.isNaN(v)) { ++missing; values[i] = NaN; }
+      else if (!Number.isFinite(v) || Math.abs(v) > FLOAT32_MAX) {
+        ++nonfinite; values[i] = Math.sign(v)*Infinity;
+        if (Number.isFinite(v)) ++beyond;
+      } else {
+        values[i] = v;
+        if (v !== 0 && v !== 1) binary = false;
+        if (!Number.isInteger(v)) integers = false;
+        if (seen.size <= MAX_LEVELS) seen.add(v);
+      }
+      if (examples.length < 3 && !MISSING.test(raw) && !examples.includes(raw)) examples.push(raw);
     });
-    return {name, values, numeric: text === 0, missing, levels: [...levels].sort()};
+    const numeric = text === 0, levels = new Set();
+    if (!numeric) for (const row of table.rows) if (!MISSING.test(row[j].trim())) levels.add(row[j].trim());
+    if (!numeric) nonfinite = beyond = 0;
+    const present = n-missing-nonfinite;
+    binary = numeric && binary && present > 0;
+    const distinct = numeric ? seen.size : levels.size;
+    const kind = n && (missing+nonfinite)/n > MOSTLY_MISSING ? 'mostly missing' : !numeric ? 'text' : binary ? '0/1' : 'numeric';
+    return {name, index: j, values, numeric, missing, nonfinite, beyond, present, binary, kind, examples,
+            levels: [...levels].sort(), distinct,
+            codes: numeric && !binary && integers && distinct >= 2 && distinct <= CODE_LEVELS};
   });
 }
 
@@ -190,69 +228,115 @@ function zscore(values, rows) {
   return {mean: m, sd};
 }
 
-export const MAX_LEVELS = 20;
+// The rows of a table with a usable value in every listed column, and the count
+// of the others by the first reason found: a missing value, a non-finite
+// number, or (for the columns in `logged`) a value that is not positive.
+export function completeRows(table, columns, used, logged = []) {
+  const dropped = {missing: 0, nonfinite: 0, nonpositive: 0}, keep = [];
+  for (let i = 0; i < table.rows.length; ++i) {
+    let reason = null;
+    for (const c of used) {
+      const v = c.values[i];
+      if (c.numeric ? Number.isNaN(v) : MISSING.test(table.rows[i][c.index].trim())) reason = 'missing';
+      else if (c.numeric && !Number.isFinite(v)) reason = 'nonfinite';
+      if (reason) break;
+    }
+    if (!reason) for (const c of logged) if (c.values[i] <= 0) { reason = 'nonpositive'; break; }
+    if (reason) ++dropped[reason]; else keep.push(i);
+  }
+  return {keep, dropped};
+}
 
-// A model matrix from chosen CSV columns. Rows with a missing or non-finite value
-// in any chosen column (or a non-positive exposure when logging) are dropped
-// and counted. Text covariates are dummy-coded against their first level.
-// Standardization uses the mean and population SD of the retained rows.
-export function prepareTable(table, {family, outcome, event, exposures, covariates = [], log = false, standardize = false}) {
-  const columns = describeColumns(table), byName = new Map(columns.map(c => [c.name, c]));
+// The levels of a text column in the given rows, sorted; the first is the
+// reference and each other level becomes one indicator column.
+export function textLevels(table, column, rows) {
+  return [...new Set(rows.map(r => table.rows[r][column.index].trim()))].sort();
+}
+
+// The levels of a numeric column treated as categorical, in the given rows,
+// sorted by value: the lowest is the reference.
+export function numericLevels(column, rows) {
+  return [...new Set(rows.map(r => column.values[r]))].sort((a, b) => a-b);
+}
+
+// The levels of a confounder dummy-coded in the given rows: text columns, and
+// numeric ones listed as categorical.
+export const confounderLevels = (table, column, rows) =>
+  column.numeric ? numericLevels(column, rows) : textLevels(table, column, rows);
+
+// A model matrix from chosen CSV columns: the chemical exposures X, the
+// confounders Z (`confounders`, or `covariates` as before) and the outcome, with
+// X and Z columns in the order given. Rows with a missing or non-finite value in
+// any chosen column (or a value of zero or below in a logged column) are dropped
+// and counted. `log` is true (every exposure), false, or the exposures to log;
+// `standardize` z-scores every exposure after its log. Text confounders, and
+// numeric ones listed in `categorical`, are dummy-coded against their first
+// level (the lowest number). A continuous outcome can be logged (`logOutcome`)
+// and standardized (`standardizeOutcome`). Standardization uses the mean and
+// population SD of the retained rows. The result's `transforms` say how each
+// model column was made from the file. `columns` may pass describeColumns(table).
+export function prepareTable(table, {family, outcome, event, exposures, confounders, covariates = [], log = false,
+                                     standardize = false, categorical = [], logOutcome = false,
+                                     standardizeOutcome = false}, columns = describeColumns(table)) {
+  confounders ??= covariates;
+  const byName = new Map(columns.map(c => [c.name, c]));
   const get = name => {
     const c = byName.get(name);
     if (!c) throw new Error(`Unknown column ${name}`);
     return c;
   };
-  if (!exposures.length) throw new Error('Choose at least one exposure');
-  const used = [outcome, ...(family === 'cox' ? [event] : []), ...exposures, ...covariates];
+  if (!exposures.length) throw new Error('Choose at least one chemical exposure (X)');
+  const used = [outcome, ...(family === 'cox' ? [event] : []), ...exposures, ...confounders];
   if (new Set(used).size !== used.length) throw new Error('A column can play only one role');
   for (const name of [outcome, ...(family === 'cox' ? [event] : []), ...exposures])
     if (!get(name).numeric) throw new Error(`Column ${name} contains text; it must be numeric`);
-  const n0 = table.rows.length, dropped = {missing: 0, nonfinite: 0, nonpositive: 0};
-  const keep = [];
-  for (let i = 0; i < n0; ++i) {
-    let reason = null;
-    for (const name of used) {
-      const c = get(name), v = c.values[i];
-      if (c.numeric ? Number.isNaN(v) : MISSING.test(table.rows[i][table.header.indexOf(name)].trim())) reason = 'missing';
-      else if (c.numeric && !Number.isFinite(v)) reason = 'nonfinite';
-      if (reason) break;
-    }
-    if (!reason && log) for (const name of exposures) if (get(name).values[i] <= 0) { reason = 'nonpositive'; break; }
-    if (reason) ++dropped[reason]; else keep.push(i);
-  }
+  const logged = new Set(log === true ? exposures : log || []), asLevels = new Set(categorical);
+  const continuous = family === 'continuous', logY = continuous && logOutcome, scaleY = continuous && standardizeOutcome;
+  const n0 = table.rows.length;
+  const {keep, dropped} = completeRows(table, columns, used.map(get),
+    [...exposures.filter(name => logged.has(name)), ...(logY ? [outcome] : [])].map(get));
   const n = keep.length;
-  if (n < 2) throw new Error(`Only ${n} complete row${n === 1 ? '' : 's'} remain`);
-  const p = exposures.length, x = new Float64Array(n*p), scaling = [];
+  if (n < 2) throw new Error(`Only ${n} complete ${n === 1 ? 'row remains' : 'rows remain'}`);
+  const p = exposures.length, x = new Float64Array(n*p), scaling = [], transforms = {x: [], z: [], y: []};
   exposures.forEach((name, j) => {
-    const values = get(name).values.map(v => log ? Math.log(v) : v);
+    const takeLog = logged.has(name), values = get(name).values.map(v => takeLog ? Math.log(v) : v);
     const {mean, sd} = zscore(values, keep);
-    if (!(sd > 0)) throw new Error(`Exposure ${name} is constant in the complete rows`);
+    if (!(sd > 0)) throw new Error(`Chemical exposure ${name} is constant in the complete rows`);
     scaling.push(standardize ? {mean, sd} : null);
     keep.forEach((r, i) => { x[i*p+j] = standardize ? (values[r]-mean)/sd : values[r]; });
+    transforms.x.push({name: takeLog ? `log ${name}` : name, column: name, log: takeLog,
+                       mean: standardize ? mean : null, sd: standardize ? sd : null});
   });
-  const zNames = [], zColumns = [];
-  for (const name of covariates) {
-    const c = get(name), at = table.header.indexOf(name);
-    if (c.numeric) { zNames.push(name); zColumns.push(keep.map(r => c.values[r])); continue; }
-    const levels = [...new Set(keep.map(r => table.rows[r][at].trim()))].sort();
-    if (levels.length > MAX_LEVELS) throw new Error(`Covariate ${name} has ${levels.length} levels; at most ${MAX_LEVELS} are dummy-coded`);
+  const zColumns = [];
+  for (const name of confounders) {
+    const c = get(name), at = c.index;
+    if (c.numeric && !asLevels.has(name)) {
+      transforms.z.push({name, column: name});
+      zColumns.push(keep.map(r => c.values[r]));
+      continue;
+    }
+    const levels = confounderLevels(table, c, keep);
+    if (levels.length > MAX_LEVELS) throw new Error(`Confounder ${name} has ${levels.length} levels; at most ${MAX_LEVELS} are dummy-coded`);
     for (const level of levels.slice(1)) {
-      zNames.push(`${name}=${level}`);
-      zColumns.push(keep.map(r => table.rows[r][at].trim() === level ? 1 : 0));
+      transforms.z.push({name: `${name}=${level}`, column: name, equals: level, reference: levels[0]});
+      zColumns.push(keep.map(r => (c.numeric ? c.values[r] : table.rows[r][at].trim()) === level ? 1 : 0));
     }
   }
-  const q = zNames.length, z = new Float64Array(n*q);
+  const q = zColumns.length, z = new Float64Array(n*q);
   zColumns.forEach((col, j) => col.forEach((v, i) => { z[i*q+j] = v; }));
   const yd = family === 'cox' ? 2 : 1, y = new Float64Array(n*yd);
+  const time = get(outcome).values.map(v => logY ? Math.log(v) : v), {mean, sd} = zscore(time, keep);
+  if (scaleY && !(sd > 0)) throw new Error(`The outcome ${outcome} is constant in the complete rows`);
   keep.forEach((r, i) => {
-    y[i*yd] = get(outcome).values[r];
+    y[i*yd] = scaleY ? (time[r]-mean)/sd : time[r];
     if (yd === 2) y[2*i+1] = get(event).values[r];
   });
   checkOutcome(family, y, n);
-  return {source: 'csv', family, n, p, q, x, z, y, scaling,
-          names: {x: exposures.map(name => log ? `log ${name}` : name), z: zNames,
-                  y: yd === 2 ? [outcome, event] : [outcome]},
+  transforms.y.push({name: `${logY ? 'log ' : ''}${outcome}${scaleY ? ' (z-score)' : ''}`, column: outcome, log: logY,
+                     mean: scaleY ? mean : null, sd: scaleY ? sd : null});
+  if (yd === 2) transforms.y.push({name: event, column: event});
+  return {source: 'csv', family, n, p, q, x, z, y, scaling, transforms,
+          names: {x: transforms.x.map(t => t.name), z: transforms.z.map(t => t.name), y: transforms.y.map(t => t.name)},
           rows: n0, dropped};
 }
 
@@ -287,15 +371,16 @@ export const NHANES_SETTINGS = {family: 'continuous', intercept: true, activatio
 
 export function prepareNhanes(text) {
   const table = parseCsv(text), columns = describeColumns(table), byName = new Map(columns.map(c => [c.name, c]));
-  const all = Array.from(table.rows.keys());
-  const standard = values => {
+  const all = Array.from(table.rows.keys()), transforms = {x: [], z: [], y: []};
+  // Logged (unless log is false) and z-scored over the rows with a value, recorded in `into`.
+  const standard = (name, label, log, into) => {
+    const values = byName.get(name).values.map(v => !log ? v : v > 0 ? Math.log(v) : NaN);
     const rows = all.filter(i => Number.isFinite(values[i])), {mean, sd} = zscore(values, rows);
+    into.push({name: label, column: name, log, mean, sd});
     return values.map(v => Number.isFinite(v) ? (v-mean)/sd : NaN);
   };
-  const logged = values => standard(values.map(v => v > 0 ? Math.log(v) : NaN));
-  const exposures = NHANES_EXPOSURES.map(([name]) =>
-    name === 'a5.Retinol' ? standard(byName.get(name).values) : logged(byName.get(name).values));
-  const outcome = logged(byName.get('triglyceride').values);
+  const exposures = NHANES_EXPOSURES.map(([name, label]) => standard(name, label, name !== 'a5.Retinol', transforms.x));
+  const outcome = standard('triglyceride', 'log triglyceride (z-score)', true, transforms.y);
   const age = byName.get('age').values, sex = byName.get('sex').values, race = byName.get('race').values;
   const keep = all.filter(i => exposures.every(e => Number.isFinite(e[i])) && Number.isFinite(outcome[i]) &&
     Number.isFinite(age[i]) && [1, 2].includes(sex[i]) && [1, 2, 3, 4, 5].includes(race[i]));
@@ -306,7 +391,9 @@ export function prepareNhanes(text) {
     z.set([age[r], sex[r]-1, +(race[r] === 2), +(race[r] === 3), +(race[r] === 4), +(race[r] === 5)], i*q);
     y[i] = outcome[r];
   });
-  return {source: 'nhanes', family: 'continuous', n, p, q, x, z, y, rows: table.rows.length,
+  transforms.z.push({name: 'age', column: 'age'}, {name: 'female', column: 'sex', equals: 2, reference: 1},
+    ...NHANES_COVARIATES.slice(2).map((name, k) => ({name, column: 'race', equals: k+2, reference: 1})));
+  return {source: 'nhanes', family: 'continuous', n, p, q, x, z, y, rows: table.rows.length, transforms,
           dropped: {missing: table.rows.length-n, nonfinite: 0, nonpositive: 0},
           names: {x: NHANES_EXPOSURES.map(([, label]) => label), z: NHANES_COVARIATES, y: ['log triglyceride (z-score)']}};
 }

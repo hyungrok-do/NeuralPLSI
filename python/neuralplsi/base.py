@@ -55,10 +55,18 @@ class _SummaryMixin:
         })
 
 
+def covariates(Z, X, dtype=np.float64):
+    """Z as an array; None means no covariates, an (n, 0) matrix."""
+    if Z is None:
+        return np.empty((len(X) if np.ndim(X) else 0, 0), dtype=dtype)
+    return np.asarray(Z, dtype=dtype)
+
+
 def validate_data(X, Z, y, family, dtype=np.float64):
     if family not in ('continuous', 'binary', 'cox'):
         raise ValueError("family must be 'continuous', 'binary', or 'cox'")
-    X, Z, y = [np.asarray(a, dtype=dtype) for a in (X, Z, y)]
+    X, y = np.asarray(X, dtype=dtype), np.asarray(y, dtype=dtype)
+    Z = covariates(Z, X, dtype)
     if X.ndim != 2 or Z.ndim != 2 or X.shape[1] < 1:
         raise ValueError('X and Z must be matrices, with at least one exposure')
     if len(X) < 2 or len(Z) != len(X) or y.ndim == 0 or len(y) != len(X):

@@ -7,6 +7,7 @@ import platform
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 from numbers import Integral
 
@@ -73,13 +74,26 @@ def build_library():
 
 
 def library_path():
-    """NEURALPLSI_LIBRARY, else the library installed with the package, else a checkout build."""
-    if os.environ.get('NEURALPLSI_LIBRARY'):
-        return Path(os.environ['NEURALPLSI_LIBRARY'])
-    for name in LIBRARY_NAMES:
-        path = Path(__file__).with_name('_lib')/name
-        if path.is_file():
-            return path
+    """NEURALPLSI_LIBRARY, else the library installed with the package, else a checkout build.
+
+    The installed library is searched in every directory of the package path:
+    an editable install keeps the Python sources in the checkout and the
+    CMake-built library in site-packages.
+    """
+    value = os.environ.get('NEURALPLSI_LIBRARY')
+    if value:
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            raise RuntimeError(f'NEURALPLSI_LIBRARY={value} does not exist. It overrides the '
+                               'library installed with the package; unset it to use that one.')
+        return path
+    package = sys.modules.get(__package__)
+    directories = [Path(directory) for directory in getattr(package, '__path__', [])]
+    for directory in directories+[Path(__file__).parent]:
+        for name in LIBRARY_NAMES:
+            path = directory/'_lib'/name
+            if path.is_file():
+                return path
     return build_library()
 
 
@@ -87,6 +101,13 @@ def library_path():
 def library():
     path = library_path()
     lib = ctypes.CDLL(str(path))
+    if getattr(lib, 'nplsi_version', None) is None:
+        raise RuntimeError(f'{path} is not a NeuralPLSI {__version__} engine library (it has no '
+                           'nplsi_version). Rebuild it, or unset NEURALPLSI_LIBRARY.')
+    lib.nplsi_version.argtypes, lib.nplsi_version.restype = [], ctypes.c_char_p
+    version = lib.nplsi_version().decode()
+    if version != __version__:
+        raise RuntimeError(f'{path} is engine version {version}, but this package is version {__version__}')
     fp = np.ctypeslib.ndpointer(dtype=np.float32, flags='C_CONTIGUOUS')
     ip = np.ctypeslib.ndpointer(dtype=np.int32, flags='C_CONTIGUOUS')
     dp = np.ctypeslib.ndpointer(dtype=np.float64, flags='C_CONTIGUOUS')
@@ -94,7 +115,6 @@ def library():
     optional_dp = ctypes.POINTER(ctypes.c_double)
     size, chars = ctypes.c_size_t, ctypes.c_char_p
     signatures = {
-        'nplsi_version': ([], chars),
         'nplsi_error': ([], chars),
         'nplsi_create': ([ip, fp, seed], pointer),
         'nplsi_destroy': ([pointer], None),
@@ -128,9 +148,6 @@ def library():
     for name, (arguments, result) in signatures.items():
         function = getattr(lib, name)
         function.argtypes, function.restype = arguments, result
-    if lib.nplsi_version().decode() != __version__:
-        raise RuntimeError(f'{path} is engine version {lib.nplsi_version().decode()}, '
-                           f'but this package is version {__version__}')
     return lib
 
 
@@ -267,9 +284,10 @@ class NativeModel:
         if mode == 3:
             Z = np.empty(0, dtype=np.float32)
         else:
-            Z = np.ascontiguousarray(Z, dtype=np.float32)
+            Z = np.empty((len(X), 0), dtype=np.float32) if Z is None else np.ascontiguousarray(Z, dtype=np.float32)
             if Z.shape != (len(X), self.config[1]) or not np.isfinite(Z).all():
-                raise ValueError('Z must be finite and match the fitted covariate dimensions')
+                raise ValueError(f'Z must be finite, with shape ({len(X)}, {int(self.config[1])}) '
+                                 'to match the fitted covariates (None when there are none)')
         if isinstance(batch_size, bool) or not isinstance(batch_size, Integral) or batch_size < 1:
             raise ValueError('batch_size must be a positive integer')
         result = np.empty(len(X), dtype=np.float32)

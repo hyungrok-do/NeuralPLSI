@@ -10,17 +10,19 @@ Description: Fits partial-linear single-index models g(x'beta) + z'gamma for
     <doi:10.48550/arXiv.2512.11593>) or a B-spline link ('SplinePLSI', Wang et
     al. (2020) <doi:10.1186/s12940-020-00644-4>), and pairs-bootstrap inference
     on native threads. Fitting, prediction, the bootstrap and model files use
-    the same C++ engine as the Python package 'neuralplsi', so both give
-    identical results on the same machine.
+    the same C++ engine as the Python package 'neuralplsi', so on the same
+    machine both give identical fits, bootstrap draws and 'NeuralPLSI'
+    predictions; 'SplinePLSI' predictions agree to rounding error.
 License: MIT + file LICENSE
 URL: https://github.com/hyungrok-do/NeuralPLSI
 BugReports: https://github.com/hyungrok-do/NeuralPLSI/issues
+SystemRequirements: C++17 (macOS >= 10.15)
 Imports:
     graphics,
     stats
 Suggests:
     survival,
-    testthat (>= 3.0.0)
+    testthat (>= 3.1.5)
 Config/testthat/edition: 3
 Encoding: UTF-8
 RoxygenNote: 7.3.3
