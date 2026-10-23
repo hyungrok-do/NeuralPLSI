@@ -51,6 +51,12 @@ test_that("intercepts, data frames, vectors and the AdamW baseline work", {
   adam <- small_fit(data, "binary", optimizer = "adam", max_iter = 20, batch_size = 32)
   expect_identical(adam$settings$optimizer, "adam")
   expect_lte(adam$diagnostics$best_epoch, 20)
+  exact <- small_fit(data, "binary", optimizer = "adam_exact_gamma", max_iter = 20, batch_size = 32)
+  expect_identical(exact$beta, adam$beta)
+  expect_identical(exact$diagnostics$best_epoch, adam$diagnostics$best_epoch)
+  expect_identical(adam$diagnostics$gamma_iterations, 0)
+  expect_gt(exact$diagnostics$gamma_iterations, 0)
+  expect_false(identical(exact$gamma, adam$gamma))
 })
 
 test_that("models without covariates use z = NULL", {

@@ -147,7 +147,7 @@ optimizer='lbfgs', batch_size=64, learning_rate=1e-3, patience=10)`
 | `max_iter` | L-BFGS iterations (AdamW epochs); 0 only initializes. |
 | `add_intercept` | Intercept for continuous and binary outcomes. Cox models reject it. |
 | `initial` | Start from a linear, logistic or Cox regression fitted to all rows. |
-| `optimizer` | `'lbfgs'` (the estimator) or `'adam'`, the minibatch AdamW baseline, with `batch_size`, `learning_rate` and `patience`. The baseline is for comparison and is not recommended. |
+| `optimizer` | `'lbfgs'` (the estimator), `'adam'`, the minibatch AdamW baseline, with `batch_size`, `learning_rate` and `patience`, or `'adam_exact_gamma'`, the same AdamW fit followed by the exact gamma fit of L-BFGS. The baseline is for comparison and is not recommended. |
 
 Each fit uses all rows: L-BFGS minimizes the outcome loss plus a `g(0)^2` anchor
 and the penalty until the objective stops decreasing, then gamma (and the

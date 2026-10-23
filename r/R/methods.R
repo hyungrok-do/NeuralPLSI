@@ -21,8 +21,9 @@ fit_line <- function(object) {
     sprintf("Network: %s. L-BFGS: %d iterations, penalized objective %s.", network,
             as.integer(d$iterations), format(d$objective, digits = 6))
   else
-    sprintf("Network: %s. AdamW: %d epochs, best validation loss %s at epoch %d.", network,
-            as.integer(d$iterations), format(d$objective, digits = 6), as.integer(d$best_epoch))
+    sprintf("Network: %s. AdamW: %d epochs, best validation loss %s at epoch %d%s.", network,
+            as.integer(d$iterations), format(d$objective, digits = 6), as.integer(d$best_epoch),
+            if (s$optimizer == "adam_exact_gamma") ", then the exact gamma fit" else "")
 }
 
 #' Methods for NeuralPLSI and SplinePLSI fits

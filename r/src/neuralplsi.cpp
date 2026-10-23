@@ -568,7 +568,8 @@ void train(const int32_t* config,const float* hyper,float* weights,
 // pass per epoch from next_order. The validation loss (outcome loss plus the
 // g(0)^2 anchor) is checked after each epoch. Training stops after config[12]
 // epochs without improvement or config[8] epochs, and the best checkpoint is
-// restored. Gamma is not refitted. max_iter=0 performs initialization only.
+// restored. Gamma is not refitted here; optimizer 2 then fits it exactly on all
+// rows (fit_state). max_iter=0 performs initialization only.
 template<class NextOrder>
 void train_adam(const int32_t* config,const float* hyper,float* weights,
                 const float* tx,const float* tz,const float* ty,int nt,
@@ -662,7 +663,7 @@ struct State {
         std::copy_n(c,NPLSI_CONFIG_SIZE,config.begin());
         std::copy_n(h,NPLSI_HYPER_SIZE,hyper.begin());
         Model m(c,h[1]);
-        if(c[8]<0 || c[8]>1000000 || (c[9]!=0 && c[9]!=1) || (c[10]!=0 && c[10]!=1) ||
+        if(c[8]<0 || c[8]>1000000 || (c[9]!=0 && c[9]!=1) || c[10]<0 || c[10]>2 ||
            c[11]<1 || c[11]>10000000 || c[12]<1 || c[12]>1000000)
             throw std::invalid_argument("Invalid training configuration");
         if(!std::isfinite(h[0]) || h[0]<0)
@@ -817,7 +818,15 @@ void fit_state(State& s,const float* x,const float* z,const float* y,int n,
         x=work.x.data(); z=work.z.data(); y=work.y.data();
         validate_arrays(m,x,z,y,n,true);  // e.g. a Cox resample without events
     }
-    if(s.config[10]==1) { fit_adam(s,x,z,y,n,seed,work); s.canonicalize(); return; }
+    if(s.config[10]!=0) {
+        fit_adam(s,x,z,y,n,seed,work);
+        if(s.config[10]==2) {
+            // The ablation: the same AdamW fit, then the exact gamma fit of L-BFGS.
+            Model m(s.config.data(),s.hyper[1]); Network net(m);
+            s.diagnostics[1]=profile_gamma(m,net,s.weights,x,z,y,n,work.training);
+        }
+        s.canonicalize(); return;
+    }
     s.initialize(seed);
     if(s.config[9]) initialize_linear(s,x,z,y,n);
     train(s.config.data(),s.hyper.data(),s.weights.data(),x,z,y,n,s.diagnostics.data(),work.training);

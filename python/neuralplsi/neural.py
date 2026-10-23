@@ -29,7 +29,9 @@ class NeuralPLSI(_SummaryMixin):
     link network) on minibatches of batch_size rows from a random 80% of the
     data, for at most max_iter epochs, stopping after patience epochs without
     improvement in the loss on the other 20% and restoring the best
-    checkpoint. Gamma is not refitted.
+    checkpoint. Gamma is not refitted. optimizer='adam_exact_gamma' is the same
+    AdamW fit followed by the exact gamma fit of L-BFGS on all rows, an
+    ablation that separates the two parts of typical training.
     """
     def __init__(self, family='continuous', max_iter=5000, weight_decay=1e-3,
                  hidden_units=32, n_hidden_layers=2,
@@ -45,7 +47,7 @@ class NeuralPLSI(_SummaryMixin):
         if activation not in ACTIVATIONS:
             raise ValueError('Supported activations: ELU, LeakyReLU, ReLU and Tanh')
         if optimizer not in OPTIMIZERS:
-            raise ValueError("optimizer must be 'lbfgs' or 'adam'")
+            raise ValueError("optimizer must be 'lbfgs', 'adam' or 'adam_exact_gamma'")
         for name, value, minimum in [('max_iter', max_iter, 0), ('hidden_units', hidden_units, 1),
                                       ('n_hidden_layers', n_hidden_layers, 1),
                                       ('batch_size', batch_size, 1), ('patience', patience, 1)]:

@@ -15,6 +15,8 @@
 #' not a recommended estimator: AdamW on minibatches of \code{batch_size} rows
 #' of a random 80\% of the data, for at most \code{max_iter} epochs, stopping
 #' after \code{patience} epochs without improvement on the other 20\%.
+#' \code{optimizer = "adam_exact_gamma"} is the same AdamW fit followed by the
+#' exact \eqn{\gamma} fit of L-BFGS on all rows, an ablation of the two.
 #'
 #' Data are converted to float32 (round to nearest, as numpy's
 #' \code{astype(float32)}), so a fit equals the Python fit of the same data
@@ -37,7 +39,8 @@
 #' @param add_intercept Fit an intercept (not for Cox outcomes). \code{x} and
 #'   \code{z} then cannot have a column named \code{(Intercept)}.
 #' @param initial Start from a linear, logistic or Cox regression fit.
-#' @param optimizer \code{"lbfgs"} or the \code{"adam"} baseline.
+#' @param optimizer \code{"lbfgs"}, the \code{"adam"} baseline, or
+#'   \code{"adam_exact_gamma"}, the baseline followed by the exact \eqn{\gamma} fit.
 #' @param batch_size,learning_rate,patience AdamW settings.
 #' @param seed Integer seed in \eqn{[0, 2^{53}]} for the initialization.
 #' @return An object of class \code{c("neuralplsi", "plsi")}: a list with
@@ -60,8 +63,8 @@ neuralplsi <- function(x, z, y, family = c("continuous", "binary", "cox"),
                        hidden_units = 32, n_hidden_layers = 2,
                        activation = c("LeakyReLU", "ELU", "ReLU", "Tanh"),
                        weight_decay = 1e-3, max_iter = 5000, add_intercept = FALSE,
-                       initial = FALSE, optimizer = c("lbfgs", "adam"), batch_size = 64,
-                       learning_rate = 1e-3, patience = 10, seed = 0) {
+                       initial = FALSE, optimizer = c("lbfgs", "adam", "adam_exact_gamma"),
+                       batch_size = 64, learning_rate = 1e-3, patience = 10, seed = 0) {
   call <- match.call()
   family <- match.arg(family)
   activation <- match.arg(activation)

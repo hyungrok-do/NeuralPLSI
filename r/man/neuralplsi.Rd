@@ -16,7 +16,7 @@ neuralplsi(
   max_iter = 5000,
   add_intercept = FALSE,
   initial = FALSE,
-  optimizer = c("lbfgs", "adam"),
+  optimizer = c("lbfgs", "adam", "adam_exact_gamma"),
   batch_size = 64,
   learning_rate = 0.001,
   patience = 10,
@@ -50,7 +50,8 @@ indicators.}
 
 \item{initial}{Start from a linear, logistic or Cox regression fit.}
 
-\item{optimizer}{\code{"lbfgs"} or the \code{"adam"} baseline.}
+\item{optimizer}{\code{"lbfgs"}, the \code{"adam"} baseline, or
+\code{"adam_exact_gamma"}, the baseline followed by the exact \eqn{\gamma} fit.}
 
 \item{batch_size, learning_rate, patience}{AdamW settings.}
 
@@ -79,6 +80,8 @@ length and \eqn{\beta_1 \ge 0}. With \eqn{\beta} and \eqn{g} fixed,
 not a recommended estimator: AdamW on minibatches of \code{batch_size} rows
 of a random 80\% of the data, for at most \code{max_iter} epochs, stopping
 after \code{patience} epochs without improvement on the other 20\%.
+\code{optimizer = "adam_exact_gamma"} is the same AdamW fit followed by the
+exact \eqn{\gamma} fit of L-BFGS on all rows, an ablation of the two.
 
 Data are converted to float32 (round to nearest, as numpy's
 \code{astype(float32)}), so a fit equals the Python fit of the same data

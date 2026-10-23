@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from neuralplsi import NeuralPLSI
-from neuralplsi.native import NativeModel, bootstrap_indices
+from neuralplsi.native import NativeModel, bootstrap_indices, outcome_loss_gradient
 from neuralplsi.simulation import simulate_data
 
 
@@ -76,8 +76,46 @@ class AdamBaselineTest(unittest.TestCase):
                     np.testing.assert_array_equal(a['beta_samples'][r], beta)
                     np.testing.assert_array_equal(a['gamma_samples'][r], gamma)
 
+    def test_exact_gamma_option_refits_only_gamma_on_all_rows(self):
+        grid = np.linspace(-2, 2, 9)
+        for family in ('continuous', 'binary', 'cox'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(200, outcome=family, seed=4)
+                x, z, y = (a.astype('float32') for a in (x, z, y))
+                base = baseline(family).fit(x, z, y, random_state=2)
+                exact = baseline(family, optimizer='adam_exact_gamma').fit(x, z, y, random_state=2)
+                # The AdamW fit is shared: beta, the link and the selected epoch are identical.
+                np.testing.assert_array_equal(exact.beta, base.beta)
+                np.testing.assert_array_equal(exact.g_function(grid), base.g_function(grid))
+                d, e = base.fit_diagnostics, exact.fit_diagnostics
+                self.assertEqual((e['iterations'], e['best_epoch'], e['objective']),
+                                 (d['iterations'], d['best_epoch'], d['objective']))
+                self.assertEqual(d['gamma_iterations'], 0)
+                self.assertGreater(e['gamma_iterations'], 0)
+                self.assertFalse(np.array_equal(exact.gamma, base.gamma))
+                # Gamma and the intercept are the exact fit on all rows, given the index and link.
+                g = exact.predict_gxb(x).astype(float)
+                coefficients = np.append(exact.gamma, exact.intercept_val if family != 'cox' else [])
+                if family == 'continuous':
+                    design = np.column_stack([z, np.ones(len(x))])
+                    expected = np.linalg.lstsq(design, y-g, rcond=None)[0]
+                    np.testing.assert_allclose(coefficients, expected, atol=1e-5)
+                else:
+                    _, delta = outcome_loss_gradient(exact.predict(x, z), y, family)
+                    design = z if family == 'cox' else np.column_stack([z, np.ones(len(x))])
+                    np.testing.assert_allclose(design.T@delta.astype(float), 0., atol=1e-5)
+                # Bootstrap refits follow the same procedure.
+                before = exact.net.to_bytes()
+                draws = exact.inference_bootstrap(x, z, y, n_samples=3, random_state=9, n_jobs=2)
+                for r in range(3):
+                    rows = bootstrap_indices(len(x), 9, r)
+                    fitted = NativeModel.from_bytes(before)
+                    fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r)
+                    self.assertGreater(fitted.fit_diagnostics['gamma_iterations'], 0)
+                    np.testing.assert_array_equal(draws['gamma_samples'][r], fitted.coefficients()[1])
+
     def test_invalid_settings(self):
-        for options in (dict(optimizer='sgd'), dict(learning_rate=0.), dict(patience=0), dict(batch_size=0)):
+        for options in (dict(optimizer='sgd'), dict(optimizer='adam_gamma'), dict(learning_rate=0.), dict(patience=0), dict(batch_size=0)):
             with self.subTest(**options):
                 with self.assertRaises(ValueError):
                     baseline('continuous', **options)

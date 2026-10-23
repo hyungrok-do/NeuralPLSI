@@ -43,9 +43,11 @@ OUTCOMES = ['continuous', 'binary', 'cox']
 SHAPE_LABEL = {'linear': 'Linear', 'sfun': 'S-shape', 'sigmoid': 'Sigmoid'}
 OUTCOME_LABEL = {'continuous': 'Continuous', 'binary': 'Binary', 'cox': 'Cox'}
 MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
-               'NeuralPLSI-Adam': 'NeuralPLSI, minibatch AdamW with early stopping'}
-MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73'}
-MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2}
+               'NeuralPLSI-Adam': 'NeuralPLSI, minibatch AdamW with early stopping',
+               'NeuralPLSI-AdamGamma': 'the same AdamW fit, then the exact γ fit'}
+MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73',
+               'NeuralPLSI-AdamGamma': '#CC79A7'}
+MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2, 'NeuralPLSI-AdamGamma': 3}
 SIZE_MARKER = ['o', 's', '^', 'D']
 SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964

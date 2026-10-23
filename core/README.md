@@ -88,7 +88,7 @@ A model is created from two arrays:
 - `config`, 13 `int32`: `p, q, width, hidden_layers, intercept, family,
   activation, parameter_count, max_iter, linear_init, optimizer, batch_size,
   patience`. family: continuous 0, binary 1, Cox 2. activation: ELU 0,
-  LeakyReLU 1, ReLU 2, Tanh 3. optimizer: L-BFGS 0, AdamW baseline 1.
+  LeakyReLU 1, ReLU 2, Tanh 3. optimizer: L-BFGS 0, AdamW baseline 1, AdamW baseline then exact gamma 2.
   `parameter_count = p + q + 1 + 2*width + (hidden_layers-1)*(width^2 + width) + width + 1 + intercept`.
   `batch_size` and `patience` must be at least 1 even for L-BFGS.
 - `hyper`, 3 `float`: penalty, index sign (1 for a new model), AdamW learning
@@ -179,6 +179,13 @@ improvement in the loss on the other 20%, or after `max_iter` epochs, and
 restores the best checkpoint. Gamma is not refitted. The simulations run it as
 `NeuralPLSI-Adam`, with at most 200 epochs, batch size 64, weight decay 1e-4
 and patience 10.
+
+`optimizer=2` runs the same AdamW fit and then the exact gamma fit of L-BFGS:
+Newton iterations for gamma and the optional intercept on all rows, with the
+link and index fixed. It is an ablation that separates the two parts of the
+baseline, early stopping on gamma and minibatch training of beta and g. The
+diagnostics then report the gamma iterations; the objective stays the best
+validation loss. The simulations run it as `NeuralPLSI-AdamGamma`.
 
 ## SplinePLSI
 

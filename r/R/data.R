@@ -3,7 +3,7 @@
 
 families <- c(continuous = 0L, binary = 1L, cox = 2L)
 activations <- c(ELU = 0L, LeakyReLU = 1L, ReLU = 2L, Tanh = 3L)
-optimizers <- c(lbfgs = 0L, adam = 1L)
+optimizers <- c(lbfgs = 0L, adam = 1L, adam_exact_gamma = 2L)
 bootstrap_protocol <- "splitmix64_bootstrap_v1"
 
 as_count <- function(value, name, minimum) {

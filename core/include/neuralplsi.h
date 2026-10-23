@@ -11,7 +11,8 @@ extern "C" {
            parameter_count, max_iter, linear_init, optimizer, batch_size, patience.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
-   optimizer: full-batch L-BFGS=0, minibatch AdamW baseline=1. max_iter counts
+   optimizer: full-batch L-BFGS=0, minibatch AdamW baseline=1, the AdamW
+   baseline followed by the exact gamma fit of L-BFGS=2. max_iter counts
    L-BFGS iterations or AdamW epochs; batch_size and patience apply to AdamW.
    Hyper: penalty (L2 on the link network; decoupled weight decay for AdamW),
           index_sign, learning_rate (AdamW). */
@@ -26,7 +27,8 @@ void nplsi_destroy(void* handle);
 /* Every fit starts from a fresh initialization drawn from seed. L-BFGS runs
    on all rows and then fits gamma exactly. The AdamW baseline is typical
    neural-network training: minibatches on 80% of rows, early stopping on the
-   other 20%, the best checkpoint restored and no further gamma fit. */
+   other 20%, the best checkpoint restored and no further gamma fit; optimizer 2
+   then fits gamma (and the intercept) exactly on all rows. */
 int nplsi_fit(void* handle, const float* x, const float* z, const float* y,
               int n, uint64_t seed);
 /* Prediction mode: 0=linear predictor, 1=probability, 2=partial hazard,

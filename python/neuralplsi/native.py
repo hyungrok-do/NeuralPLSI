@@ -17,7 +17,7 @@ from ._version import __version__
 
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
-OPTIMIZERS = {'lbfgs': 0, 'adam': 1}
+OPTIMIZERS = {'lbfgs': 0, 'adam': 1, 'adam_exact_gamma': 2}
 RNG_PROTOCOL = 'splitmix64_v1'
 BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 

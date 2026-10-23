@@ -30,7 +30,9 @@ bootstrap with random state `s`. NeuralPLSI uses the ELU activation
 
 `--models` takes `NeuralPLSI`, `PLSI` (SplinePLSI), `NeuralPLSI-Adam` (the
 minibatch AdamW baseline: at most 200 epochs, batch size 64, learning rate
-1e-3, weight decay 1e-4, patience 10) or `all` (NeuralPLSI and SplinePLSI).
+1e-3, weight decay 1e-4, patience 10), `NeuralPLSI-AdamGamma` (the same AdamW
+fit followed by the exact gamma fit of L-BFGS) or `all` (NeuralPLSI and
+SplinePLSI).
 The scenario is set by `--n_instances`, `--g_fn` (`linear`, `sfun`, `sigmoid`),
 `--outcome` (`continuous`, `binary`, `cox`) and `--exposure_dist` (`normal`,
 `uniform`, `t`). The defaults are 500 replicates (`--n_replicates`) and B = 100
@@ -70,7 +72,8 @@ scenarios (`--dry-run` prints the 54 commands).
 
 `run_simulation.slurm` (n = 1000) and `run_simulation_2000.slurm` (n = 2000) are
 array jobs that call `run_simulation_hpc.sh <n>`. Array IDs 0-8 run NeuralPLSI,
-9-17 SplinePLSI and 18-26 the AdamW baseline `NeuralPLSI-Adam`. In each block
+9-17 SplinePLSI, 18-26 the AdamW baseline `NeuralPLSI-Adam` and 27-35
+`NeuralPLSI-AdamGamma`. In each block
 of nine, the first three IDs use the sigmoid g, the next three sfun and the
 last three linear g, each with continuous, binary and cox outcomes in that
 order (ID 13 is SplinePLSI, sfun, binary). The scripts default to IDs 0-8.
@@ -82,6 +85,7 @@ export N_BOOTSTRAP=1000 N_REPLICATES=500 OUT_DIR=output/simulation
 sbatch reproduce/run_simulation_2000.slurm                 # NeuralPLSI
 sbatch --array=9-17 reproduce/run_simulation_2000.slurm    # SplinePLSI
 sbatch --array=18-26 reproduce/run_simulation_2000.slurm   # NeuralPLSI-Adam
+sbatch --array=27-35 reproduce/run_simulation_2000.slurm   # NeuralPLSI-AdamGamma
 ```
 
 | Variable | Default | Meaning |
