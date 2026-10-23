@@ -38,8 +38,11 @@ wheel.packages = ["python/neuralplsi"]
 # The engine is loaded through ctypes (no Python C API), so one wheel per
 # platform serves every Python 3 version.
 wheel.py-api = "py3"
-sdist.include = ["core", "python/neuralplsi", "python/README.md", "CMakeLists.txt", "LICENSE"]
-sdist.exclude = ["/build*", ".github", "output", "results", "reproduce", "r", "web", "NHANES"]
+# Only the engine and the package: the R package, the web demo, the
+# reproduction scripts, results and data are not part of the Python sdist.
+sdist.exclude = ["/.claude", "/.github", "/NHANES", "/logs", "/output", "/r", "/reproduce",
+                 "/results", "/web", "/python/examples", "/python/tests",
+                 "__pycache__", "*.py[cod]", ".DS_Store"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests", "reproduce/tests"]

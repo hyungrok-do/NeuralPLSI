@@ -62,7 +62,9 @@ differences. The compiler's vectorization report confirms vector instructions
 for the packed accumulation loop. NHANES reporting tests also passed after
 incorporating the concurrent curve-export update.
 
-Reproduce from the repository root:
+Reproduce from the repository root of a checkout of commit `7de7361`, the
+layout these commands were written for (see
+[reproduce/README.md](../reproduce/README.md)):
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \

@@ -1,0 +1,7 @@
+^\.gitignore$
+^README\.md$
+^tools$
+^src/Makevars$
+^src/.*\.(o|so|dll)$
+^.*\.Rcheck$
+^.*\.tar\.gz$

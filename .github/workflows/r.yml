@@ -1,0 +1,74 @@
+name: R
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # r/src must hold byte-identical copies of the engine in core/, and DESCRIPTION,
+  # neuralplsi.h and _version.py must agree on the version.
+  vendored:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: r/tools/sync-core.sh --check
+
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+          extra-packages: any::rcmdcheck
+          needs: check
+      # --as-cran checks configure and cleanup with checkbashisms, and warns without it.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends devscripts
+      - if: runner.os == 'macOS'
+        run: brew install checkbashisms
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          working-directory: r
+          args: 'c("--no-manual", "--as-cran")'
+          error-on: '"warning"'
+
+  # The tests skip the vendored-source and Python comparisons when run from the
+  # tarball; from the checkout they compare fits, draws and model files with the
+  # checkout's Python package exactly.
+  checkout:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install numpy pandas scipy
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+      - run: R CMD INSTALL r
+      - name: Tests with the Python comparison
+        working-directory: r/tests/testthat
+        env:
+          NEURALPLSI_REQUIRE_PYTHON: 'true'
+        run: |
+          PYTHON=$(command -v python) Rscript -e 'testthat::test_dir(".", package = "neuralplsi", load_package = "installed", stop_on_failure = TRUE)'

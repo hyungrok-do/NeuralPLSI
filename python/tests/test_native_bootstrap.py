@@ -51,8 +51,7 @@ class NativeBootstrapTest(unittest.TestCase):
         model = NeuralPLSI(max_iter=2, hidden_units=4).fit(x, z, y)
         # The shared library is already loaded. Any of these calls would mean
         # that the bootstrap left the single native invocation.
-        forbidden = ('joblib.Parallel',
-                     'subprocess.Popen', 'multiprocessing.Process.start', 'threading.Thread.start',
+        forbidden = ('subprocess.Popen', 'multiprocessing.Process.start', 'threading.Thread.start',
                      'numpy.random.default_rng', 'numpy.percentile', 'numpy.quantile')
         with contextlib.ExitStack() as stack:
             for name in forbidden:

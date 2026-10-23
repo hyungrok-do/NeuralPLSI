@@ -1,0 +1,53 @@
+# Builds the WebAssembly demo in web/, tests it and publishes web/dist to GitHub Pages.
+# Pages must use GitHub Actions as its source (Settings > Pages > Source).
+name: Web demo
+
+on:
+  push:
+    branches: [main]
+    paths: ['core/**', 'web/**', 'NHANES/**', '.github/workflows/web.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The tests compare with the Python package and reproduce/nhanes.py.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas scipy scikit-learn matplotlib
+      - uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984  # v16
+        with:
+          version: 6.0.13
+          actions-cache-folder: emsdk-cache
+      - run: web/build.sh
+      - run: node --test web/tests/*.test.js
+        env:
+          NPLSI_BROWSER: '0'
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

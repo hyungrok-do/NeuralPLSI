@@ -1,0 +1,26 @@
+Package: neuralplsi
+Type: Package
+Title: Neural Network Partial-Linear Single-Index Models
+Version: 0.1.0
+Authors@R: person("Hyungrok", "Do", email = "hyungrok.do11@gmail.com",
+    role = c("aut", "cre", "cph"))
+Description: Fits partial-linear single-index models g(x'beta) + z'gamma for
+    continuous, binary and right-censored time-to-event outcomes, with a
+    neural-network link g ('NeuralPLSI', Do, Wang, Liu and Lee (2025)
+    <doi:10.48550/arXiv.2512.11593>) or a B-spline link ('SplinePLSI', Wang et
+    al. (2020) <doi:10.1186/s12940-020-00644-4>), and pairs-bootstrap inference
+    on native threads. Fitting, prediction, the bootstrap and model files use
+    the same C++ engine as the Python package 'neuralplsi', so both give
+    identical results on the same machine.
+License: MIT + file LICENSE
+URL: https://github.com/hyungrok-do/NeuralPLSI
+BugReports: https://github.com/hyungrok-do/NeuralPLSI/issues
+Imports:
+    graphics,
+    stats
+Suggests:
+    survival,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Encoding: UTF-8
+RoxygenNote: 7.3.3

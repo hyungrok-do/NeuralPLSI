@@ -1,0 +1,23 @@
+#!/bin/sh
+# Writes src/Makevars from src/Makevars.in. Fused multiply-add stays off, as in
+# core/CMakeLists.txt and the Python build, so all bindings compute the same
+# float32 arithmetic on a machine. R CMD check rejects -f flags written into
+# src/Makevars as non-portable, so the flag is used only if the compiler takes it.
+: "${R_HOME:=$(R RHOME)}"
+if [ -z "$R_HOME" ]; then
+  echo "configure: could not determine R_HOME" >&2
+  exit 1
+fi
+CXX=$("$R_HOME/bin/R" CMD config CXX17)
+CXXSTD=$("$R_HOME/bin/R" CMD config CXX17STD)
+CXXFLAGS=$("$R_HOME/bin/R" CMD config CXX17FLAGS)
+FP_CONTRACT=
+printf 'int main() { return 0; }\n' > conftest.cpp
+if $CXX $CXXSTD $CXXFLAGS -ffp-contract=off -Werror -c conftest.cpp -o conftest.o >/dev/null 2>&1; then
+  FP_CONTRACT=-ffp-contract=off
+  echo "checking whether $CXX accepts -ffp-contract=off... yes"
+else
+  echo "checking whether $CXX accepts -ffp-contract=off... no"
+fi
+rm -f conftest.cpp conftest.o
+sed "s/@FP_CONTRACT@/$FP_CONTRACT/" src/Makevars.in > src/Makevars

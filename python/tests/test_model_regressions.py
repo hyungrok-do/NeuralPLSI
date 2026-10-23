@@ -146,13 +146,14 @@ class ModelRegressionTest(unittest.TestCase):
                 self.assertFalse(hasattr(model, 'g_grid'))
 
     def test_linear_initialization_preserves_linear_predictor(self):
-        from sklearn.linear_model import LinearRegression
         x, z, y, *_ = simulate_data(50, seed=2)
         for intercept in (False, True):
             model = NeuralPLSI(initial=True, max_iter=0, add_intercept=intercept).fit(x, z, y, random_state=4)
             design = np.column_stack([x, z]).astype('float32').astype(float)
-            reference = LinearRegression(fit_intercept=intercept).fit(design, y.astype('float32'))
-            np.testing.assert_allclose(model.predict(x,z), reference.predict(design), rtol=1e-5, atol=2e-6)
+            if intercept:
+                design = np.column_stack([design, np.ones(len(design))])
+            coefficients = np.linalg.lstsq(design, y.astype('float32').astype(float), rcond=None)[0]
+            np.testing.assert_allclose(model.predict(x,z), design @ coefficients, rtol=1e-5, atol=2e-6)
 
     def test_binary_and_cox_initialization_match_independent_optimization(self):
         from scipy.optimize import minimize

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuralPLSI demo</title>
+<meta name="description" content="Fit NeuralPLSI, a neural-network partial-linear single-index model, with bootstrap inference. Runs in your browser.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="intro">
+  <h1>NeuralPLSI</h1>
+  <p>NeuralPLSI models an outcome as <i>g</i>(<i>X</i>′β) + <i>Z</i>′γ. The exposures <i>X</i> (a mixture)
+    enter through one weighted index <i>X</i>′β, with β of unit length and a positive first weight, and an
+    unknown function <i>g</i> learned by a small neural network. The covariates <i>Z</i> enter linearly. The
+    outcome can be continuous, binary (logistic) or a survival time (Cox). A pairs bootstrap gives standard
+    errors and percentile intervals. Method: Do, Wang, Liu and Lee (2025),
+    <a href="https://arxiv.org/abs/2512.11593">arXiv:2512.11593</a>.</p>
+  <p class="local">Everything runs on this device: the C++ engine is compiled to WebAssembly and runs in Web
+    Workers in your browser. Data you open are not uploaded.</p>
+</header>
+
+<main class="layout">
+  <form id="controls" class="controls" novalidate>
+    <section class="card" aria-labelledby="data-title">
+      <h2 id="data-title"><span class="step">1</span>Data</h2>
+      <div class="segmented" role="radiogroup" aria-label="Data source">
+        <label><input type="radio" name="source" value="simulated" checked><span>Simulated</span></label>
+        <label><input type="radio" name="source" value="nhanes"><span>NHANES</span></label>
+        <label><input type="radio" name="source" value="csv"><span>Your CSV</span></label>
+      </div>
+
+      <div data-panel="simulated">
+        <p class="help">The simulation design of the paper: 8 exposures with correlation 0.3, three covariates,
+          β ∝ (1, 0.7, −0.5, 0.5, 0.3, −0.1, 0, 0) and γ = (1, −0.5, 0.5). The generator is seeded but does
+          not reproduce the draws of the Python package.</p>
+        <div class="fields">
+          <label><span>Rows <i>n</i></span><input name="n" type="number" min="20" max="20000" step="1" value="500"></label>
+          <label>Seed<input name="simSeed" type="number" min="0" step="1" value="0"></label>
+          <label><span>True <i>g</i></span>
+            <select name="g"><option value="sigmoid">sigmoid</option><option value="sfun">sfun</option><option value="linear">linear</option></select></label>
+          <label>Outcome
+            <select name="outcome"><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">survival (Cox)</option></select></label>
+        </div>
+      </div>
+
+      <div data-panel="nhanes" hidden>
+        <p class="help">Log triglyceride of 800 NHANES participants against 8 exposures
+          (α- and γ-tocopherol, retinyl stearate, retinol, two PCBs, a furan, trans-β-carotene), adjusted for
+          age, sex and race. Prepared as in <code>reproduce/nhanes.py</code>: exposures logged (except retinol)
+          and standardized. Selecting it sets the activation to ELU and adds an intercept, as that script does.</p>
+        <p class="help">Data: supplementary material of Wang et al. (2020),
+          <a href="https://doi.org/10.1186/s12940-020-00644-4"><i>Environmental Health</i> 19:96</a>,
+          licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+      </div>
+
+      <div data-panel="csv" hidden>
+        <label class="file">CSV file<input name="file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
+        <div id="csv-columns" hidden>
+          <div class="fields">
+            <label><span id="outcome-label">Outcome</span><select name="outcomeColumn"></select></label>
+            <label id="event-field" hidden>Event (0/1)<select name="eventColumn"></select></label>
+          </div>
+          <fieldset><legend>Exposures (the index)</legend><div class="checks" id="exposure-list"></div></fieldset>
+          <fieldset><legend>Covariates (linear)</legend><div class="checks" id="covariate-list"></div></fieldset>
+          <div class="options">
+            <label class="check"><input type="checkbox" name="logExposures">Log exposures</label>
+            <label class="check"><input type="checkbox" name="standardize" checked>Standardize exposures</label>
+          </div>
+          <p class="help">Rows with a missing or non-numeric value in a chosen column are dropped. Log drops
+            non-positive values. Standardizing uses the mean and SD of the remaining rows. Text covariates are
+            coded as indicators against their first level. Set the outcome type with Family under Model.</p>
+        </div>
+      </div>
+      <p id="data-summary" class="summary" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="model-title">
+      <h2 id="model-title"><span class="step">2</span>Model</h2>
+      <div class="fields">
+        <label>Family<select name="family" disabled><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">Cox</option></select></label>
+        <label>Activation
+          <select name="activation"><option>LeakyReLU</option><option>ELU</option><option>ReLU</option><option>Tanh</option></select></label>
+        <label>Hidden units<input name="hiddenUnits" type="number" min="1" max="1024" step="1" value="32"></label>
+        <label>Hidden layers<input name="layers" type="number" min="1" max="16" step="1" value="2"></label>
+        <label>Weight decay<input name="weightDecay" type="number" min="0" step="any" value="0.001"></label>
+        <label>Max iterations<input name="maxIter" type="number" min="0" max="1000000" step="1" value="5000"></label>
+        <label>Seed<input name="seed" type="text" inputmode="numeric" value="0"></label>
+      </div>
+      <div class="options">
+        <label class="check"><input type="checkbox" name="intercept">Intercept</label>
+        <label class="check"><input type="checkbox" name="spline">Also fit SplinePLSI</label>
+      </div>
+      <details class="help">
+        <summary>What these do</summary>
+        <p><b>Family</b> sets the loss: squared error, logistic likelihood or Cox partial likelihood. It
+          follows the simulated outcome and is continuous for NHANES.
+          <b>Activation</b>, <b>hidden units</b> and <b>hidden layers</b> shape the network for <i>g</i>.
+          <b>Weight decay</b> is the L2 penalty on the network; larger values give a smoother <i>g</i>.
+          Full-batch L-BFGS runs until the objective stops improving or <b>max iterations</b>; γ is then fitted
+          exactly. <i>g</i> is anchored at <i>g</i>(0) = 0, so an <b>intercept</b> carries the outcome level
+          (not identifiable for Cox). The <b>seed</b> sets the initialization and the bootstrap resamples.</p>
+        <p><b>SplinePLSI</b> (Wang et al., 2020) replaces the network with a cubic B-spline with 5 knots and is
+          fitted on the same data and bootstrap resamples, for comparison.</p>
+      </details>
+    </section>
+
+    <section class="card" aria-labelledby="run-title">
+      <h2 id="run-title"><span class="step">3</span>Run</h2>
+      <div class="run-row">
+        <button type="button" id="fit" class="primary">Fit</button>
+        <label class="inline"><span>Bootstrap <i>B</i></span><input name="B" type="number" min="2" max="1000" step="1" value="200"></label>
+        <button type="button" id="bootstrap" disabled>Bootstrap</button>
+      </div>
+      <p class="help">Fit uses all rows. Each bootstrap replicate resamples the rows with replacement and refits
+        from a fresh initialization; standard errors are the SD of the draws and intervals their 2.5% and 97.5%
+        quantiles. Replicates run in parallel, one per worker.</p>
+      <div id="progress" class="progress" hidden>
+        <progress></progress>
+        <div class="progress-row"><span id="progress-text" aria-live="polite"></span>
+          <button type="button" id="cancel" class="danger">Cancel</button></div>
+      </div>
+      <p id="message" class="message" role="alert" hidden></p>
+    </section>
+  </form>
+
+  <section id="results" class="results" aria-live="polite">
+    <div class="card empty"><p>Choose data and press <b>Fit</b>. Estimates, plots and downloads appear here.</p></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>NeuralPLSI 0.1.0 · MIT License · <a href="https://github.com/hyungrok-do/NeuralPLSI">Source</a> ·
+    <a href="https://arxiv.org/abs/2512.11593">Paper</a> · NHANES data: Wang et al. (2020), CC BY 4.0.</p>
+</footer>
+</body>
+</html>

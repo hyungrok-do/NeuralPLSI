@@ -1,0 +1,4 @@
+CXX_STD = CXX17
+PKG_CPPFLAGS = -pthread
+PKG_CXXFLAGS = @FP_CONTRACT@
+PKG_LIBS = -pthread
