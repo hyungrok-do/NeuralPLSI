@@ -244,16 +244,39 @@ const COMPARE = `(async () => {
           workers: boot.workers};
 })()`;
 
+// Starts headless Chrome and returns it with its DevTools port. A cold start on
+// a CI runner can take more than 10 s, so this waits up to 60 s and tries twice;
+// if Chrome exits or never opens the port, the error carries its stderr.
+async function launchChrome(profile, attempts = 2) {
+  const portFile = join(profile, 'DevToolsActivePort');
+  for (let attempt = 1; ; ++attempt) {
+    rmSync(portFile, {force: true});
+    const browser = spawn(chrome, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
+      '--no-first-run', '--no-default-browser-check',
+      ...(process.env.CI ? ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] : []), 'about:blank'],
+      {stdio: ['ignore', 'ignore', 'pipe']});
+    let stderr = '', exited = null;
+    browser.stderr.on('data', chunk => { stderr = (stderr+chunk).slice(-4000); });
+    browser.on('exit', (code, signal) => { exited = signal ?? code; });
+    browser.on('error', error => { exited = error.code; });
+    const ready = () => existsSync(portFile) && readFileSync(portFile, 'utf8').includes('\n');
+    for (let k = 0; k < 1200 && exited === null && !ready(); ++k) await sleep(50);
+    if (ready()) return {browser, port: readFileSync(portFile, 'utf8').split('\n')[0]};
+    browser.kill();
+    if (attempt >= attempts)
+      throw new Error(`Chrome (${chrome}) did not start: ${exited === null ? 'no DevTools port after 60 s'
+                      : `it exited with ${exited}`}. Its last output:\n${stderr}`);
+  }
+}
+
 test('the page fits, bootstraps in parallel, cancels and downloads in headless Chrome', {skip, timeout: 600000}, async t => {
   const server = await serve(), profile = mkdtempSync(join(tmpdir(), 'nplsi-chrome-'));
   const downloads = join(profile, 'downloads');
-  const browser = spawn(chrome, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', ...(process.env.CI ? ['--no-sandbox'] : []), 'about:blank'],
-    {stdio: 'ignore'});
+  let browser;
   try {
-    const portFile = join(profile, 'DevToolsActivePort');
-    for (let k = 0; k < 200 && !existsSync(portFile); ++k) await sleep(50);
-    const port = readFileSync(portFile, 'utf8').split('\n')[0];
+    const launched = await launchChrome(profile);
+    browser = launched.browser;
+    const port = launched.port;
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     const page = new DevTools(targets.find(target => target.type === 'page').webSocketDebuggerUrl);
     await page.opened;
@@ -928,7 +951,7 @@ print(json.dumps({'beta': model.beta.tolist(), 'params': model.get_params()}))`,
     assert.deepEqual(errors, []);
     page.socket.close();
   } finally {
-    browser.kill();
+    browser?.kill();
     server.close();
     await sleep(300);
     rmSync(profile, {recursive: true, force: true});
