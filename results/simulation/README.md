@@ -1,28 +1,24 @@
-# Simulation: NeuralPLSI vs SplinePLSI, n = 2000
+# Simulation: NeuralPLSI, SplinePLSI and typical neural-network training, n = 2000
 
 Summaries of the current simulation run. The raw per-replicate results are not
 in git. They are on BigPurple at `/gpfs/scratch/doh03/NeuralPLSI/output/simulation`.
 
-A third estimator, the minibatch AdamW baseline for typical neural-network
-training (`NeuralPLSI-Adam`, commit `b3b88cb`), is running as job 28707312 and
-will be added when it finishes.
-
 | Setting | Value |
 |---|---|
-| Estimators | NeuralPLSI (commit `d7338d0`: full-batch L-BFGS, exact Newton γ, no validation split) and SplinePLSI (commit `816893d`: C++ profile fit) |
+| Estimators | NeuralPLSI (commit `d7338d0`: full-batch L-BFGS, exact Newton γ, no validation split), SplinePLSI (commit `816893d`: C++ profile fit), and NeuralPLSI-Adam, a baseline of typical neural-network training (commit `b3b88cb`: minibatch AdamW, early stopping on a 20% validation split, no γ refit) |
 | Sample size | n = 2000 (training set; the test set has the same size) |
 | g | linear, sfun (S-shape), sigmoid |
 | Outcomes | continuous, binary, cox |
 | Replicates | 500 per setting (seeds 0-499) |
-| Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000 for NeuralPLSI; B = 999 for SplinePLSI, which was not rerun |
+| Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000 for NeuralPLSI and NeuralPLSI-Adam; B = 999 for SplinePLSI, which was not rerun |
 | Exposures | normal |
-| Run | NeuralPLSI: 2026-10-22, job 28702575. SplinePLSI: 2026-10-21, job 28680527. Both on `cpu_short` with 40 CPUs per task |
+| Run | NeuralPLSI: 2026-10-22, job 28702575. NeuralPLSI-Adam: 2026-10-22, job 28707312. SplinePLSI: 2026-10-21, job 28680527. All on `cpu_short` with 40 CPUs per task |
 
 The `source_sha256` recorded in every result row matches these commits.
 
 ## Files
 
-- `inference.png` / `.pdf`, one figure with four panels:
+- `inference.png` / `.pdf`, one figure with four panels and the three estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green):
   - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
   - B: mean bootstrap SE / empirical SD for each coordinate.
   - C: RMSE of each coordinate, and of g on |u| ≤ 2.
@@ -30,10 +26,10 @@ The `source_sha256` recorded in every result row matches these commits.
 - `inference.csv`: the numbers in panels A-C for each coordinate, plus block averages (`coordinate` = `all`, used for the ranges below). It also has `rmse_bagged`, the RMSE of the bagged estimate (the mean of the bootstrap refits).
 - `summary_aggregated.csv`: bias (MAB), empirical SD, mean bootstrap SE and coverage for each β/γ block.
 - `summary_table.csv` / `.tex`: the same quantities for each coefficient.
-- `comparison_table_n2000_normal.csv` / `.tex`: per-coefficient bias, SD, SE and coverage, with the two estimators side by side.
+- `comparison_table_n2000_normal.csv` / `.tex`: per-coefficient bias, SD, SE and coverage, with the estimators side by side.
 - `comparison_metrics.csv`: the long-format data behind that table, including Monte-Carlo SEs.
 
-## Main findings
+## Main findings: NeuralPLSI and SplinePLSI
 
 Ranges are across the 9 settings. The Monte-Carlo range for 500 replicates at
 exact 0.95 coverage is 0.931-0.969 for a single coefficient.
@@ -62,6 +58,48 @@ exact 0.95 coverage is 0.931-0.969 for a single coefficient.
   - Fit: 0.3-1.1 s for NeuralPLSI; 0.07-0.3 s for SplinePLSI.
   - Bootstrap: 8-31 s for NeuralPLSI with B = 1000; 3-10 s for SplinePLSI with B = 999.
   - NeuralPLSI is slowest for continuous outcomes, and S-shape continuous is the slowest setting.
+
+## Typical neural-network training (NeuralPLSI-Adam)
+
+The baseline trains the same network the way neural networks are usually
+trained: AdamW on minibatches of 64 rows from a random 80% of the data, early
+stopping on the other 20% (patience 10, at most 200 epochs) with the best
+checkpoint restored, and no exact fit of γ. Every bootstrap refit uses the same
+procedure from a fresh initialization. Ranges are across the 9 settings and
+compare it with the L-BFGS NeuralPLSI.
+
+- **γ: intervals centred in the wrong place.** Early stopping halts γ before it
+  converges, and every bootstrap refit stops the same way, so the bootstrap
+  cannot see the bias.
+  - γ₁ (true value 1) is shrunk toward zero: mean bias about -0.04 for
+    continuous outcomes, -0.07 to -0.08 for Cox and -0.11 to -0.15 for binary.
+    Its RMSE is 2.2-2.7 times that of L-BFGS.
+  - γ₁ coverage is 0.89-0.92 in all 9 settings, below the Monte-Carlo range.
+    An interval of the same width centred on the estimate covers only
+    0.70-0.77. The percentile interval does better because it is centred on
+    the bootstrap mean, which is more accurate than the single fit (26-30%
+    lower RMSE for the γ block).
+  - γ₂ and γ₃ over-cover (0.95-0.98), with SE/SD 1.04-1.16. Averaged over the
+    block, coverage is 0.933-0.958, which hides both problems.
+- **β: intervals wider than needed, estimates less accurate.** Coverage is
+  0.965-0.973, against 0.940-0.955 for L-BFGS, and 34 of 72 coordinates are
+  above the Monte-Carlo range. SE/SD is 0.98-1.03: the over-coverage comes from
+  optimizer noise in the single fit. The bagged β has 9-11% lower RMSE than the
+  single fit, and the percentile interval is centred on it; an interval of the
+  same width centred on the estimate covers 0.944-0.955. β RMSE is 10-13%
+  higher than with L-BFGS.
+- **g.** RMSE is 8-88% higher than with L-BFGS, most for linear g (1.47-1.88
+  times). The band over-covers for linear and sigmoid g (mean 0.97-0.99 on
+  |u| ≤ 2). For the S-shape it averages 0.95-0.97 but dips to 0.84-0.90 and
+  falls to 0.60-0.76 at |u| = 3.
+- **Prediction.** Test MSE is 1.014-1.021, against 1.008-1.011 for L-BFGS. AUC
+  and C-index are within 0.002.
+- **Cost.** Fits take 0.24-0.28 s and the bootstrap 5-8 s with B = 1000.
+
+So with typical training the bootstrap does not give valid inference for the
+linear coefficients: early stopping biases them, the bias is reproduced in
+every refit, and the intervals for the largest coefficient under-cover in
+every setting. The full-batch fit with an exact γ step removes this.
 
 ## Regenerate
 

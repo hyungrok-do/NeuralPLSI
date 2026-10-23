@@ -291,7 +291,7 @@ def combined(cells, out):
     for panel, letter, title in zip(panels, 'ABCD', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
     size_text = ', '.join(f'n = {n}' for n in sizes)
-    fig.suptitle(f'NeuralPLSI and SplinePLSI simulation inference, {size_text}, '
+    fig.suptitle(f'Bootstrap inference in the simulations, {size_text}, '
                  f'{replicate_label(cells)} per setting', x=0.0, ha='left', fontsize=16)
     handles = legend_handles(series, sizes, 'target', 'mc', 'sparse')
     rows = 1 if len(series) < 3 else 2
