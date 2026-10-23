@@ -63,9 +63,25 @@
         <label class="file">CSV file<input name="file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
         <p class="help">The file is read on this device and never uploaded. It needs a header row; commas,
           semicolons or tabs separate the fields.</p>
+        <details class="help" id="csv-format">
+          <summary>Missing values and numbers</summary>
+          <p>Missing values are empty fields and the strings pandas reads as missing, matched exactly (NA, not
+            na): <code>NA</code>, <code>N/A</code>, <code>n/a</code>, <code>NaN</code>, <code>nan</code>,
+            <code>-NaN</code>, <code>-nan</code>, <code>NULL</code>, <code>null</code>, <code>None</code>,
+            <code>&lt;NA&gt;</code>, <code>#N/A</code>, <code>#N/A N/A</code>, <code>#NA</code>,
+            <code>1.#IND</code>, <code>-1.#IND</code>, <code>1.#QNAN</code> and <code>-1.#QNAN</code>. In a text
+            column <code>None</code> is a category, not a missing value; <code>.</code> and <code>missing</code>
+            are never missing values, so a column of numbers that contains them is text. Each column's notes list
+            the strings counted as missing (blank: an empty field).</p>
+          <p>Numbers use a point as the decimal mark; Inf and -Inf are numbers (non-finite). In a semicolon- or
+            tab-separated file, a column may use decimal commas (1,5) if none of its values has a point. A value
+            that cannot be a thousands number (0,125, 1,5) shows decimal commas for the whole column; 1,250,000
+            has thousands separators; if every comma value could be either (1,250), values with commas are text,
+            and the column's notes say so. A text column cannot be a chemical exposure (X) or the outcome.</p>
+        </details>
         <div id="csv-columns" hidden>
           <div class="fields">
-            <label>Outcome type
+            <label class="wide">Outcome type
               <select name="csvFamily"><option value="continuous">continuous</option><option value="binary">binary (0/1)</option><option value="cox">survival time (Cox)</option></select></label>
           </div>
           <p id="family-note" class="note" hidden></p>
@@ -74,7 +90,8 @@
             <p class="help">Give each column one role. <b>X</b>: chemical exposures, combined into the index
               <i>X</i>′β inside <i>g</i>. <b>Z</b>: confounders, which enter linearly. One <b>outcome</b>
               (for Cox, the survival time and a 0/1 <b>event</b> column). Leave IDs and survey weights on
-              <b>ignore</b>: the fit is unweighted.</p>
+              <b>ignore</b>: the fit is unweighted. With the keyboard, the up and down arrows move between
+              columns and the left and right arrows (or Space) change the role.</p>
             <p class="help">X and Z columns enter the model in the order you give them their role; X rows show
               their position (X1, X2, …), and β has a positive weight on X1. Each X row has a <b>log</b> box. A
               numeric Z column of codes, such as race coded 1 to 5, can be marked <b>categorical</b>: it then
@@ -104,9 +121,9 @@
                   <th scope="col" class="h-name">Column</th>
                   <th scope="col" class="h-role h-exposure" id="head-exposure" title="Chemical exposure (X)">X<span class="sr-only">, chemical exposure</span></th>
                   <th scope="col" class="h-role h-confounder" id="head-confounder" title="Confounder (Z)">Z<span class="sr-only">, confounder</span></th>
-                  <th scope="col" class="h-role h-outcome" id="head-outcome">Outcome</th>
-                  <th scope="col" class="h-role h-event" id="head-event" title="Event indicator (0/1)">Event</th>
-                  <th scope="col" class="h-role h-ignore" id="head-ignore">Ignore</th>
+                  <th scope="col" class="h-role h-outcome" id="head-outcome"><span class="h-full">Outcome</span><span class="h-short" aria-hidden="true">Out</span></th>
+                  <th scope="col" class="h-role h-event" id="head-event" title="Event indicator (0/1)"><span class="h-full">Event</span><span class="h-short" aria-hidden="true">Evt</span></th>
+                  <th scope="col" class="h-role h-ignore" id="head-ignore" title="Ignore"><span class="h-full">Ignore</span><span class="h-short" aria-hidden="true">Ign</span></th>
                 </tr></thead>
                 <tbody></tbody>
               </table>
@@ -183,14 +200,15 @@
         quantiles. Replicates run in parallel, one per worker.</p>
       <div id="progress" class="progress" hidden>
         <progress></progress>
-        <div class="progress-row"><span id="progress-text" aria-live="polite"></span>
+        <div class="progress-row"><span id="progress-text"></span>
           <button type="button" id="cancel" class="danger">Cancel</button></div>
       </div>
       <p id="message" class="message" role="alert" hidden></p>
+      <p id="announce" class="sr-only" role="status"></p>
     </section>
   </form>
 
-  <section id="results" class="results" aria-live="polite">
+  <section id="results" class="results">
     <div class="card empty"><p>Choose data and press <b>Fit</b>. Estimates, plots and downloads appear here.</p></div>
   </section>
 </main>

@@ -149,19 +149,46 @@ export function parseCsv(text) {
   return {header, rows, delimiter};
 }
 
-const MISSING = /^(|na|n\/a|nan|null|none|\.|missing)$/i;
-const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+// The strings pandas.read_csv reads as missing by default, matched exactly (NA,
+// not na), after the field is trimmed; '' is an empty field. They are missing in
+// numeric columns. Text columns keep None as a category (a level like Former or
+// Current); '.' and 'missing' are never missing values.
+export const NA_TOKENS = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan', '1.#IND', '1.#QNAN',
+                          '<NA>', 'N/A', 'NA', 'NULL', 'NaN', 'None', 'n/a', 'nan', 'null'];
+const NUMERIC_NA = new Set(NA_TOKENS), TEXT_NA = new Set(NA_TOKENS.filter(token => token !== 'None'));
+// Linear-time patterns: no nested or adjacent unbounded repeats over the same digits.
+const NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i;
+const DECIMAL_COMMA = /^[+-]?\d+,\d+(e[+-]?\d+)?$/i;
+const THOUSANDS = /^[+-]?\d{1,3}(,\d{3})+$/;
+const GROUPS = /^[+-]?\d{1,3}(,\d{3}){2,}$/;       // 1,250,000: only thousands separators
+const AMBIGUOUS = /^[+-]?[1-9]\d{0,2},\d{3}$/;      // 1,250: thousands or three decimals
 const INFINITE = /^[+-]?(inf|infinity)$/i;
 
-// A number, NaN for a missing token, or undefined for text. Semicolon- and
-// tab-separated files may use a decimal comma.
+// A number, NaN for a missing token, or undefined for text. With decimalComma,
+// 1,5 reads as 1.5 (describeColumns decides this per column).
 export function parseNumber(text, decimalComma = false) {
   const s = text.trim();
-  if (MISSING.test(s)) return NaN;
+  if (NUMERIC_NA.has(s)) return NaN;
   if (NUMBER.test(s)) return Number(s);
-  if (decimalComma && /^[+-]?\d+,\d+(e[+-]?\d+)?$/i.test(s)) return Number(s.replace(',', '.'));
+  if (decimalComma && DECIMAL_COMMA.test(s)) return Number(s.replace(',', '.'));
   if (INFINITE.test(s)) return s.startsWith('-') ? -Infinity : Infinity;
   return undefined;
+}
+
+// A comma is a decimal point in a column only when the file is not
+// comma-separated and no value in the column has a point; values are trimmed
+// and not missing. The column's comma values decide the rest: one with two or
+// more groups (1,250,000) can only have thousands separators; one that cannot
+// (0,125, 1,5, 1234,5, 2,5e3) shows decimal commas, which then holds for the
+// whole column. When every comma value could be either (1,250), the column is
+// text. Otherwise values with commas are text.
+export function commaRule(delimiter, values) {
+  if (delimiter === ',') return {decimalComma: false, why: 'delimiter'};
+  if (values.some(s => s.includes('.'))) return {decimalComma: false, why: 'point'};
+  if (values.some(s => GROUPS.test(s))) return {decimalComma: false, why: 'thousands'};
+  const commas = values.filter(s => DECIMAL_COMMA.test(s));
+  if (commas.length && commas.every(s => AMBIGUOUS.test(s))) return {decimalComma: false, why: 'ambiguous'};
+  return {decimalComma: true, why: null};
 }
 
 // More than this share of missing or non-finite values marks a column as mostly missing.
@@ -177,44 +204,69 @@ export const CODE_LEVELS = 10;
 
 // Numeric columns parse as numbers wherever a value is present; others are text.
 // Per column: values (NaN for missing and text, +-Infinity beyond FLOAT32_MAX),
-// numeric, missing (missing tokens), nonfinite (+-Inf and values beyond the
-// float32 range, in numeric columns), beyond (those beyond the float32 range),
-// levels (the distinct non-missing values of a text column, as they are
-// dummy-coded), distinct (distinct finite values of a numeric column, counted up
-// to MAX_LEVELS+1), codes (numeric, not 0/1, with 2 to CODE_LEVELS distinct
-// integer values: suggested as categorical), binary (numeric with every finite
-// value 0 or 1), present (rows with a usable value), up to three distinct example
-// values, and kind: 'numeric', '0/1', 'text' or 'mostly missing'.
+// numeric, missing (missing values: NA_TOKENS in numeric columns, the same but
+// None in text columns), tokens ([token, count] of the missing values, most
+// frequent first), nonfinite (+-Inf and values beyond the float32 range, in
+// numeric columns), beyond (those beyond the float32 range), decimalComma
+// (numeric with a value written with a decimal comma), levels (the distinct
+// non-missing values of a text column, as they are dummy-coded), distinct
+// (distinct finite values of a numeric column, counted up to MAX_LEVELS+1), codes
+// (numeric, not 0/1, with 2 to CODE_LEVELS distinct integer values: suggested as
+// categorical), binary (numeric with every finite value 0 or 1), present (rows
+// with a usable value), up to three distinct examples with exampleValues (the
+// number read, where it is not what the text says as written, else null), and
+// kind: 'numeric', '0/1', 'text' or 'mostly missing'. A text column whose values
+// are at least half numbers also has notNumbers (up to three values that are not)
+// and, when one of them is a number written with a comma, commas: why commas are
+// not read here ('delimiter', 'point', 'thousands' or 'ambiguous', as commaRule).
 export function describeColumns(table) {
-  const decimalComma = table.delimiter !== ',', n = table.rows.length;
+  const n = table.rows.length;
   return table.header.map((name, j) => {
-    const values = new Float64Array(n), examples = [], seen = new Set();
-    let text = 0, missing = 0, nonfinite = 0, beyond = 0, binary = true, integers = true;
-    table.rows.forEach((row, i) => {
-      const raw = row[j].trim(), v = parseNumber(raw, decimalComma);
-      if (v === undefined) { ++text; values[i] = NaN; }
-      else if (Number.isNaN(v)) { ++missing; values[i] = NaN; }
-      else if (!Number.isFinite(v) || Math.abs(v) > FLOAT32_MAX) {
+    const raw = table.rows.map(row => row[j].trim()), filled = raw.filter(s => !NUMERIC_NA.has(s));
+    const rule = commaRule(table.delimiter, filled), parsed = raw.map(s => parseNumber(s, rule.decimalComma));
+    const numeric = parsed.every(v => v !== undefined), absent = numeric ? NUMERIC_NA : TEXT_NA;
+    const values = new Float64Array(n), seen = new Set(), tokens = new Map();
+    let missing = 0, nonfinite = 0, beyond = 0, binary = true, integers = true, decimalComma = false;
+    parsed.forEach((v, i) => {
+      values[i] = NaN;
+      if (absent.has(raw[i])) { ++missing; tokens.set(raw[i], (tokens.get(raw[i]) ?? 0)+1); return; }
+      if (!numeric) return;
+      if (!Number.isFinite(v) || Math.abs(v) > FLOAT32_MAX) {
         ++nonfinite; values[i] = Math.sign(v)*Infinity;
         if (Number.isFinite(v)) ++beyond;
-      } else {
-        values[i] = v;
-        if (v !== 0 && v !== 1) binary = false;
-        if (!Number.isInteger(v)) integers = false;
-        if (seen.size <= MAX_LEVELS) seen.add(v);
+        return;
       }
-      if (examples.length < 3 && !MISSING.test(raw) && !examples.includes(raw)) examples.push(raw);
+      values[i] = v;
+      if (raw[i].includes(',')) decimalComma = true;
+      if (v !== 0 && v !== 1) binary = false;
+      if (!Number.isInteger(v)) integers = false;
+      if (seen.size <= MAX_LEVELS) seen.add(v);
     });
-    const numeric = text === 0, levels = new Set();
-    if (!numeric) for (const row of table.rows) if (!MISSING.test(row[j].trim())) levels.add(row[j].trim());
-    if (!numeric) nonfinite = beyond = 0;
+    const examples = [], exampleValues = [];
+    for (let i = 0; i < n && examples.length < 3; ++i) {
+      if (absent.has(raw[i]) || examples.includes(raw[i])) continue;
+      const v = parsed[i];
+      examples.push(raw[i]);
+      exampleValues.push(numeric && Number.isFinite(v) && Number(raw[i]) !== v ? v : null);
+    }
+    const levels = new Set(numeric ? [] : raw.filter(s => !TEXT_NA.has(s)));
     const present = n-missing-nonfinite;
     binary = numeric && binary && present > 0;
     const distinct = numeric ? seen.size : levels.size;
     const kind = n && (missing+nonfinite)/n > MOSTLY_MISSING ? 'mostly missing' : !numeric ? 'text' : binary ? '0/1' : 'numeric';
-    return {name, index: j, values, numeric, missing, nonfinite, beyond, present, binary, kind, examples,
-            levels: [...levels].sort(), distinct,
-            codes: numeric && !binary && integers && distinct >= 2 && distinct <= CODE_LEVELS};
+    const column = {name, index: j, values, numeric, missing, tokens: [...tokens].sort((a, b) => b[1]-a[1]), nonfinite,
+                    beyond, present, binary, kind, decimalComma, examples, exampleValues, levels: [...levels].sort(), distinct,
+                    codes: numeric && !binary && integers && distinct >= 2 && distinct <= CODE_LEVELS};
+    if (!numeric) {
+      // Values that keep the column from being numeric, when most of it is numbers.
+      const blocking = filled.filter(s => parseNumber(s, rule.decimalComma) === undefined);
+      const numberLike = filled.length-blocking.length+blocking.filter(s => DECIMAL_COMMA.test(s) || THOUSANDS.test(s)).length;
+      if (2*numberLike >= filled.length) {
+        column.notNumbers = [...new Set(blocking)].slice(0, 3);
+        if (blocking.some(s => DECIMAL_COMMA.test(s) || THOUSANDS.test(s))) column.commas = rule.why;
+      }
+    }
+    return column;
   });
 }
 
@@ -237,7 +289,7 @@ export function completeRows(table, columns, used, logged = []) {
     let reason = null;
     for (const c of used) {
       const v = c.values[i];
-      if (c.numeric ? Number.isNaN(v) : MISSING.test(table.rows[i][c.index].trim())) reason = 'missing';
+      if (c.numeric ? Number.isNaN(v) : TEXT_NA.has(table.rows[i][c.index].trim())) reason = 'missing';
       else if (c.numeric && !Number.isFinite(v)) reason = 'nonfinite';
       if (reason) break;
     }

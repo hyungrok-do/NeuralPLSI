@@ -19,8 +19,9 @@ order, the file column it comes from, whether it was logged, the mean and SD it
 was standardized with, and for indicators the level coded 1 and the reference.
 
 A CSV file is read on the device. The page lists every column with its type
-(numeric, 0/1, text or mostly missing), its missing and non-finite values and a
-few examples, and the user gives each column one role: chemical exposure (X,
+(numeric, 0/1, text or mostly missing), its missing and non-finite values (with
+the strings counted as missing) and a few examples, and the user gives each
+column one role: chemical exposure (X,
 in the index inside g), confounder (Z, linear), outcome, event (0/1, Cox only) or
 ignore, the default for IDs and survey weights. X and Z columns enter the model
 in the order they were given their role (X rows show X1, X2, ...; β has a
@@ -36,7 +37,28 @@ outcome until the user sets it. A summary above Fit gives the outcome and
 family, p and q (after dummy coding) and the rows used and dropped by reason;
 Fit stays disabled, with the reason, until the setup can be fitted, including
 networks over the engine's limit of 10,000,000 parameters. The roles and checks
-are pure functions in `src/roles.js`.
+are pure functions in `src/roles.js`. In the role table, the up and down arrows
+move between columns without changing anything and the left and right arrows (or
+Space) change the role; role changes, finished runs and bootstrap progress (at
+25, 50 and 75%) are announced through one status line for screen readers.
+
+Missing values follow pandas' defaults, matched exactly: an empty field, `NA`,
+`N/A`, `n/a`, `NaN`, `nan`, `-NaN`, `-nan`, `NULL`, `null`, `None`, `<NA>`,
+`#N/A`, `#N/A N/A`, `#NA`, `1.#IND`, `-1.#IND`, `1.#QNAN` and `-1.#QNAN`
+(`NA_TOKENS` in `src/data.js`; a test checks them against pandas). In text
+columns `None` is a category, not a missing value; `.` and `missing` are never
+missing values, so a column of numbers that contains them is text, and its notes
+name the values that are not numbers. A point is the decimal mark. A column of a
+semicolon- or tab-separated file may use decimal commas (`1,5`) when none of its
+values has a point. Its comma values decide: one with two or more groups
+(`1,250,000`) can only have thousands separators; one that cannot be a
+thousands number (`0,125`, `1,5`, `1234,5`) shows decimal commas for the whole
+column; when every comma value could be either (`1,250`), the column is text.
+A text column is flagged and cannot be X or the outcome. The examples show
+the number read when it differs from the text (`1,5 → 1.5`). A binary outcome
+that is all 0 or all 1 in the rows used cannot be fitted. Column names and
+values are shown as text without their Unicode bidi controls, so a name cannot
+reorder the text around it.
 
 With the roles and transforms of `reproduce/nhanes.py` (triglyceride logged
 and standardized; its eight exposures in its order, logged except retinol,
@@ -94,8 +116,13 @@ built page in headless Chrome (set `CHROME` if it is not found;
 names that look like HTML (they must show as text), long names in the result
 tables on phones 360, 390 and 430 px wide, the NHANES file as a user file
 giving the same data and fit as the NHANES example, a failed NHANES download
-and Retry, and the preprocessing download; it saves screenshots when
-`NPLSI_SCREENSHOTS` names a directory.
+and Retry, the preprocessing download, the role table on a 360 px phone in Cox
+mode, missing-value notes and decimal commas, text contrast in light and dark,
+focus and announcements around Fit and Cancel, arrow keys in the role table,
+Cancel while the WebAssembly module is still loading, a second file chosen
+before the first is read, and bidi controls in a column name; it saves
+screenshots when `NPLSI_SCREENSHOTS` names a directory. CI installs the Python
+packages pinned in `tests/requirements.txt`.
 
 ## How the bootstrap runs
 
@@ -116,10 +143,13 @@ point fits; the root [`README.md`](../README.md#one-engine) has the numbers.
 `.github/workflows/web.yml` runs on pull requests and on pushes to `main` that
 touch `core/`, `web/`, `NHANES/`, `python/neuralplsi/`, `reproduce/nhanes.py`
 or the workflow, and on manual dispatch. It installs Emscripten 6.0.13 with
-`emscripten-core/setup-emsdk` (v16, pinned by commit), builds and runs the
-tests (without the browser test). Pushes and manual runs then publish
-`web/dist` with `actions/deploy-pages`; only that job has the `pages: write`
-and `id-token: write` permissions, and pull requests never deploy. Pages must
+`emscripten-core/setup-emsdk` (v16, pinned by commit) and the Python packages
+of `tests/requirements.txt`, builds and runs the tests, then the browser test in
+its own step with the runner's Chrome (`CHROME=/usr/bin/google-chrome`). The
+checkout does not keep its token. Pushes to `main`, and manual runs on `main`,
+then publish `web/dist` with `actions/deploy-pages`; only that job has the
+`pages: write` and `id-token: write` permissions, and pull requests and other
+branches never deploy. Pages must
 be set to deploy from GitHub Actions: Settings > Pages > Source: GitHub Actions.
 
 The NHANES data are from the supplementary material of Wang et al. (2020),

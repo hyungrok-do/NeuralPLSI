@@ -284,3 +284,27 @@ test('the NHANES file with the roles of reproduce/nhanes.py gives the preset dat
     'Chemical exposures (X)': '8, logged except a5.Retinol, then standardized',
     'Confounders (Z)': '6 (sex: 1 indicator vs 1; race: 4 indicators vs 1)', 'Rows': '800 of 800 used'});
 });
+
+test('a binary outcome with no cases or no non-cases cannot be fitted', () => {
+  const t = parseCsv(['y0,y1,yy,x,w', ...Array.from({length: 12}, (_, i) =>
+    [0, 1, i < 2 ? 1 : 0, Math.sin(i).toFixed(3), i < 2 ? 'NA' : String(i)].join(','))].join('\n'));
+  const cc = describeColumns(t);
+  const reason = (outcome, exposures = ['x']) => {
+    const roles = [[outcome, 'outcome'], ...exposures.map(name => [name, 'exposure'])]
+      .reduce((r, [name, role]) => assignRole(r, cc, name, role, 'binary'), initialRoles(cc));
+    const p = planCsv(t, cc, {family: 'binary', roles});
+    assert.equal(p.ready, p.reason === null);
+    return [p.reason, p.cases];
+  };
+  // A 0/1 column suggests the binary family even when every value is 0.
+  assert.equal(suggestFamily(cc[0]), 'binary');
+  assert.deepEqual(reason('y0'), ['The outcome y0 has no cases (all 0)', 0]);
+  assert.deepEqual(reason('y1'), ['The outcome y1 has no non-cases (all 1)', 12]);
+  assert.deepEqual(reason('yy'), [null, 2]);
+  // Its two cases are in rows that w drops.
+  assert.deepEqual(reason('yy', ['x', 'w']), ['The outcome yy has no cases (all 0) in the rows used', 0]);
+  // With fewer than two rows, the row count is the reason.
+  const tiny = parseCsv('y,x\n0,1\n'), tc = describeColumns(tiny);
+  assert.equal(planCsv(tiny, tc, {family: 'binary', roles: new Map([['y', 'outcome'], ['x', 'exposure']])}).reason,
+               'Only 1 complete row remains');
+});

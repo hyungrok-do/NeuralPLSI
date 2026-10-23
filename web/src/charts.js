@@ -1,6 +1,6 @@
 // Inline SVG charts: the link function with its band, and a forest plot of beta.
 // Colors come from CSS custom properties, so both follow the light/dark theme.
-import {fmt} from './stats.js';
+import {fmt, displayText} from './stats.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -52,7 +52,7 @@ function tooltip(host) {
     show(title, lines, x, y) {
       const heading = document.createElement('div');
       heading.className = 'muted';
-      heading.textContent = title;
+      heading.textContent = displayText(title);
       tip.replaceChildren(heading, ...lines.map(line));
       tip.hidden = false;
       const w = tip.offsetWidth, h = tip.offsetHeight, W = host.clientWidth;
@@ -160,7 +160,8 @@ export function forestChart(host, {rows, series}) {
   rows.forEach((r, i) => {
     const cy = m.top+(i+0.5)*rowH;
     const name = el('text', {x: m.left-8, y: cy+4, class: 'row-label', 'text-anchor': 'end'}, svg);
-    name.textContent = r.name.length > 22 ? r.name.slice(0, 21)+'…' : r.name;
+    const label = displayText(r.name);
+    name.textContent = label.length > 22 ? label.slice(0, 21)+'…' : label;
     if (r.truth !== undefined) {
       const t = x(r.truth);
       el('path', {d: `M${t},${cy-6}L${t+5},${cy}L${t},${cy+6}L${t-5},${cy}Z`, class: 'truth-mark'}, svg);

@@ -2,7 +2,8 @@
 // threaded (n_jobs = 1) inside each worker; parallelism comes from the pool.
 // Terminating the workers is the only way to stop a running fit, so cancel()
 // discards the pool and the next request starts a new one; calls to a discarded
-// worker fail with Cancelled.
+// worker, and requests still waiting for the module or for workers to start,
+// fail with Cancelled.
 
 export class Cancelled extends Error {
   constructor() { super('Cancelled'); this.name = 'Cancelled'; }
@@ -15,6 +16,19 @@ export class Pool {
     this.size = size;
     this.workers = [];
     this.compiled = null;
+    // cancel() starts a new generation; a request from an older one fails with
+    // Cancelled, even while the module is still downloading or compiling.
+    this.generation = 0;
+    this.stops = new Set();
+  }
+
+  // The promise's result, or Cancelled as soon as cancel() is called.
+  untilCancelled(promise) {
+    return new Promise((resolve, reject) => {
+      const stop = () => reject(new Cancelled());
+      this.stops.add(stop);
+      promise.then(resolve, reject).finally(() => this.stops.delete(stop));
+    });
   }
 
   // The module is compiled once and shared, so new workers fetch nothing.
@@ -28,7 +42,9 @@ export class Pool {
   }
 
   async ensure(count) {
-    const compiled = await this.module();
+    const generation = this.generation;
+    const compiled = await this.untilCancelled(this.module());
+    if (generation !== this.generation) throw new Cancelled();
     while (this.workers.length < Math.min(count, this.size)) {
       const w = {worker: new Worker(new URL('./worker.js', import.meta.url), {type: 'module'}), pending: new Map(), next: 0};
       w.worker.onmessage = ({data: {id, result, error}}) => {
@@ -48,7 +64,8 @@ export class Pool {
       });
       this.workers.push(w);
     }
-    await Promise.all(this.workers.map(w => w.ready));
+    await this.untilCancelled(Promise.all(this.workers.map(w => w.ready)));
+    if (generation !== this.generation) throw new Cancelled();
     return this.workers.slice(0, count);
   }
 
@@ -67,6 +84,9 @@ export class Pool {
   }
 
   cancel() {
+    ++this.generation;
+    for (const stop of this.stops) stop();
+    this.stops.clear();
     for (const w of this.workers) {
       w.closed = true;
       w.worker.terminate();

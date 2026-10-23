@@ -6,7 +6,7 @@ import {ROLES, blockedRole, blockedCategorical, initialRoles, roleOf, assignRole
 import {NEURAL_DEFAULTS, networkProblem} from './engine.js';
 import {Pool, Cancelled} from './pool.js';
 import {linkChart, forestChart} from './charts.js';
-import {fmt, duration, toCsv, linspace, mergeRows} from './stats.js';
+import {fmt, duration, toCsv, linspace, mergeRows, displayText} from './stats.js';
 
 const form = document.getElementById('controls');
 const $ = id => document.getElementById(id);
@@ -26,16 +26,29 @@ const MODELS = [['neural', 'NeuralPLSI', 'var(--series-1)'], ['spline', 'SplineP
 // reproduce/nhanes.py for NHANES, and one for other data, since g(0) = 0.
 const INTERCEPT = {simulated: NEURAL_DEFAULTS.intercept, nhanes: NHANES_SETTINGS.intercept, csv: true};
 
+// Elements are built from text nodes, never parsed as HTML. Text, titles and
+// labels lose their bidi controls (displayText), so a column name cannot reorder
+// the text around it; data attributes keep names as they are.
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === 'class') node.className = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
-    else if (v !== false && v !== null && v !== undefined) node.setAttribute(k, v === true ? '' : v);
+    else if (v !== false && v !== null && v !== undefined)
+      node.setAttribute(k, v === true ? '' : k === 'title' || k === 'aria-label' ? displayText(v) : v);
   }
   for (const c of children.flat(Infinity)) if (c !== null && c !== undefined && c !== false)
-    node.append(c instanceof Node ? c : String(c));
+    node.append(c instanceof Node ? c : displayText(c));
   return node;
+}
+
+const setText = (node, text) => { node.textContent = displayText(text); };
+
+// One polite status line for screen readers: finished runs, coarse progress and
+// role changes. The same text twice still counts as a change.
+function announce(text) {
+  const line = $('announce'), next = displayText(text);
+  line.textContent = line.textContent === next ? `${next} ` : next;
 }
 
 // ---- Controls
@@ -113,10 +126,13 @@ function syncFamily() {
   state.family = family.value;
   intercept.disabled = cox;
   if (cox) intercept.checked = false;
-  $('column-table').classList.toggle('cox', csvFamily() === 'cox');
+  const coxCsv = csvFamily() === 'cox', head = $('head-outcome');
+  $('column-table').classList.toggle('cox', coxCsv);
   $('outcome-options').hidden = csvFamily() !== 'continuous';
-  $('head-outcome').textContent = csvFamily() === 'cox' ? 'Time' : 'Outcome';
-  $('head-outcome').title = csvFamily() === 'cox' ? 'Survival time (the outcome)' : 'Outcome';
+  // The full header, and the short one shown on phones.
+  head.querySelector('.h-full').textContent = coxCsv ? 'Time' : 'Outcome';
+  head.querySelector('.h-short').textContent = coxCsv ? 'Time' : 'Out';
+  head.title = coxCsv ? 'Survival time (the outcome)' : 'Outcome';
 }
 
 // What the data step would fit, or why it cannot: summary facts and a reason.
@@ -148,7 +164,7 @@ function familyNote() {
     else if (column?.binary && csvFamily() === 'continuous')
       text = `${outcome} is coded 0/1: the binary (logistic) outcome type usually fits it.`;
   }
-  note.textContent = text;
+  setText(note, text);
   note.hidden = !text;
 }
 
@@ -169,7 +185,7 @@ function onControls() {
   if (!reason) try { reason = networkProblem(status.facts.p, status.facts.q, settings()); } catch (error) { reason = error.message; }
   renderSummary(status.facts);
   familyNote();
-  $('fit-status').textContent = reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '';
+  setText($('fit-status'), reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '');
   $('fit').disabled = state.busy || Boolean(reason);
   const stale = state.fit && controlsKey() !== state.fit.key;
   $('bootstrap').disabled = !state.fit || stale || state.busy;
@@ -222,19 +238,32 @@ function showNhanesError() {
 const short = text => text.length > 16 ? `${text.slice(0, 15)}…` : text;
 // A column name with line break opportunities after its punctuation (a3.Retinyl.|palmitate).
 const breakable = name => name.split(/(?<=[._\-/])/).flatMap((part, k) => k ? [h('wbr'), part] : [part]);
+// File values in notes, each isolated from the text around it.
+const quoted = values => values.map((v, k) => [k ? ', ' : '', '“', h('bdi', {}, short(v)), '”']);
+// Why values with commas made a column text (data.js commaRule).
+const COMMAS = {delimiter: 'a comma-separated file has no decimal commas', point: 'decimal commas and points mixed',
+                thousands: 'thousands separators',
+                ambiguous: 'commas that may be thousands separators or decimal commas'};
 
+// The type, the missing values with the tokens counted as missing (blank for an
+// empty field), examples (with the number read where it differs from the text),
+// and for text columns why they are text and how they would be coded.
 function columnNotes(c) {
   const absent = c.missing+c.nonfinite, beyond = c.beyond ? ` (${c.beyond} beyond ±3.4e38)` : '';
-  const missing = !absent ? 'none missing' : c.kind === 'mostly missing' ? `${absent} of ${state.table.rows.length} missing` :
-    [c.missing ? `${c.missing} missing` : '', c.nonfinite ? `${c.nonfinite} non-finite${beyond}` : ''].filter(Boolean).join(', ');
+  const tokens = c.tokens.length ? ` (${c.tokens.map(([token]) => token === '' ? 'blank' : token).join(', ')})` : '';
+  const missing = !absent ? 'none missing' : c.kind === 'mostly missing' ? `${absent} of ${state.table.rows.length} missing${tokens}` :
+    [c.missing ? `${c.missing} missing${tokens}` : '', c.nonfinite ? `${c.nonfinite} non-finite${beyond}` : ''].filter(Boolean).join(', ');
   const kind = c.kind === 'text' ? `text, ${plural(c.levels.length, 'level')}` :
     c.kind === 'mostly missing' ? `mostly missing (${c.numeric ? 'numeric' : 'text'})` :
-    c.codes ? `numeric, ${c.distinct} integer codes` : c.kind;
+    c.codes ? `numeric, ${c.distinct} integer codes` : c.decimalComma ? `${c.kind}, decimal commas` : c.kind;
   const notes = [h('span', {class: c.kind === 'mostly missing' ? 'col-meta warn' : 'col-meta'}, `${kind} · ${missing}`)];
-  if (c.examples.length) notes.push(h('span', {class: 'col-examples'}, `e.g. ${c.examples.map(short).join(', ')}`));
+  if (c.examples.length) notes.push(h('span', {class: 'col-examples'}, 'e.g. ', c.examples.map((e, k) =>
+    [k ? ', ' : '', h('bdi', {}, short(e)), c.exampleValues[k] === null ? '' : ` → ${c.exampleValues[k]}`])));
+  if (c.notNumbers?.length) notes.push(h('span', {class: 'col-text warn'}, 'Not numbers: ', quoted(c.notNumbers),
+    c.commas ? ` (${COMMAS[c.commas]})` : ''));
   if (!c.numeric && c.present) notes.push(h('span', {class: 'col-text'}, c.levels.length > MAX_LEVELS ?
     `Too many levels to use; text cannot be X` :
-    `Text: Z only, as ${plural(c.levels.length-1, 'indicator')} vs “${short(c.levels[0])}”`));
+    ['Text: Z only, as ', plural(c.levels.length-1, 'indicator'), ' vs ', quoted([c.levels[0]])]));
   return notes;
 }
 
@@ -252,8 +281,8 @@ function columnOptions(c, j) {
 
 function renderColumns() {
   const rows = state.columns.map((c, j) => h('tr', {'data-column': c.name, 'data-index': j},
-    h('th', {scope: 'row'}, h('span', {class: 'col-name', id: `col-${j}`}, breakable(c.name)), columnNotes(c),
-      columnOptions(c, j)),
+    h('th', {scope: 'row'}, h('span', {class: 'col-name', id: `col-${j}`}, breakable(c.name)),
+      h('div', {class: 'col-detail'}, columnNotes(c), columnOptions(c, j))),
     ROLES.map(role => h('td', {class: `role role-${role}`},
       h('label', {}, h('input', {type: 'radio', name: `role-${j}`, value: role, 'aria-labelledby': `col-${j} head-${role}`}))))));
   $('column-table').tBodies[0].replaceChildren(...rows);
@@ -272,7 +301,7 @@ function syncRoles() {
       const blocked = blockedRole(c, input.value, family);
       input.checked = input.value === role;
       input.disabled = Boolean(blocked);
-      input.title = input.parentElement.title = blocked || '';
+      input.title = input.parentElement.title = displayText(blocked || '');
     }
     const at = exposures.indexOf(c.name);
     row.querySelector('.col-order').textContent = at < 0 ? '' : `X${at+1}`;
@@ -295,9 +324,9 @@ function applyFilter() {
   for (const row of rows) row.hidden = Boolean(query) && !row.dataset.column.toLowerCase().includes(query);
   const shown = rows.filter(row => !row.hidden).length;
   $('column-filter').closest('fieldset').classList.toggle('filtered', Boolean(query));
-  $('filter-count').textContent = !query ? `${plural(rows.length, 'column')} in the file.` :
+  setText($('filter-count'), !query ? `${plural(rows.length, 'column')} in the file.` :
     shown ? `Showing ${shown} of ${plural(rows.length, 'column')}; All and None apply to these.` :
-    `No column name contains “${query}”.`;
+    `No column name contains “${query}”.`);
 }
 
 // Until the visitor picks the outcome type, it follows the outcome: binary for 0/1.
@@ -307,8 +336,11 @@ function followOutcome() {
   field('csvFamily').value = suggestFamily(state.columns.find(c => c.name === outcome));
 }
 
+const ROLE_NAMES = {exposure: 'chemical exposure', confounder: 'confounder (Z)', outcome: 'outcome', event: 'event (0/1)',
+                    ignore: 'ignored'};
+
 function onRole(input) {
-  const c = state.columns[Number(input.name.slice(5))];
+  const c = state.columns[Number(input.name.slice(5))], before = state.roles, family = csvFamily();
   try {
     state.roles = assignRole(state.roles, state.columns, c.name, input.value, csvFamily());
   } catch (error) {
@@ -317,6 +349,30 @@ function onRole(input) {
   followOutcome();
   syncRoles();
   onControls();
+  // Said aloud: the new role, a column that lost the outcome or event role to it,
+  // and an outcome type that followed the outcome.
+  const {exposures} = selection(state.roles, state.columns), cox = csvFamily() === 'cox';
+  const label = (name, role) => role === 'exposure' ? `chemical exposure X${exposures.indexOf(name)+1}` :
+    role === 'outcome' && cox ? 'survival time' : ROLE_NAMES[role];
+  const lost = [...before].filter(([name, role]) => name !== c.name && role !== 'ignore' && roleOf(state.roles, name) === 'ignore')
+    .map(([name, role]) => `${name}, the ${role === 'outcome' && cox ? 'survival time' : ROLE_NAMES[role]} before, is now ignored`);
+  const type = csvFamily() !== family ? [`Outcome type: ${field('csvFamily').selectedOptions[0].textContent}`] : [];
+  announce([`${c.name}: ${label(c.name, roleOf(state.roles, c.name))}`, ...lost, ...type].join('. ')+'.');
+}
+
+// Up and down arrows move to the same role in the row above or below, changing
+// nothing (or to that row's role, when it cannot take this one); left and right
+// arrows and Space change the role, as in any radio group.
+function onRoleKey(event) {
+  const input = event.target;
+  if (input.type !== 'radio' || !input.name.startsWith('role-') || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  const rows = [...$('column-table').tBodies[0].rows].filter(row => !row.hidden);
+  const row = rows[rows.indexOf(input.closest('tr'))+(event.key === 'ArrowDown' ? 1 : -1)];
+  if (!row) return;
+  const radios = [...row.querySelectorAll('input[type=radio]')];
+  (radios.find(e => e.value === input.value && !e.disabled) ?? radios.find(e => e.checked)).focus();
 }
 
 function onCsvFamily() {
@@ -349,16 +405,22 @@ function onOption(input) {
   onControls();
 }
 
+// Only the latest choice counts: a file still being read when another is chosen
+// (or the choice is cleared) is dropped.
+let fileToken = 0;
 async function onFile() {
-  const file = field('file').files[0];
+  const file = field('file').files[0], token = ++fileToken;
   if (!file) return;
   try {
-    const table = parseCsv(await file.text());
+    const text = await file.text();
+    if (token !== fileToken) return;
+    const table = parseCsv(text);
     if (!table.rows.length) throw new Error('the file has a header but no data rows');
     state.table = table;
     state.columns = describeColumns(table);
     state.fileName = file.name;
   } catch (error) {
+    if (token !== fileToken) return;
     state.table = state.columns = state.roles = null;
     state.fileName = '';
     $('csv-columns').hidden = true;
@@ -384,25 +446,36 @@ async function onFile() {
 function message(text, kind = 'error') {
   const box = $('message');
   box.hidden = !text;
-  box.textContent = text || '';
+  setText(box, text || '');
   box.classList.toggle('info', kind === 'info');
 }
 
+// While a fit or bootstrap runs, the progress row shows with Cancel. Focus moves
+// from the button that started the run (`from`) to Cancel, and when the run ends,
+// from Cancel to the Results heading if results were drawn, else back to `from`.
+// The progress text is not a live region: announce() says the coarse steps.
 let timer = null;
-function busy(on, text = '') {
+function busy(on, {text = '', from = null, rendered = false} = {}) {
+  const cancel = $('cancel'), active = document.activeElement;
   state.busy = on;
-  $('progress').hidden = !on;
   const bar = $('progress').querySelector('progress');
   bar.removeAttribute('value');
   $('progress-text').textContent = text;
   clearInterval(timer);
   if (on) {
+    $('progress').hidden = false;
+    if (!active || active === document.body || active === from) cancel.focus();
     const started = performance.now();
     if (text) timer = setInterval(() => {
       $('progress-text').textContent = `${text} ${duration((performance.now()-started)/1000)}`;
     }, 250);
   }
   onControls();
+  if (!on) {
+    // Before Cancel hides, which would drop focus to the page.
+    if (active === cancel) [rendered && $('results-title'), from, $('results-title')].find(e => e && !e.disabled)?.focus();
+    $('progress').hidden = true;
+  }
 }
 
 async function runFit() {
@@ -417,7 +490,11 @@ async function runFit() {
   message(null);
   // The file is named as it was when the fit started: another may be open by the time it ends.
   const key = controlsKey(), fileName = data.source === 'csv' ? state.fileName : null;
-  busy(true, s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…');
+  const text = s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…', from = $('fit');
+  const started = performance.now();
+  let rendered = false;
+  busy(true, {text, from});
+  announce(text);
   try {
     const workers = await pool.ensure(s.spline ? 2 : 1);
     const [neural, spline] = await Promise.all([pool.call(workers[0], 'fitNeural', [data, s, s.seed]),
@@ -425,10 +502,12 @@ async function runFit() {
     state.fit = {data, settings: s, key, fileName, neural, spline};
     state.boot = null;
     render();
+    rendered = true;
+    announce(`Fit done in ${duration((performance.now()-started)/1000)}. The results are below.`);
   } catch (error) {
     message(error instanceof Cancelled ? 'Fit cancelled.' : error.message, error instanceof Cancelled ? 'info' : 'error');
   } finally {
-    busy(false);
+    busy(false, {from, rendered});
   }
 }
 
@@ -444,9 +523,11 @@ async function runBootstrap() {
                                grid: Float64Array.from(f.spline.grid), seed: s.seed};
   const kinds = Object.keys(jobs), tasks = [], rows = {neural: [], spline: []};
   for (let b = 0; b < B; ++b) for (const kind of kinds) tasks.push({kind, b});
-  busy(true);
+  const from = $('bootstrap');
+  busy(true, {from});
+  announce(`Bootstrap started: ${tasks.length} refits.`);
   const bar = $('progress').querySelector('progress'), started = performance.now();
-  let done = 0, frame = 0;
+  let done = 0, frame = 0, quarter = 0, rendered = false;
   const show = () => {
     frame = 0;
     const elapsed = (performance.now()-started)/1000, left = done ? elapsed/done*(tasks.length-done) : NaN;
@@ -460,6 +541,9 @@ async function runBootstrap() {
       rows[task.kind][task.b] = row;
       ++done;
       frame ||= requestAnimationFrame(show);
+      // Said aloud at 25, 50 and 75%.
+      if (Math.floor(4*done/tasks.length) > quarter && done < tasks.length)
+        announce(`Bootstrap ${25*(quarter = Math.floor(4*done/tasks.length))}% done.`);
     });
     const boot = {B, seconds: (performance.now()-started)/1000, workers: pool.workers.length};
     for (const kind of kinds) {
@@ -470,13 +554,15 @@ async function runBootstrap() {
     }
     state.boot = boot;
     render();
+    rendered = true;
+    announce(`Bootstrap done: B = ${B} in ${duration(boot.seconds)}. Standard errors and intervals are in the results.`);
   } catch (error) {
     // A failed replicate invalidates the whole bootstrap, as in the native engine.
     pool.cancel();
     message(error instanceof Cancelled ? 'Bootstrap cancelled.' : error.message, error instanceof Cancelled ? 'info' : 'error');
   } finally {
     if (frame) cancelAnimationFrame(frame);
-    busy(false);
+    busy(false, {from, rendered});
   }
 }
 
@@ -607,8 +693,9 @@ function render() {
   if (!f) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
   const label = {simulated: `Simulated, g = ${d.truth?.g}`, nhanes: 'NHANES', csv: f.fileName}[d.source];
-  const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {}, 'Results'),
-      h('span', {class: 'facts'}, `${label} · ${d.family}`)),
+  // The heading takes focus when a run that drew results ends (busy).
+  const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {id: 'results-title', tabindex: '-1'}, 'Results'),
+      h('span', {class: 'facts'}, h('bdi', {}, label), ` · ${d.family}`)),
     h('p', {class: 'facts'}, describe(d)),
     h('p', {class: 'stale', hidden: true}, 'The controls changed after this fit. Fit again to use them.'));
   // g(u) with bands, the truth and the index distribution.
@@ -629,7 +716,8 @@ function render() {
       'NeuralPLSI model (.nplsi)'),
     d.transforms ? h('button', {type: 'button', class: 'small',
       onclick: () => download('neuralplsi-preprocessing.json', preprocessingJson(), 'application/json')}, 'Preprocessing (JSON)') : null),
-    h('p', {class: 'help'}, 'The model file loads with NeuralPLSI.load(path) in the Python package and nplsi_load in C++.' +
+    h('p', {class: 'help'}, 'The model file loads with NeuralPLSI.load(path) in the Python package, load_model() in R ' +
+      'and nplsi_load in C++.' +
       (d.transforms ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
         '(column order, logs, means and SDs, indicators) before predicting.' : '') +
       ' Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
@@ -704,6 +792,7 @@ $('nhanes-retry').addEventListener('click', loadNhanes);
 $('fit').addEventListener('click', runFit);
 $('bootstrap').addEventListener('click', runBootstrap);
 $('cancel').addEventListener('click', () => pool.cancel());
+$('column-table').addEventListener('keydown', onRoleKey);
 let resize = 0;
 addEventListener('resize', () => { clearTimeout(resize); resize = setTimeout(() => { drawCharts(); markScrollable(); }, 150); });
 onSource();

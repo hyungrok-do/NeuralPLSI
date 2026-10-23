@@ -133,6 +133,10 @@ export function planCsv(table, columns, {family, roles, log = false, standardize
   else if (!exposures.length) plan.reason = 'Choose at least one chemical exposure (X)';
   else if (family === 'binary' && !binaryOutcome)
     plan.reason = `The outcome ${outcome} is not coded 0/1; choose another outcome or outcome type`;
+  // A logistic fit needs both outcomes; with fewer than two rows prepareTable says so.
+  else if (family === 'binary' && keep.length >= 2 && (plan.cases === 0 || plan.cases === keep.length))
+    plan.reason = `The outcome ${outcome} has ${plan.cases ? 'no non-cases (all 1)' : 'no cases (all 0)'}` +
+      (keep.length < table.rows.length ? ' in the rows used' : '');
   else {
     try {
       plan.data = prepareTable(table, {family, outcome, event, exposures, confounders, log: logged, standardize,

@@ -114,3 +114,9 @@ export function duration(seconds) {
   const s = Math.round(seconds), m = Math.floor(s/60);
   return m ? `${m} min ${String(s%60).padStart(2, '0')} s` : `${s} s`;
 }
+
+// Text for the page from a file's names and values: without the Unicode bidi
+// controls (embeddings, overrides, isolates and marks), so a header such as
+// "a\u202ebc" cannot reorder itself or the text around it. Data keep the names.
+const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+export const displayText = text => String(text).replace(BIDI_CONTROLS, '');
