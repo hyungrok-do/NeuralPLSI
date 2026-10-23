@@ -19,7 +19,7 @@ The `source_sha256` recorded in every result row matches these commits.
 ## Files
 
 - `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green, NeuralPLSI-AdamGamma purple; in panel D its line is dashed because it lies on the green one):
-  - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
+  - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value, drawn as its 95% Monte-Carlo (Wilson) interval over the 500 replicates with a tick at the estimate. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
   - B: mean bootstrap SE / empirical SD for each coordinate.
   - C: RMSE of each coordinate, and of g on |u| ≤ 2.
   - D: pointwise coverage of the 95% band for g.

@@ -150,6 +150,14 @@ def replicate_label(cells):
     return f'{counts[0]} replicates' if len(counts) == 1 else f'{counts[0]}-{counts[-1]} replicates'
 
 
+def wilson(p, n):
+    """95% Wilson score interval for a proportion p observed in n replicates."""
+    p = np.asarray(p, dtype=float)
+    centre, scale = p+Z*Z/(2*n), 1+Z*Z/n
+    half = Z*np.sqrt(p*(1-p)/n+Z*Z/(4*n*n))
+    return (centre-half)/scale, (centre+half)/scale
+
+
 def mc_band(reps):
     half = Z*np.sqrt(NOMINAL*(1-NOMINAL)/reps)
     return NOMINAL-half, NOMINAL+half
@@ -206,7 +214,9 @@ def setting_axes(container, xlabel):
 
 
 def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
-                     ref=None, xlim=None, band=None, log=False, step=None):
+                     ref=None, xlim=None, band=None, log=False, step=None, interval=False):
+    """One row per coordinate. interval=True draws coverage as its 95% Monte-Carlo
+    (Wilson) interval over the replicates, with a tick at the estimate."""
     rows = coordinate_rows(cells, with_g)
     yy = np.arange(len(rows))
     offsets = dict(zip(series, np.linspace(-0.22, 0.22, len(series)) if len(series) > 1 else [0.]))
@@ -227,8 +237,14 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
             summary = {par: coordinate_summary(cell, par) for par in ('beta', 'gamma')}
             v = [block_summary(cell, 'g')['rmse'] if par == 'g' else summary[par][key][j]
                  for par, j, _ in rows]
-            shown += v
-            ax.plot(v, yy+offsets[s], ls='', ms=4.5, mfc='white', mew=1.4, zorder=3, **style(s, sizes))
+            if interval:
+                low, high = wilson(v, len(cell['beta_est']))
+                ax.hlines(yy+offsets[s], low, high, color=MODEL_COLOR[s[0]], lw=1.8, zorder=3)
+                ax.plot(v, yy+offsets[s], ls='', marker='|', ms=6, mew=1.6, color=MODEL_COLOR[s[0]], zorder=4)
+                shown += list(low)+list(high)
+            else:
+                shown += v
+                ax.plot(v, yy+offsets[s], ls='', ms=4.5, mfc='white', mew=1.4, zorder=3, **style(s, sizes))
         ax.grid(axis='x', which='both' if log else 'major', alpha=0.16, lw=0.7)
         ax.grid(axis='y', alpha=0.08, lw=0.7)
         ax.set_axisbelow(True)
@@ -284,12 +300,13 @@ def combined(cells, out):
     reps = min(len(c['beta_est']) for c in cells.values())
     fig = plt.figure(figsize=(15, 29), layout='constrained')
     panels = fig.subfigures(4, 1, height_ratios=[5.6, 5.6, 6.0, 9.0], hspace=0.03)
-    titles = ['Coverage of the 95% bootstrap CI for each coordinate of $\\beta$ and $\\gamma$',
+    titles = ['Coverage of the 95% bootstrap CI for each coordinate of $\\beta$ and $\\gamma$, '
+              f'with its 95% Monte-Carlo interval over the {reps} replicates',
               'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
               f'Estimation accuracy: RMSE of each coordinate, and of g over |u| $\\leq$ {DENSE:g}',
               'Pointwise coverage of the 95% bootstrap band for g(u)']
     draw_coordinates(panels[0], cells, series, sizes, 'cov', 'bootstrap CI coverage',
-                     ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05)
+                     ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05, interval=True)
     draw_coordinates(panels[1], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
                      ref=1.0, xlim=(0.8, 1.2), step=0.1)
     draw_coordinates(panels[2], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
