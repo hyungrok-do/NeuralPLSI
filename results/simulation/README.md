@@ -5,20 +5,20 @@ in git. They are on BigPurple at `/gpfs/scratch/doh03/NeuralPLSI/output/simulati
 
 | Setting | Value |
 |---|---|
-| Estimators | NeuralPLSI (commit `d7338d0`: full-batch L-BFGS, exact Newton γ, no validation split), SplinePLSI (commit `816893d`: C++ profile fit), and NeuralPLSI-Adam, a baseline of typical neural-network training (commit `b3b88cb`: minibatch AdamW, early stopping on a 20% validation split, no γ refit) |
+| Estimators | NeuralPLSI (commit `d7338d0`: full-batch L-BFGS, exact Newton γ, no validation split), SplinePLSI (commit `816893d`: C++ profile fit), NeuralPLSI-Adam, a baseline of typical neural-network training (commit `b3b88cb`: minibatch AdamW, early stopping on a 20% validation split, no γ refit), and NeuralPLSI-AdamGamma, the same AdamW fit followed by the exact γ fit of L-BFGS (commit `99e1a1c`) |
 | Sample size | n = 2000 (training set; the test set has the same size) |
 | g | linear, sfun (S-shape), sigmoid |
 | Outcomes | continuous, binary, cox |
 | Replicates | 500 per setting (seeds 0-499) |
-| Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000 for NeuralPLSI and NeuralPLSI-Adam; B = 999 for SplinePLSI, which was not rerun |
+| Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000 for the three NeuralPLSI estimators; B = 999 for SplinePLSI, which was not rerun |
 | Exposures | normal |
-| Run | NeuralPLSI: 2026-10-22, job 28702575. NeuralPLSI-Adam: 2026-10-22, job 28707312. SplinePLSI: 2026-10-21, job 28680527. All on `cpu_short` with 40 CPUs per task |
+| Run | NeuralPLSI: 2026-10-22, job 28702575. NeuralPLSI-Adam: 2026-10-22, job 28707312. NeuralPLSI-AdamGamma: 2026-10-23, job 28718391. SplinePLSI: 2026-10-21, job 28680527. All on `cpu_short` with 40 CPUs per task |
 
 The `source_sha256` recorded in every result row matches these commits.
 
 ## Files
 
-- `inference.png` / `.pdf`, one figure with four panels and the three estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green):
+- `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green, NeuralPLSI-AdamGamma purple; in panel D its line is dashed because it lies on the green one):
   - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
   - B: mean bootstrap SE / empirical SD for each coordinate.
   - C: RMSE of each coordinate, and of g on |u| ≤ 2.
@@ -100,6 +100,35 @@ So with typical training the bootstrap does not give valid inference for the
 linear coefficients: early stopping biases them, the bias is reproduced in
 every refit, and the intervals for the largest coefficient under-cover in
 every setting. The full-batch fit with an exact γ step removes this.
+
+## The baseline followed by the exact γ fit (NeuralPLSI-AdamGamma)
+
+This arm runs the baseline's AdamW fit unchanged and then fits γ and the
+intercept exactly on all rows, with the index and link fixed, as L-BFGS does.
+Its β and g are therefore the baseline's: they were identical in all 4500
+datasets, so β coverage (0.965-0.973), β RMSE (10-13% above L-BFGS) and the
+g results above apply unchanged. Only γ differs.
+
+- **γ is repaired.** Coverage is 0.937-0.965 for the block and 0.932-0.978 per
+  coordinate, with none below the Monte-Carlo range (the baseline had 9).
+  SE/SD is 0.98-1.01. The bias of γ₁ is about 0 for continuous outcomes and
+  -0.006 to -0.031 for binary and Cox, against -0.04 to -0.15 before. An
+  interval of the same width centred on the estimate covers 0.908-0.954.
+- **γ accuracy.** RMSE is within 1% of L-BFGS for continuous and binary
+  outcomes and 7-18% higher for Cox. For Cox, the bootstrap mean of γ is 8-15%
+  more accurate than the single fit, so the remaining noise in β and g reaches
+  γ through the offset, and γ₁'s percentile interval over-covers there
+  (0.968-0.978).
+- **Prediction.** Test MSE is 1.011-1.018, between the baseline (1.014-1.021)
+  and L-BFGS (1.008-1.011). AUC and C-index are within 0.002.
+- **Cost.** The γ step adds no measurable time: the bootstrap takes 5-6 s with
+  B = 1000.
+
+So the two parts of typical training fail in different ways. Early stopping
+biases γ, the bootstrap cannot see that bias, and an exact γ step afterwards
+removes it. Minibatch training of β and g on 80% of the rows makes them less
+accurate and makes the β intervals over-cover, and a γ step cannot change
+that. Full-batch L-BFGS addresses both.
 
 ## Regenerate
 

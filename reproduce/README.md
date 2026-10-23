@@ -37,7 +37,7 @@ The scenario is set by `--n_instances`, `--g_fn` (`linear`, `sfun`, `sigmoid`),
 `--outcome` (`continuous`, `binary`, `cox`) and `--exposure_dist` (`normal`,
 `uniform`, `t`). The defaults are 500 replicates (`--n_replicates`) and B = 100
 (`--n_bootstrap`). The current results in `results/simulation` use n = 2000 and
-500 replicates, with B = 1000 for NeuralPLSI and NeuralPLSI-Adam and B = 999
+500 replicates, with B = 1000 for the three NeuralPLSI estimators and B = 999
 for SplinePLSI, whose earlier run was not repeated. `--bootstrap_jobs` sets the
 bootstrap threads (`auto` by default).
 

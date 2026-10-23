@@ -48,6 +48,9 @@ MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
 MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73',
                'NeuralPLSI-AdamGamma': '#CC79A7'}
 MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2, 'NeuralPLSI-AdamGamma': 3}
+# NeuralPLSI-AdamGamma shares the baseline's g, so its band coverage is dashed
+# on top of the baseline's line.
+MODEL_DASH = {'NeuralPLSI-AdamGamma': (0, (3, 2))}
 SIZE_MARKER = ['o', 's', '^', 'D']
 SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964
@@ -158,7 +161,7 @@ def style(series, sizes):
 
 
 def legend_handles(series, sizes, *extras):
-    handles = [Line2D([0], [0], lw=1.5, mfc='white', mew=1.6, ms=5.5,
+    handles = [Line2D([0], [0], lw=1.5, mfc='white', mew=1.6, ms=5.5, ls=MODEL_DASH.get(s[0], '-'),
                       label=series_label(s, sizes), **style(s, sizes)) for s in series]
     available = {
         'target': Line2D([0], [0], **REF_LINE, label='target (0.95 coverage, 1.0 SE ratio)'),
@@ -262,7 +265,7 @@ def draw_g_coverage(container, cells, series, sizes, reps):
                 truth = cell['g_truth']
                 covered = (cell['g_lb'] <= truth) & (truth <= cell['g_ub'])
                 ax.plot(cell['grid'], covered.mean(axis=0), color=MODEL_COLOR[s[0]], lw=1.6, zorder=3,
-                        ls='-' if sizes.index(s[1]) == 0 else '--')
+                        ls=MODEL_DASH.get(s[0], '-') if sizes.index(s[1]) == 0 else '--')
             ax.set_xlim(-3, 3)
             ax.set_ylim(0, 1.02)
             ax.grid(alpha=0.16, lw=0.7)
