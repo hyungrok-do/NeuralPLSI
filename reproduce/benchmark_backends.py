@@ -37,7 +37,7 @@ def main(argv=None):
     records = []
     for family in args.outcomes:
         for seed in range(args.repeats):
-            x, z, y, *_ = simulate_data(args.n, outcome=family, g_type='nlrelu', seed=seed)
+            x, z, y, *_ = simulate_data(args.n, outcome=family, g_type='threshold', seed=seed)
             model = NeuralPLSI(family=family, max_iter=args.max_iter, activation='ELU')
             start = perf_counter()
             model.fit(x, z, y, random_state=seed)

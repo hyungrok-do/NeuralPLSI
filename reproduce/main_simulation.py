@@ -296,7 +296,7 @@ def build_parser():
     parser.add_argument('--nn_bootstrap_quantile', choices=['linear','weibull'], default='linear')
     parser.add_argument('--bootstrap_jobs', default='auto',
                         type=lambda value: value if value == 'auto' else int(value))
-    parser.add_argument('--g_fn', default='sigmoid', choices=['linear','nlrelu','sigmoid'])
+    parser.add_argument('--g_fn', default='sigmoid', choices=['linear','sigmoid','threshold'])
     parser.add_argument('--outcome', default='continuous', choices=['continuous','binary','cox'])
     parser.add_argument('--exposure_dist', default='normal', choices=['normal','uniform','t'])
     parser.add_argument('--models', nargs='+', default=['all'])

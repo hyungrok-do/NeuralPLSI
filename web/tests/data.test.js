@@ -47,7 +47,7 @@ test('exposures and covariates follow the design', () => {
 });
 
 test('binary and Cox outcomes are coded as the engine expects', () => {
-  const b = simulate({n: 2000, outcome: 'binary', g: 'nlrelu', seed: 2});
+  const b = simulate({n: 2000, outcome: 'binary', g: 'threshold', seed: 2});
   assert.ok(b.y.every(v => v === 0 || v === 1));
   const c = simulate({n: 2000, outcome: 'cox', g: 'linear', seed: 2});
   assert.equal(c.y.length, 4000);
@@ -61,7 +61,7 @@ import json, numpy as np
 from neuralplsi.simulation import simulate_data, beta, gamma
 grid = np.linspace(-3, 3, 13)
 out = {'beta': beta.tolist(), 'gamma': gamma.tolist(), 'links': {}, 'rates': {}}
-for g in ('sigmoid', 'nlrelu', 'linear'):
+for g in ('sigmoid', 'threshold', 'linear'):
     *_, g_fn = simulate_data(2, g_type=g)
     out['links'][g] = g_fn(grid).tolist()
     out['rates'][g] = {'binary': float(simulate_data(100000, 'binary', g, seed=1)[2].mean()),

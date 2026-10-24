@@ -33,7 +33,7 @@ minibatch AdamW baseline: at most 200 epochs, batch size 64, learning rate
 1e-3, weight decay 1e-4, patience 10), `NeuralPLSI-AdamGamma` (the same AdamW
 fit followed by the exact gamma fit of L-BFGS) or `all` (NeuralPLSI and
 SplinePLSI).
-The scenario is set by `--n_instances`, `--g_fn` (`linear`, `nlrelu`, `sigmoid`),
+The scenario is set by `--n_instances`, `--g_fn` (`linear`, `sigmoid`, `threshold`),
 `--outcome` (`continuous`, `binary`, `cox`) and `--exposure_dist` (`normal`,
 `uniform`, `t`). The defaults are 500 replicates (`--n_replicates`) and B = 100
 (`--n_bootstrap`). The current results in `results/simulation` use n = 2000 and
@@ -74,9 +74,9 @@ scenarios (`--dry-run` prints the 54 commands).
 array jobs that call `run_simulation_hpc.sh <n>`. Array IDs 0-8 run NeuralPLSI,
 9-17 SplinePLSI, 18-26 the AdamW baseline `NeuralPLSI-Adam` and 27-35
 `NeuralPLSI-AdamGamma`. In each block
-of nine, the first three IDs use the sigmoid g, the next three the nonlinear ReLU and the
+of nine, the first three IDs use the sigmoid g, the next three the threshold g and the
 last three linear g, each with continuous, binary and cox outcomes in that
-order (ID 13 is SplinePLSI, nonlinear ReLU, binary). The scripts default to IDs 0-8.
+order (ID 13 is SplinePLSI, threshold g, binary). The scripts default to IDs 0-8.
 Submit from the repository root:
 
 ```bash
