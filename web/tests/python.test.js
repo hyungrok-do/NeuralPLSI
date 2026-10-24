@@ -5,7 +5,8 @@ import {mkdtempSync, readFileSync, symlinkSync, writeFileSync, rmSync} from 'nod
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadBuiltEngine, noPython, root, runPython} from './helpers.js';
-import {prepareNhanes, simulate, NHANES_SETTINGS} from '../src/data.js';
+import {parseCsv, describeColumns, simulate, NHANES_SETTINGS, NHANES_SETUP} from '../src/data.js';
+import {planCsv, presetRoles} from '../src/roles.js';
 
 const {fitNeural, neuralArrays} = await import('../dist/models.js');
 const {NEURAL_DEFAULTS} = await import('../dist/engine.js');
@@ -33,13 +34,18 @@ except Captured as captured:
     x, z, y, settings = captured.args
 print(json.dumps({'x': x.tolist(), 'z': z.tolist(), 'y': y.tolist(), 'settings': settings}))`;
 
-test('NHANES preprocessing matches reproduce/nhanes.py', {skip: noPython}, () => {
+test('the NHANES setup matches the preprocessing of reproduce/nhanes.py', {skip: noPython}, () => {
   const work = mkdtempSync(join(tmpdir(), 'nplsi-nhanes-'));
   try {
     symlinkSync(join(root, 'NHANES'), join(work, 'NHANES'));
     const out = runPython(nhanesCapture, [join(root, 'reproduce', 'nhanes.py')], {cwd: work}).trim().split('\n');
     const py = JSON.parse(out.at(-1));
-    const d = prepareNhanes(readFileSync(join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'), 'utf8'));
+    // The page's NHANES example: the file with NHANES_SETUP's roles and transforms.
+    const table = parseCsv(readFileSync(join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'), 'utf8'));
+    const columns = describeColumns(table), preset = NHANES_SETUP;
+    const d = planCsv(table, columns, {family: preset.family, roles: presetRoles(columns, preset), log: preset.log,
+      standardize: preset.standardize, categorical: preset.categorical, logOutcome: preset.logOutcome,
+      standardizeOutcome: preset.standardizeOutcome}).data;
     assert.equal(d.n, py.y.length);
     assert.match(out[0], new RegExp(`Using ${d.n} complete observations; excluded ${d.rows-d.n} rows`));
     assert.deepEqual([d.p, d.q], [py.x[0].length, py.z[0].length]);

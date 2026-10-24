@@ -5,9 +5,21 @@ inference in the browser. The C++ engine in `core/` is compiled to WebAssembly
 and runs in Web Workers on the visitor's machine; data never leave the browser.
 The page is hosted on GitHub Pages and works offline once loaded.
 
-Data sources: the simulation design of the paper (ported to JavaScript with a
-seeded generator; it does not reproduce NumPy's draws), the NHANES example
-prepared as in `reproduce/nhanes.py`, and a CSV file chosen by the user.
+Data sources, in the order the page offers them: your own data (a CSV file,
+the default), the NHANES example, and the simulation design of the paper
+(ported to JavaScript with a seeded generator; it does not reproduce NumPy's
+draws). All three go through the same column setup below. The NHANES example
+starts set up as `reproduce/nhanes.py` (`NHANES_SETUP` in `src/data.js`), and
+the simulated data (columns x1-x8, z1-z3 and y, or time and event for Cox) as
+generated; the results show the true β, γ and g while the simulated setup is
+the design. Each source keeps its own setup when the visitor switches between
+them; a new simulated draw keeps the setup, a new simulated outcome restarts it.
+
+The main button, **Fit with bootstrap**, fits on all rows and then runs the
+bootstrap; the estimates show as soon as the fit ends, with the standard errors
+and intervals filled in when the bootstrap does. When the controls still match
+the fit shown, it bootstraps that fit instead of fitting again. **Single fit**
+gives the estimates alone.
 
 Results: β and γ with bootstrap SEs and 95% percentile intervals, g(u) with
 pointwise bands, a forest plot of β, fit diagnostics, and downloads of the
@@ -18,24 +30,29 @@ with the model, which takes inputs as they were fitted: for each model column in
 order, the file column it comes from, whether it was logged, the mean and SD it
 was standardized with, and for indicators the level coded 1 and the reference.
 
-A CSV file is read on the device. The page lists every column with its type
+A CSV file is read on the device. The column setup has an outcome type and
+four tabs: Columns (the role of each column), X (the chemical exposures in
+model order, a Log-transform checkbox for all of them, mixed when only some are
+logged, a log box for each and Standardize), Z (the confounders, with a
+categorical box for numeric ones) and Outcome (the log and standardize boxes of
+a continuous outcome). The arrow keys, Home and End move between the tabs.
+The Columns tab lists every column with its type
 (numeric, 0/1, text or mostly missing), its missing and non-finite values (with
 the strings counted as missing) and a few examples, and the user gives each
 column one role: chemical exposure (X,
 in the index inside g), confounder (Z, linear), outcome, event (0/1, Cox only) or
 ignore, the default for IDs and survey weights. X and Z columns enter the model
 in the order they were given their role (X rows show X1, X2, ...; β has a
-positive weight on X1). Each X row has its own log box, with All and None for
-the X rows shown; standardizing applies to every X, after its log. Text
+positive weight on X1). Standardizing applies to every X, after its log. Text
 columns can only be confounders and are dummy-coded against their first level.
 A numeric confounder can be marked categorical and is then dummy-coded against
 its lowest value; columns with 2 to 10 distinct integer values (other than
 0/1) are suggested, not set. A continuous outcome can be logged and
 standardized. Logs drop rows with a value of zero or below; numbers beyond
 ±3.4e38, the float32 range, count as non-finite. The outcome type follows a 0/1
-outcome until the user sets it. A summary above Fit gives the outcome and
+outcome until the user sets it. A summary above the run buttons gives the outcome and
 family, p and q (after dummy coding) and the rows used and dropped by reason;
-Fit stays disabled, with the reason, until the setup can be fitted, including
+the buttons stay disabled, with the reason, until the setup can be fitted, including
 networks over the engine's limit of 10,000,000 parameters. The roles and checks
 are pure functions in `src/roles.js`. In the role table, the up and down arrows
 move between columns without changing anything and the left and right arrows (or
@@ -63,8 +80,10 @@ reorder the text around it.
 With the roles and transforms of `reproduce/nhanes.py` (triglyceride logged
 and standardized; its eight exposures in its order, logged except retinol,
 standardized; age, and sex and race as categorical), the NHANES file opened as
-a CSV gives the same X, Z and y as the built-in NHANES example, bit for bit,
-and with ELU and the same seed the same fit.
+your own data and set up by hand gives the same X, Z and y as the NHANES
+example, bit for bit, and with ELU and the same seed the same fit. Its file has
+no missing or nonpositive values, so these match `reproduce/nhanes.py`, which
+standardizes over each column's values rather than the rows used.
 
 ## Build
 
@@ -103,22 +122,25 @@ the page's per-replicate bootstrap, run on two instances in any order, gives
 the same draws and summary, byte for byte, as one `nplsi_bootstrap` or
 `splsi_bootstrap` call; that a replicate whose allocation fails frees what it
 allocated; the simulation design; CSV parsing; the column types, roles,
-transforms and reasons of the CSV step (`roles.test.js`), including the NHANES
-file set up as `reproduce/nhanes.py` against the built-in example; and, with a
+transforms and reasons of the column setup (`roles.test.js`), including the
+NHANES setup and the simulated table, which set up as generated gives the
+simulated data exactly; and, with a
 Python that has numpy, pandas, scipy, scikit-learn and matplotlib, the NHANES
-preprocessing against `reproduce/nhanes.py`, the bootstrap resamples against
+setup against `reproduce/nhanes.py`, the bootstrap resamples against
 the Python package, and that an exported model loads in `NeuralPLSI.load` and
 predicts what the WebAssembly model predicts. The Python is the first of
 `$PYTHON`, `python3`, `/usr/bin/python3` and `python` that imports those
 packages; without one, those tests are skipped. `browser.test.js` drives the
 built page in headless Chrome (set `CHROME` if it is not found;
-`NPLSI_BROWSER=0` skips it), including the CSV step with a messy file, column
+`NPLSI_BROWSER=0` skips it), including Fit with bootstrap and Single fit, a
+bootstrap of the fit shown, the simulated data in the column setup (the tabs,
+the Log-transform checkbox and when the truth applies), the CSV step with a messy file, column
 names that look like HTML (they must show as text), long names in the result
 tables on phones 360, 390 and 430 px wide, the NHANES file as a user file
 giving the same data and fit as the NHANES example, a failed NHANES download
 and Retry, the preprocessing download, the role table on a 360 px phone in Cox
 mode, missing-value notes and decimal commas, text contrast in light and dark,
-focus and announcements around Fit and Cancel, arrow keys in the role table,
+focus and announcements around the run buttons and Cancel, arrow keys in the role table,
 Cancel while the WebAssembly module is still loading, a second file chosen
 before the first is read, and bidi controls in a column name; it saves
 screenshots when `NPLSI_SCREENSHOTS` names a directory. CI installs the Python

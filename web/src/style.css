@@ -162,16 +162,9 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 .col-meta, .col-examples, .col-text { display: block; color: var(--muted); font-size: 0.75rem; line-height: 1.35; overflow-wrap: anywhere; }
 .col-text { color: var(--ink-2); }
 .col-meta.warn, .col-text.warn { color: var(--critical); }
-/* Under the name: an X row's position and log box, a numeric Z row's categorical box. */
-.col-options { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; font-size: 0.75rem; line-height: 1.35; }
-.col-order, .opt { display: none; }
-.role-table tr[data-role="exposure"] .col-order { display: inline; font-weight: 600; color: var(--series-1-ink); }
-.role-table tr[data-role="exposure"] .opt-log,
-.role-table tr[data-role="confounder"] .opt-categorical { display: inline-flex; }
-.opt { flex-wrap: wrap; align-items: center; gap: 0 5px; min-height: 1.75rem; color: var(--ink); cursor: pointer; }
-.opt input { margin: 0; width: 0.95rem; height: 0.95rem; accent-color: var(--accent); cursor: inherit; }
-.role-table tr[data-role="confounder"] .opt-categorical.blocked { display: none; }
-.opt .suggest { color: var(--muted); white-space: nowrap; }
+/* Under the name: an X row's position in the index. */
+.col-order { display: none; }
+.role-table tr[data-role="exposure"] .col-order { display: block; font-size: 0.75rem; font-weight: 600; color: var(--series-1-ink); }
 .role label { display: flex; align-items: center; justify-content: center; min-height: 2.75rem; cursor: pointer; }
 .role input { margin: 0; width: 1rem; height: 1rem; accent-color: var(--accent); cursor: inherit; }
 .role input:disabled { opacity: 0.3; }
@@ -207,6 +200,7 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 }
 
 .segmented { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--raised); border-radius: 9px; padding: 3px; }
+.segmented, .tabs { margin-bottom: 0.25rem; }
 .segmented label { display: block; }
 .segmented input { position: absolute; opacity: 0; pointer-events: none; }
 .segmented span {
@@ -215,6 +209,41 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 }
 .segmented input:checked + span { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
 .segmented input:focus-visible + span { outline: 2px solid var(--focus); }
+
+/* The column setup: the outcome type, then a tab for the column roles, the X, the Z and the outcome. */
+.setup { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.tabs { display: flex; gap: 2px; margin-top: 12px; border-bottom: 1px solid var(--border); }
+.tabs [role="tab"] {
+  flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 8px 8px 0 0;
+  background: none; color: var(--ink-2); font-size: 0.88rem;
+}
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--surface); color: var(--ink); font-weight: 600; border-color: var(--border); border-bottom-color: var(--surface);
+}
+.badge {
+  min-width: 1.35rem; padding: 0 5px; border-radius: 999px; background: var(--raised); color: var(--ink-2);
+  font-size: 0.75rem; font-weight: 500; line-height: 1.35rem; text-align: center; font-variant-numeric: tabular-nums;
+}
+.tab-panel { padding-top: 10px; }
+.tab-panel > .help:first-child { margin-top: 0; }
+.panel-title { font-size: 0.86rem; color: var(--ink-2); font-weight: 600; margin: 0 0 4px; }
+.terms { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
+.terms:empty { display: none; }
+.term {
+  display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; align-items: center; gap: 0 8px;
+  padding: 6px 10px; font-size: 0.84rem; border-bottom: 1px solid var(--grid);
+}
+.term:last-child { border-bottom: 0; }
+.term-order { font-size: 0.75rem; font-weight: 600; color: var(--series-1-ink); }
+#z-list .term-order { color: var(--ink-2); }
+.term-name { min-width: 0; }
+.opt { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 5px; min-height: 1.75rem; color: var(--ink); cursor: pointer; }
+.opt input { margin: 0; width: 0.95rem; height: 0.95rem; accent-color: var(--accent); cursor: inherit; }
+.opt .suggest { color: var(--muted); white-space: nowrap; }
+.outcome-chosen { margin: 0; font-size: 0.86rem; color: var(--ink); overflow-wrap: anywhere; }
+.run-alt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 10px; }
+.run-alt .help { margin: 0; }
 
 button {
   padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border);

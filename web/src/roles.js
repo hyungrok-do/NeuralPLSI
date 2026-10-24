@@ -75,6 +75,14 @@ export function setRoleForMany(roles, columns, names, role, on, family) {
   return next;
 }
 
+// The roles of a preset setup ({family, outcome, event, exposures, confounders},
+// as NHANES_SETUP): the outcome, the Cox event, then the X and Z columns in order.
+export function presetRoles(columns, {family, outcome, event, exposures, confounders}) {
+  const chosen = [[outcome, 'outcome'], ...(family === 'cox' ? [[event, 'event']] : []),
+                  ...exposures.map(name => [name, 'exposure']), ...confounders.map(name => [name, 'confounder'])];
+  return chosen.reduce((roles, [name, role]) => assignRole(roles, columns, name, role, family), initialRoles(columns));
+}
+
 // The chosen columns, in the order they got their role.
 export function selection(roles, columns) {
   const known = new Set(columns.map(c => c.name));
@@ -172,7 +180,7 @@ export function planFacts(plan) {
   const k = plan.logged.length, unlogged = plan.exposures.filter(name => !plan.logged.includes(name));
   const logs = !k ? '' : k === plan.p ? 'logged' : unlogged.length <= 2 ? `logged except ${unlogged.join(' and ')}` :
     `${k} of ${plan.p} logged`;
-  const transform = logs && plan.standardize ? `${logs}, then standardized` : logs || (plan.standardize ? 'standardized' : 'as in the file');
+  const transform = logs && plan.standardize ? `${logs}, then standardized` : logs || (plan.standardize ? 'standardized' : 'untransformed');
   const text = plan.terms.filter(t => t.levels !== undefined);
   const outcome = plan.outcome === null ? null :
     `${plan.logOutcome ? 'log ' : ''}${plan.outcome}${plan.standardizeOutcome ? ' (z-score)' : ''}`;

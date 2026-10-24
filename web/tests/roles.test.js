@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {root} from './helpers.js';
-import {parseCsv, describeColumns, prepareTable, prepareNhanes, MAX_LEVELS, FLOAT32_MAX, NHANES_EXPOSURES} from '../src/data.js';
-import {ROLES, blockedRole, blockedCategorical, allowedRoles, initialRoles, roleOf, assignRole, setRoleForMany, selection,
+import {parseCsv, describeColumns, prepareTable, simulate, simulatedTable, MAX_LEVELS, FLOAT32_MAX, NHANES_EXPOSURES,
+        NHANES_SETUP} from '../src/data.js';
+import {ROLES, blockedRole, blockedCategorical, allowedRoles, initialRoles, presetRoles, roleOf, assignRole, setRoleForMany, selection,
         suggestFamily, changeFamily, planCsv, planFacts, summaryRows} from '../src/roles.js';
 
 // An ID, a survey weight, a text column, missing values, a 0/1 outcome, a 0/1
@@ -264,25 +265,41 @@ test('numbers beyond the float32 range count as non-finite in their column', () 
   assert.ok(Float32Array.from(p.data.x).every(Number.isFinite) && Float32Array.from(p.data.z).every(Number.isFinite));
 });
 
-test('the NHANES file with the roles of reproduce/nhanes.py gives the preset data exactly', () => {
-  const text = readFileSync(join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'), 'utf8');
-  const t = parseCsv(text), cc = describeColumns(t), preset = prepareNhanes(text);
-  assert.deepEqual(cc.filter(c => c.codes).map(c => c.name), ['sex', 'race']);
-  const exposures = NHANES_EXPOSURES.map(([name]) => name);
-  const roles = [['triglyceride', 'outcome'], ...exposures.map(name => [name, 'exposure']),
-                 ...['age', 'sex', 'race'].map(name => [name, 'confounder'])]
-    .reduce((r, [name, role]) => assignRole(r, cc, name, role, 'continuous'), initialRoles(cc));
-  const p = planCsv(t, cc, {family: 'continuous', roles, log: exposures.filter(name => name !== 'a5.Retinol'),
-                            standardize: true, categorical: ['sex', 'race'], logOutcome: true, standardizeOutcome: true});
+// A preset setup as the page applies it (app.js loadTable).
+const planPreset = (table, preset) => {
+  const cc = describeColumns(table);
+  return planCsv(table, cc, {family: preset.family, roles: presetRoles(cc, preset), log: preset.log,
+    standardize: preset.standardize, categorical: preset.categorical, logOutcome: preset.logOutcome,
+    standardizeOutcome: preset.standardizeOutcome});
+};
+
+test('the NHANES setup has the columns and transforms of reproduce/nhanes.py', () => {
+  const t = parseCsv(readFileSync(join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'), 'utf8'));
+  assert.deepEqual(describeColumns(t).filter(c => c.codes).map(c => c.name), ['sex', 'race']);
+  const p = planPreset(t, NHANES_SETUP);
   assert.deepEqual([p.ready, p.n, p.p, p.q], [true, 800, 8, 6]);
-  for (const k of ['x', 'z', 'y']) assert.deepEqual(Array.from(p.data[k]), Array.from(preset[k]), k);
+  assert.deepEqual(p.exposures, NHANES_EXPOSURES);
+  assert.deepEqual(p.data.names.x, NHANES_EXPOSURES.map(name => name === 'a5.Retinol' ? name : `log ${name}`));
   assert.deepEqual(p.data.names.z, ['age', 'sex=2', 'race=2', 'race=3', 'race=4', 'race=5']);
-  // The same transforms, under the CSV's column names.
-  const strip = list => list.map(({name, ...rest}) => rest);
-  for (const k of ['x', 'z', 'y']) assert.deepEqual(strip(p.data.transforms[k]), strip(preset.transforms[k]), k);
+  assert.deepEqual(p.data.names.y, ['log triglyceride (z-score)']);
   assert.deepEqual(Object.fromEntries(summaryRows(planFacts(p))), {'Outcome': 'log triglyceride (z-score) · continuous',
     'Chemical exposures (X)': '8, logged except a5.Retinol, then standardized',
     'Confounders (Z)': '6 (sex: 1 indicator vs 1; race: 4 indicators vs 1)', 'Rows': '800 of 800 used'});
+  // reproduce/nhanes.py z-scores over every value of a column; no value is missing, so that is every row.
+  assert.ok(describeColumns(t).every(c => c.missing+c.nonfinite === 0));
+});
+
+test('the simulated table, set up as generated, gives the simulated data exactly', () => {
+  for (const outcome of ['continuous', 'binary', 'cox']) {
+    const options = {n: 300, g: 'threshold', outcome, seed: 7}, d = simulate(options), {table, setup} = simulatedTable(options);
+    assert.deepEqual(table.header, outcome === 'cox' ? [...d.names.x, ...d.names.z, 'time', 'event'] : [...d.names.x, ...d.names.z, 'y']);
+    const p = planPreset(table, setup);
+    assert.equal(p.ready, true, p.reason);
+    for (const k of ['x', 'z', 'y']) assert.deepEqual(Array.from(p.data[k]), Array.from(d[k]), `${outcome} ${k}`);
+    assert.deepEqual([p.data.family, p.data.names.x, p.data.names.z], [outcome, d.names.x, d.names.z]);
+    // z3 (+-1) is suggested as categorical, not set.
+    assert.deepEqual(describeColumns(table).filter(c => c.codes).map(c => c.name), ['z3']);
+  }
 });
 
 test('a binary outcome with no cases or no non-cases cannot be fitted', () => {

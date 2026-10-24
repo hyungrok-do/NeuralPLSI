@@ -1,6 +1,7 @@
 // Data sources: the paper's simulation design, the NHANES example and CSV files.
-// Every source returns {n, p, q, family, x, z, y, names, ...}, with row-major Float64Array
-// matrices and y of width 2 ([time, event]) for Cox outcomes.
+// Each becomes a table that goes through the same column setup (roles.js);
+// prepareTable then returns {n, p, q, family, x, z, y, names, ...}, with row-major
+// Float64Array matrices and y of width 2 ([time, event]) for Cox outcomes.
 
 // xoshiro128** with 53-bit uniforms, seeded through splitmix64. Seeded and
 // portable, but not NumPy's generator: simulate() follows the design of
@@ -407,45 +408,30 @@ export function checkOutcome(family, y, n) {
   }
 }
 
-// reproduce/nhanes.py: every exposure is logged (except retinol) and z-scored
-// over its available values, triglyceride likewise, before complete cases are
-// taken; covariates are age, sex (female = 1) and race dummies (reference
-// Non-Hispanic White).
-export const NHANES_EXPOSURES = [
-  ['a7.a.Tocopherol', 'α-tocopherol'], ['a6.g.tocopherol', 'γ-tocopherol'],
-  ['a4.Retinyl.stearate', 'retinyl stearate'], ['a5.Retinol', 'retinol'],
-  ['a20.3.3.4.4.5.pncb', "3,3',4,4',5-pncb"], ['a17.PCB194', 'PCB194'],
-  ['a22.2.3.4.6.7.8.hxcdf', '2,3,4,6,7,8-hxcdf'], ['a1.trans.b.carotene', 'trans-β-carotene'],
-];
-export const NHANES_COVARIATES = ['age', 'female', 'Non-Hispanic Black', 'Mexican American', 'Other Race', 'Other Hispanic'];
+// The NHANES example as reproduce/nhanes.py sets it up, as a column setup of
+// its file: log triglyceride, z-scored; eight exposures in the script's order,
+// logged except retinol, z-scored; age, sex and race as confounders, with sex
+// and race dummy-coded against their lowest code (male, Non-Hispanic White).
+// The file has no missing or nonpositive values, so z-scores over the rows used
+// equal the script's z-scores over each column's values.
+export const NHANES_EXPOSURES = ['a7.a.Tocopherol', 'a6.g.tocopherol', 'a4.Retinyl.stearate', 'a5.Retinol',
+                                 'a20.3.3.4.4.5.pncb', 'a17.PCB194', 'a22.2.3.4.6.7.8.hxcdf', 'a1.trans.b.carotene'];
+export const NHANES_SETUP = {family: 'continuous', outcome: 'triglyceride', event: null, exposures: NHANES_EXPOSURES,
+                             confounders: ['age', 'sex', 'race'], log: NHANES_EXPOSURES.filter(name => name !== 'a5.Retinol'),
+                             standardize: true, categorical: ['sex', 'race'], logOutcome: true, standardizeOutcome: true};
 // The model settings of reproduce/nhanes.py.
 export const NHANES_SETTINGS = {family: 'continuous', intercept: true, activation: 'ELU'};
 
-export function prepareNhanes(text) {
-  const table = parseCsv(text), columns = describeColumns(table), byName = new Map(columns.map(c => [c.name, c]));
-  const all = Array.from(table.rows.keys()), transforms = {x: [], z: [], y: []};
-  // Logged (unless log is false) and z-scored over the rows with a value, recorded in `into`.
-  const standard = (name, label, log, into) => {
-    const values = byName.get(name).values.map(v => !log ? v : v > 0 ? Math.log(v) : NaN);
-    const rows = all.filter(i => Number.isFinite(values[i])), {mean, sd} = zscore(values, rows);
-    into.push({name: label, column: name, log, mean, sd});
-    return values.map(v => Number.isFinite(v) ? (v-mean)/sd : NaN);
-  };
-  const exposures = NHANES_EXPOSURES.map(([name, label]) => standard(name, label, name !== 'a5.Retinol', transforms.x));
-  const outcome = standard('triglyceride', 'log triglyceride (z-score)', true, transforms.y);
-  const age = byName.get('age').values, sex = byName.get('sex').values, race = byName.get('race').values;
-  const keep = all.filter(i => exposures.every(e => Number.isFinite(e[i])) && Number.isFinite(outcome[i]) &&
-    Number.isFinite(age[i]) && [1, 2].includes(sex[i]) && [1, 2, 3, 4, 5].includes(race[i]));
-  const n = keep.length, p = exposures.length, q = NHANES_COVARIATES.length;
-  const x = new Float64Array(n*p), z = new Float64Array(n*q), y = new Float64Array(n);
-  keep.forEach((r, i) => {
-    exposures.forEach((e, j) => { x[i*p+j] = e[r]; });
-    z.set([age[r], sex[r]-1, +(race[r] === 2), +(race[r] === 3), +(race[r] === 4), +(race[r] === 5)], i*q);
-    y[i] = outcome[r];
-  });
-  transforms.z.push({name: 'age', column: 'age'}, {name: 'female', column: 'sex', equals: 2, reference: 1},
-    ...NHANES_COVARIATES.slice(2).map((name, k) => ({name, column: 'race', equals: k+2, reference: 1})));
-  return {source: 'nhanes', family: 'continuous', n, p, q, x, z, y, rows: table.rows.length, transforms,
-          dropped: {missing: table.rows.length-n, nonfinite: 0, nonpositive: 0},
-          names: {x: NHANES_EXPOSURES.map(([, label]) => label), z: NHANES_COVARIATES, y: ['log triglyceride (z-score)']}};
+// The simulation as a table, so it goes through the same column setup as a
+// file: columns x1..x8, z1..z3 and y (time and event for Cox). Numbers are
+// written with String(), which reads back as the same doubles. The setup is the
+// design itself: no transforms, columns in the order generated.
+export function simulatedTable(options) {
+  const d = simulate(options), yd = d.names.y.length;
+  const rows = Array.from({length: d.n}, (_, i) => [...d.x.subarray(i*d.p, (i+1)*d.p), ...d.z.subarray(i*d.q, (i+1)*d.q),
+                                                   ...d.y.subarray(i*yd, (i+1)*yd)].map(String));
+  return {table: {header: [...d.names.x, ...d.names.z, ...d.names.y], rows, delimiter: ','}, truth: d.truth,
+          setup: {family: d.family, outcome: d.names.y[0], event: d.names.y[1] ?? null, exposures: d.names.x,
+                  confounders: d.names.z, log: [], standardize: false, categorical: [], logOutcome: false,
+                  standardizeOutcome: false}};
 }

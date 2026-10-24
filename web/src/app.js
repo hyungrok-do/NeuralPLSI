@@ -1,8 +1,8 @@
 // The page: reads the controls, runs fits and the bootstrap in the worker pool,
 // and renders estimates, plots and downloads. Nothing leaves the browser.
-import {simulate, parseCsv, describeColumns, prepareNhanes, LINKS, NHANES_SETTINGS, MAX_LEVELS} from './data.js';
-import {ROLES, blockedRole, blockedCategorical, initialRoles, roleOf, assignRole, setRoleForMany, selection, suggestFamily,
-        changeFamily, planCsv, planFacts, summaryRows} from './roles.js';
+import {simulatedTable, parseCsv, describeColumns, LINKS, NHANES_SETUP, NHANES_SETTINGS, MAX_LEVELS} from './data.js';
+import {ROLES, blockedRole, blockedCategorical, initialRoles, presetRoles, roleOf, assignRole, setRoleForMany, selection,
+        suggestFamily, changeFamily, planCsv, planFacts, summaryRows} from './roles.js';
 import {NEURAL_DEFAULTS, networkProblem} from './engine.js';
 import {Pool, Cancelled} from './pool.js';
 import {linkChart, forestChart} from './charts.js';
@@ -12,13 +12,22 @@ const form = document.getElementById('controls');
 const $ = id => document.getElementById(id);
 const field = name => form.elements[name];
 const pool = new Pool();
-// table, columns and roles describe the open CSV file, logged and categorical
-// name its exposures to log and numeric confounders to dummy-code; familyAuto is
-// true until the visitor picks its outcome type, which until then follows the
-// outcome column. nhanesError keeps why the NHANES file did not load.
-const state = {table: null, columns: null, roles: null, logged: new Set(), categorical: new Set(), familyAuto: true,
-               fileName: '', nhanes: null, nhanesError: null, nhanesLoading: null, fit: null, boot: null, busy: false,
-               family: null};
+// The controls every source's column setup shares; each setup keeps its own values.
+const OPTIONS = ['outcomeType', 'standardize', 'logOutcome', 'standardizeOutcome'];
+// One column setup per data source, so switching sources keeps each one's
+// choices: the table and its columns, the roles, logged (exposures to log) and
+// categorical (numeric confounders to dummy-code), familyAuto (true until the
+// visitor picks the outcome type, which until then follows the outcome column)
+// and the values of the shared controls (options). fileName names an opened CSV
+// file. A simulated setup also keeps the truth, the setup of the design itself,
+// the simulation's settings and why the simulation could not run (error).
+const blankSetup = () => ({table: null, columns: null, roles: null, logged: new Set(), categorical: new Set(), familyAuto: true,
+  fileName: '', options: {outcomeType: 'continuous', standardize: true, logOutcome: false, standardizeOutcome: false},
+  truth: null, design: null, simulation: null, error: null});
+// nhanesError keeps why the NHANES file did not load. booting is true while a
+// bootstrap of the fit shown runs. tab is the column setup's open tab.
+const state = {setups: {csv: blankSetup(), nhanes: blankSetup(), simulated: blankSetup()}, nhanesError: null,
+               nhanesLoading: null, fit: null, boot: null, busy: false, booting: false, family: null, tab: 'columns'};
 // Seeds must leave room for the bootstrap fit seeds seed+1337+b below 2**64.
 const MAX_SEED = 2n**64n-1n-1337n-1000n;
 const MODELS = [['neural', 'NeuralPLSI', 'var(--series-1)'], ['spline', 'SplinePLSI', 'var(--series-2)']];
@@ -54,6 +63,8 @@ function announce(text) {
 // ---- Controls
 
 const source = () => form.elements.source.value;
+const setup = () => state.setups[source()];
+const outcomeType = () => setup().options.outcomeType;
 const plural = (k, word, many = `${word}s`) => `${k} ${k === 1 ? word : many}`;
 
 function integer(name, lo, hi, label) {
@@ -73,37 +84,85 @@ function settings() {
           spline: field('spline').checked, seed: BigInt(seed)};
 }
 
-const csvFamily = () => field('csvFamily').value;
+// A table becomes a setup: from a preset ({family, outcome, event, exposures,
+// confounders, log, standardize, categorical, logOutcome, standardizeOutcome},
+// as NHANES_SETUP), or with every column ignored, nothing logged or categorical
+// and an outcome type that follows the outcome.
+function loadTable(s, table, preset = null) {
+  s.table = table;
+  s.columns = describeColumns(table);
+  s.roles = preset ? presetRoles(s.columns, preset) : initialRoles(s.columns);
+  s.logged = new Set(preset?.log ?? []);
+  s.categorical = new Set(preset?.categorical ?? []);
+  s.familyAuto = !preset;
+  s.options.outcomeType = preset?.family ?? 'continuous';
+  if (preset) Object.assign(s.options, {standardize: preset.standardize, logOutcome: preset.logOutcome,
+                                        standardizeOutcome: preset.standardizeOutcome});
+}
 
-function csvPlan() {
-  return planCsv(state.table, state.columns, {family: csvFamily(), roles: state.roles, log: [...state.logged],
-    standardize: field('standardize').checked, categorical: [...state.categorical],
-    logOutcome: field('logOutcome').checked, standardizeOutcome: field('standardizeOutcome').checked});
+function setupPlan(s = setup()) {
+  return planCsv(s.table, s.columns, {family: s.options.outcomeType, roles: s.roles, log: [...s.logged],
+    standardize: s.options.standardize, categorical: [...s.categorical], logOutcome: s.options.logOutcome,
+    standardizeOutcome: s.options.standardizeOutcome});
+}
+
+// The simulated table follows its controls. A new draw of the same outcome keeps
+// the setup, since its columns are the same; a new outcome starts from the design.
+function simulateTable() {
+  const s = state.setups.simulated;
+  let options;
+  try {
+    options = {n: integer('n', 20, 20000, 'Rows'), g: field('g').value, outcome: field('outcome').value,
+               seed: integer('simSeed', 0, Number.MAX_SAFE_INTEGER, 'The simulation seed')};
+  } catch (error) {
+    s.error = error.message;
+    return;
+  }
+  const {table, truth, setup: design} = simulatedTable(options);
+  if (s.table && s.design.family === design.family) {
+    s.table = table;
+    s.columns = describeColumns(table);
+  } else loadTable(s, table, design);
+  Object.assign(s, {truth, design, simulation: options, error: null});
+}
+
+// Whether a simulated setup is still the design, so the truth applies.
+function matchesDesign(s, plan) {
+  const d = s.design, same = (a, b) => a.length === b.length && a.every((v, k) => v === b[k]);
+  return plan.family === d.family && plan.outcome === d.outcome && plan.event === d.event &&
+    same(plan.exposures, d.exposures) && same(plan.confounders, d.confounders) && !plan.logged.length &&
+    !plan.standardize && !plan.logOutcome && !plan.standardizeOutcome && plan.terms.every(t => t.levels === undefined);
+}
+
+// Why the source has no table to set up, or null.
+function missingTable() {
+  const s = setup();
+  if (source() === 'nhanes') {
+    if (state.nhanesError) return `${state.nhanesError}. Press Retry under Data to load it again`;
+    if (!s.table) return 'The NHANES file is still loading';
+  }
+  if (source() === 'simulated' && s.error) return s.error;
+  return s.table ? null : 'Open a CSV file';
 }
 
 function readData() {
-  if (source() === 'simulated')
-    return simulate({n: integer('n', 20, 20000, 'Rows'), g: field('g').value, outcome: field('outcome').value,
-                     seed: integer('simSeed', 0, Number.MAX_SAFE_INTEGER, 'The simulation seed')});
-  if (source() === 'nhanes') {
-    if (state.nhanesError) throw new Error(`${state.nhanesError}. Press Retry under Data to load it again`);
-    if (!state.nhanes) throw new Error('The NHANES file is still loading');
-    return state.nhanes;
-  }
-  if (!state.table) throw new Error('Open a CSV file');
-  const plan = csvPlan();
+  const missing = missingTable();
+  if (missing) throw new Error(missing);
+  const s = setup(), plan = setupPlan(s);
   if (!plan.ready) throw new Error(plan.reason);
-  return plan.data;
+  const data = {...plan.data, source: source()};
+  if (source() === 'simulated') {
+    data.simulation = s.simulation;
+    if (matchesDesign(s, plan)) data.truth = s.truth;
+  }
+  return data;
 }
 
-// summaryRows input for prepared simulated or NHANES data (CSV files use planFacts).
+// summaryRows input for prepared data, for the line above the results.
 function dataFacts(d) {
   const total = (from, step) => { let s = 0; for (let i = from; i < d.y.length; i += step) s += d.y[i]; return s; };
-  const nhanes = d.source === 'nhanes';
   return {family: d.family, outcomeLabel: d.names.y.join(', '), p: d.p, q: d.q, rows: d.rows, n: d.n, dropped: d.dropped,
-          cases: d.family === 'binary' ? total(0, 1) : null, events: d.family === 'cox' ? total(1, 2) : null,
-          xNote: nhanes ? 'logged (except retinol), then standardized' : '',
-          zNote: nhanes ? 'age, female and 4 race indicators' : ''};
+          cases: d.family === 'binary' ? total(0, 1) : null, events: d.family === 'cox' ? total(1, 2) : null};
 }
 
 // One line for the results: rows, X, Z and cases or events.
@@ -116,37 +175,30 @@ function describe(d) {
   return parts.join(' · ');
 }
 
-// The Model card's Family follows the data: the simulated outcome, continuous
-// for NHANES, or the CSV outcome type. Leaving Cox restores the source's intercept.
+// The Model card's Family follows the outcome type of the setup. Leaving Cox
+// restores the source's intercept.
 function syncFamily() {
-  const s = source(), family = field('family'), intercept = field('intercept');
-  family.value = s === 'simulated' ? field('outcome').value : s === 'nhanes' ? 'continuous' : csvFamily();
-  const cox = family.value === 'cox';
-  if (state.family === 'cox' && !cox) intercept.checked = INTERCEPT[s];
-  state.family = family.value;
+  const family = field('family'), intercept = field('intercept'), type = outcomeType();
+  family.value = type;
+  const cox = type === 'cox', head = $('head-outcome');
+  if (state.family === 'cox' && !cox) intercept.checked = INTERCEPT[source()];
+  state.family = type;
   intercept.disabled = cox;
   if (cox) intercept.checked = false;
-  const coxCsv = csvFamily() === 'cox', head = $('head-outcome');
-  $('column-table').classList.toggle('cox', coxCsv);
-  $('outcome-options').hidden = csvFamily() !== 'continuous';
+  $('column-table').classList.toggle('cox', cox);
+  $('outcome-options').hidden = type !== 'continuous';
   // The full header, and the short one shown on phones.
-  head.querySelector('.h-full').textContent = coxCsv ? 'Time' : 'Outcome';
-  head.querySelector('.h-short').textContent = coxCsv ? 'Time' : 'Out';
-  head.title = coxCsv ? 'Survival time (the outcome)' : 'Outcome';
+  head.querySelector('.h-full').textContent = cox ? 'Time' : 'Outcome';
+  head.querySelector('.h-short').textContent = cox ? 'Time' : 'Out';
+  head.title = cox ? 'Survival time (the outcome)' : 'Outcome';
 }
 
 // What the data step would fit, or why it cannot: summary facts and a reason.
 function dataStatus() {
-  if (source() === 'csv') {
-    if (!state.table) return {facts: null, reason: 'Open a CSV file'};
-    const plan = csvPlan();
-    return {facts: planFacts(plan), reason: plan.reason};
-  }
-  try {
-    return {facts: dataFacts(readData()), reason: null};
-  } catch (error) {
-    return {facts: null, reason: error.message};
-  }
+  const missing = missingTable();
+  if (missing) return {facts: null, reason: missing};
+  const plan = setupPlan();
+  return {facts: planFacts(plan), reason: plan.reason};
 }
 
 function renderSummary(facts) {
@@ -155,13 +207,13 @@ function renderSummary(facts) {
 }
 
 function familyNote() {
-  const note = $('family-note');
+  const note = $('family-note'), s = setup();
   let text = '';
-  if (source() === 'csv' && state.columns) {
-    const {outcome} = selection(state.roles, state.columns), column = state.columns.find(c => c.name === outcome);
-    if (column?.binary && csvFamily() === 'binary' && state.familyAuto)
+  if (s.columns) {
+    const {outcome} = selection(s.roles, s.columns), column = s.columns.find(c => c.name === outcome);
+    if (column?.binary && outcomeType() === 'binary' && s.familyAuto)
       text = `Binary (logistic), because ${outcome} is coded 0/1.`;
-    else if (column?.binary && csvFamily() === 'continuous')
+    else if (column?.binary && outcomeType() === 'continuous')
       text = `${outcome} is coded 0/1: the binary (logistic) outcome type usually fits it.`;
   }
   setText(note, text);
@@ -175,7 +227,7 @@ function controlsKey() {
     if (!e.name || e.name === 'B' || e.type === 'file') continue;
     values.push(e.type === 'checkbox' || e.type === 'radio' ? `${e.name}=${e.value}:${e.checked}` : `${e.name}=${e.value}`);
   }
-  return JSON.stringify([values, state.fileName, state.table?.rows.length]);
+  return JSON.stringify([values, setup().fileName, setup().table?.rows.length]);
 }
 
 function onControls() {
@@ -186,10 +238,18 @@ function onControls() {
   renderSummary(status.facts);
   familyNote();
   setText($('fit-status'), reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '');
-  $('fit').disabled = state.busy || Boolean(reason);
+  for (const id of ['run', 'fit']) $(id).disabled = state.busy || Boolean(reason);
   const stale = state.fit && controlsKey() !== state.fit.key;
-  $('bootstrap').disabled = !state.fit || stale || state.busy;
   document.querySelector('.stale')?.toggleAttribute('hidden', !stale);
+}
+
+// The shared controls show the values of the source's setup.
+function loadOptions() {
+  const {options} = setup();
+  for (const name of OPTIONS) {
+    const e = field(name);
+    if (e.type === 'checkbox') e.checked = options[name]; else e.value = options[name];
+  }
 }
 
 async function onSource() {
@@ -199,26 +259,30 @@ async function onSource() {
   if (source() === 'simulated') field('activation').value = NEURAL_DEFAULTS.activation;
   else if (source() === 'nhanes') field('activation').value = NHANES_SETTINGS.activation;
   field('intercept').checked = INTERCEPT[source()];
+  if (source() === 'simulated' && !setup().table) simulateTable();
+  renderSetup();
   onControls();
   if (source() === 'nhanes') await loadNhanes();
 }
 
-// The NHANES file loads when NHANES is first chosen. A failure is kept and shown
-// with a Retry button until a retry starts.
+// The NHANES file loads when NHANES is first chosen, set up as reproduce/nhanes.py.
+// A failure is kept and shown with a Retry button until a retry starts.
 function loadNhanes() {
-  if (state.nhanes || state.nhanesLoading) return state.nhanesLoading;
+  const s = state.setups.nhanes;
+  if (s.table || state.nhanesLoading) return state.nhanesLoading;
   state.nhanesError = null;
   state.nhanesLoading = (async () => {
     try {
       const response = await fetch('nhanes.csv');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      state.nhanes = prepareNhanes(await response.text());
+      loadTable(s, parseCsv(await response.text()), NHANES_SETUP);
     } catch (error) {
       state.nhanesError = `Could not load the NHANES file (${error.message})`;
     } finally {
       state.nhanesLoading = null;
     }
     showNhanesError();
+    if (source() === 'nhanes') renderSetup();
     onControls();
   })();
   showNhanesError();
@@ -231,9 +295,46 @@ function showNhanesError() {
   $('nhanes-error-text').textContent = state.nhanesError ? `${state.nhanesError}.` : '';
 }
 
-// ---- The CSV step: one row per column with its type, missing values, examples
-// and a role chosen with one radio group per row. Under the name, X rows show
-// their position in the index and a log box, numeric Z rows a categorical box.
+function onSimulation() {
+  simulateTable();
+  renderSetup();
+  onControls();
+}
+
+// ---- The column setup: the outcome type, then tabs for the column roles, the
+// chemical exposures (X), the confounders (Z) and the outcome.
+
+const TABS = ['columns', 'x', 'z', 'outcome'];
+function selectTab(name, focus = false) {
+  state.tab = name;
+  for (const t of TABS) {
+    const tab = $(`tab-${t}`), on = t === name;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $(`panel-${t}`).hidden = !on;
+  }
+  if (focus) $(`tab-${name}`).focus();
+}
+
+// Left and right arrows, Home and End move between the tabs, as in any tab list.
+function onTabKey(event) {
+  const at = TABS.indexOf(event.target.id.slice(4)), last = TABS.length-1;
+  const next = {ArrowLeft: at ? at-1 : last, ArrowRight: at === last ? 0 : at+1, Home: 0, End: last}[event.key];
+  if (next === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
+  event.preventDefault();
+  selectTab(TABS[next], true);
+}
+
+// The setup of the source shown: hidden until it has a table.
+function renderSetup() {
+  const s = setup();
+  $('setup').hidden = !s.table;
+  loadOptions();
+  if (!s.table) return;
+  renderColumns();
+  syncRoles();
+  selectTab(state.tab);
+}
 
 const short = text => text.length > 16 ? `${text.slice(0, 15)}…` : text;
 // A column name with line break opportunities after its punctuation (a3.Retinyl.|palmitate).
@@ -251,7 +352,7 @@ const COMMAS = {delimiter: 'a comma-separated file has no decimal commas', point
 function columnNotes(c) {
   const absent = c.missing+c.nonfinite, beyond = c.beyond ? ` (${c.beyond} beyond ±3.4e38)` : '';
   const tokens = c.tokens.length ? ` (${c.tokens.map(([token]) => token === '' ? 'blank' : token).join(', ')})` : '';
-  const missing = !absent ? 'none missing' : c.kind === 'mostly missing' ? `${absent} of ${state.table.rows.length} missing${tokens}` :
+  const missing = !absent ? 'none missing' : c.kind === 'mostly missing' ? `${absent} of ${setup().table.rows.length} missing${tokens}` :
     [c.missing ? `${c.missing} missing${tokens}` : '', c.nonfinite ? `${c.nonfinite} non-finite${beyond}` : ''].filter(Boolean).join(', ');
   const kind = c.kind === 'text' ? `text, ${plural(c.levels.length, 'level')}` :
     c.kind === 'mostly missing' ? `mostly missing (${c.numeric ? 'numeric' : 'text'})` :
@@ -267,22 +368,11 @@ function columnNotes(c) {
   return notes;
 }
 
-// The categorical box of a column of codes says it is suggested; the column's
-// notes say how many codes it has.
-function columnOptions(c, j) {
-  return h('div', {class: 'col-options'},
-    h('span', {class: 'col-order', title: 'Position in the index X′β; the first X has a positive weight'}),
-    h('label', {class: 'opt opt-log'}, h('input', {type: 'checkbox', name: `log-${j}`, 'aria-label': `Log-transform ${c.name}`}), 'log'),
-    c.numeric ? h('label', {class: 'opt opt-categorical'},
-      h('input', {type: 'checkbox', name: `cat-${j}`,
-                  'aria-label': `Treat ${c.name} as categorical${c.codes ? ` (suggested: ${c.distinct} integer codes)` : ''}`}),
-      'categorical', c.codes ? h('span', {class: 'suggest'}, '(suggested)') : null) : null);
-}
-
 function renderColumns() {
-  const rows = state.columns.map((c, j) => h('tr', {'data-column': c.name, 'data-index': j},
+  const rows = setup().columns.map((c, j) => h('tr', {'data-column': c.name, 'data-index': j},
     h('th', {scope: 'row'}, h('span', {class: 'col-name', id: `col-${j}`}, breakable(c.name)),
-      h('div', {class: 'col-detail'}, columnNotes(c), columnOptions(c, j))),
+      h('div', {class: 'col-detail'}, columnNotes(c),
+        h('span', {class: 'col-order', title: 'Position in the index X′β; the first X has a positive weight'}))),
     ROLES.map(role => h('td', {class: `role role-${role}`},
       h('label', {}, h('input', {type: 'radio', name: `role-${j}`, value: role, 'aria-labelledby': `col-${j} head-${role}`}))))));
   $('column-table').tBodies[0].replaceChildren(...rows);
@@ -291,11 +381,11 @@ function renderColumns() {
 }
 
 // Checks each row's role and disables the roles its column cannot take; shows
-// each X's position and the log and categorical boxes as chosen.
+// each X's position; then the X, Z and outcome tabs.
 function syncRoles() {
-  const family = csvFamily(), {exposures} = selection(state.roles, state.columns);
+  const s = setup(), family = outcomeType(), {exposures} = selection(s.roles, s.columns);
   for (const row of $('column-table').tBodies[0].rows) {
-    const j = Number(row.dataset.index), c = state.columns[j], role = roleOf(state.roles, c.name);
+    const c = s.columns[Number(row.dataset.index)], role = roleOf(s.roles, c.name);
     row.dataset.role = role;
     for (const input of row.querySelectorAll('input[type=radio]')) {
       const blocked = blockedRole(c, input.value, family);
@@ -305,16 +395,72 @@ function syncRoles() {
     }
     const at = exposures.indexOf(c.name);
     row.querySelector('.col-order').textContent = at < 0 ? '' : `X${at+1}`;
-    field(`log-${j}`).checked = state.logged.has(c.name);
-    const categorical = field(`cat-${j}`);
-    if (categorical) {
-      const blocked = blockedCategorical(c);
-      categorical.checked = !blocked && state.categorical.has(c.name);
-      categorical.disabled = Boolean(blocked);
-      // Columns with too many values to dummy-code do not offer the box.
-      categorical.parentElement.classList.toggle('blocked', Boolean(blocked));
-    }
   }
+  renderTerms();
+  renderOutcome();
+}
+
+// Values of zero or below in a column, which a log drops.
+const nonpositive = c => c.values.reduce((k, v) => k+(v <= 0), 0);
+
+// The X tab lists the exposures in model order, each with its log box; the Z
+// tab lists the confounders, each numeric one with its categorical box. Focus
+// stays on the box it was on.
+function renderTerms() {
+  const s = setup(), {exposures, confounders} = selection(s.roles, s.columns);
+  const byName = new Map(s.columns.map(c => [c.name, c])), focused = document.activeElement?.name;
+  const levels = new Map(setupPlan(s).terms.filter(t => t.levels !== undefined).map(t => [t.name, t]));
+  $('x-list').replaceChildren(...exposures.map((name, k) => {
+    const c = byName.get(name), low = nonpositive(c);
+    return h('li', {class: 'term', 'data-column': name}, h('span', {class: 'term-order'}, `X${k+1}`),
+      h('span', {class: 'term-name'}, h('span', {class: 'col-name'}, breakable(name)),
+        low ? h('span', {class: 'col-meta warn'}, `${plural(low, 'value')} ≤ 0, dropped when logged`) : null),
+      h('label', {class: 'opt'}, h('input', {type: 'checkbox', name: `log-${c.index}`, checked: s.logged.has(name),
+                                             'aria-label': `Log-transform ${name}`}), 'log'));
+  }));
+  // Columns with too many values to dummy-code do not offer the categorical box.
+  $('z-list').replaceChildren(...confounders.map((name, k) => {
+    const c = byName.get(name), blocked = c.numeric && blockedCategorical(c), coded = levels.get(name);
+    const note = coded ? `${plural(coded.count, 'indicator')} vs ${coded.reference}` : c.numeric ? 'numeric, enters as it is' : '';
+    return h('li', {class: 'term', 'data-column': name}, h('span', {class: 'term-order'}, `Z${k+1}`),
+      h('span', {class: 'term-name'}, h('span', {class: 'col-name'}, breakable(name)),
+        h('span', {class: 'col-meta'}, c.numeric ? note : `text: ${note}`)),
+      c.numeric && !blocked ? h('label', {class: 'opt'}, h('input', {type: 'checkbox', name: `cat-${c.index}`,
+          checked: s.categorical.has(name),
+          'aria-label': `Treat ${name} as categorical${c.codes ? ` (suggested: ${c.distinct} integer codes)` : ''}`}),
+        'categorical', c.codes ? h('span', {class: 'suggest'}, '(suggested)') : null) : null);
+  }));
+  if (/^(log|cat)-\d+$/.test(focused)) form.elements[focused]?.focus();
+  $('x-empty').hidden = exposures.length > 0;
+  $('z-empty').hidden = confounders.length > 0;
+  for (const [id, label, k] of [['x', 'Chemical exposures (X)', exposures.length], ['z', 'Confounders (Z)', confounders.length]]) {
+    $(`count-${id}`).textContent = k;
+    $(`tab-${id}`).setAttribute('aria-label', `${label}: ${plural(k, 'column')}`);
+  }
+  syncLogAll();
+}
+
+// Log-transform is checked when every X is logged, mixed when some are.
+function syncLogAll() {
+  const s = setup(), {exposures} = selection(s.roles, s.columns), logged = exposures.filter(name => s.logged.has(name)).length;
+  const box = $('log-all');
+  box.disabled = !exposures.length;
+  box.checked = exposures.length > 0 && logged === exposures.length;
+  box.indeterminate = logged > 0 && logged < exposures.length;
+}
+
+// The outcome tab names the outcome (and event) columns; only a continuous
+// outcome has transforms.
+function renderOutcome() {
+  const s = setup(), {outcome, event} = selection(s.roles, s.columns), type = outcomeType();
+  setText($('outcome-title'), type === 'cox' ? 'Survival time and event (Cox)' : `Outcome (${type})`);
+  const chosen = type === 'cox' ? `Time: ${outcome ?? 'not chosen'} · event: ${event ?? 'not chosen'}` :
+    outcome ?? 'Not chosen: give a column the Outcome role under Columns.';
+  setText($('outcome-chosen'), chosen);
+  const fixed = type === 'binary' ? 'A binary outcome is used as it is coded, 0 or 1.' :
+    type === 'cox' ? 'Survival times are used as recorded; the event column is 1 for an event and 0 for censoring.' : '';
+  setText($('outcome-fixed'), fixed);
+  $('outcome-fixed').hidden = !fixed;
 }
 
 const shownColumns = () => [...$('column-table').tBodies[0].rows].filter(row => !row.hidden).map(row => row.dataset.column);
@@ -323,26 +469,26 @@ function applyFilter() {
   const query = $('column-filter').value.trim().toLowerCase(), rows = [...$('column-table').tBodies[0].rows];
   for (const row of rows) row.hidden = Boolean(query) && !row.dataset.column.toLowerCase().includes(query);
   const shown = rows.filter(row => !row.hidden).length;
-  $('column-filter').closest('fieldset').classList.toggle('filtered', Boolean(query));
-  setText($('filter-count'), !query ? `${plural(rows.length, 'column')} in the file.` :
+  setText($('filter-count'), !query ? `${plural(rows.length, 'column')} in the ${source() === 'csv' ? 'file' : 'data'}.` :
     shown ? `Showing ${shown} of ${plural(rows.length, 'column')}; All and None apply to these.` :
     `No column name contains “${query}”.`);
 }
 
 // Until the visitor picks the outcome type, it follows the outcome: binary for 0/1.
 function followOutcome() {
-  if (!state.familyAuto || csvFamily() === 'cox') return;
-  const {outcome} = selection(state.roles, state.columns);
-  field('csvFamily').value = suggestFamily(state.columns.find(c => c.name === outcome));
+  const s = setup();
+  if (!s.familyAuto || outcomeType() === 'cox') return;
+  const {outcome} = selection(s.roles, s.columns);
+  s.options.outcomeType = field('outcomeType').value = suggestFamily(s.columns.find(c => c.name === outcome));
 }
 
 const ROLE_NAMES = {exposure: 'chemical exposure', confounder: 'confounder (Z)', outcome: 'outcome', event: 'event (0/1)',
                     ignore: 'ignored'};
 
 function onRole(input) {
-  const c = state.columns[Number(input.name.slice(5))], before = state.roles, family = csvFamily();
+  const s = setup(), c = s.columns[Number(input.name.slice(5))], before = s.roles, family = outcomeType();
   try {
-    state.roles = assignRole(state.roles, state.columns, c.name, input.value, csvFamily());
+    s.roles = assignRole(s.roles, s.columns, c.name, input.value, family);
   } catch (error) {
     message(error.message);
   }
@@ -351,13 +497,13 @@ function onRole(input) {
   onControls();
   // Said aloud: the new role, a column that lost the outcome or event role to it,
   // and an outcome type that followed the outcome.
-  const {exposures} = selection(state.roles, state.columns), cox = csvFamily() === 'cox';
+  const {exposures} = selection(s.roles, s.columns), cox = outcomeType() === 'cox';
   const label = (name, role) => role === 'exposure' ? `chemical exposure X${exposures.indexOf(name)+1}` :
     role === 'outcome' && cox ? 'survival time' : ROLE_NAMES[role];
-  const lost = [...before].filter(([name, role]) => name !== c.name && role !== 'ignore' && roleOf(state.roles, name) === 'ignore')
+  const lost = [...before].filter(([name, role]) => name !== c.name && role !== 'ignore' && roleOf(s.roles, name) === 'ignore')
     .map(([name, role]) => `${name}, the ${role === 'outcome' && cox ? 'survival time' : ROLE_NAMES[role]} before, is now ignored`);
-  const type = csvFamily() !== family ? [`Outcome type: ${field('csvFamily').selectedOptions[0].textContent}`] : [];
-  announce([`${c.name}: ${label(c.name, roleOf(state.roles, c.name))}`, ...lost, ...type].join('. ')+'.');
+  const type = outcomeType() !== family ? [`Outcome type: ${field('outcomeType').selectedOptions[0].textContent}`] : [];
+  announce([`${c.name}: ${label(c.name, roleOf(s.roles, c.name))}`, ...lost, ...type].join('. ')+'.');
 }
 
 // Up and down arrows move to the same role in the row above or below, changing
@@ -375,33 +521,42 @@ function onRoleKey(event) {
   (radios.find(e => e.value === input.value && !e.disabled) ?? radios.find(e => e.checked)).focus();
 }
 
-function onCsvFamily() {
-  state.familyAuto = false;
-  state.roles = changeFamily(state.roles, state.columns, csvFamily());
+function onOutcomeType() {
+  const s = setup();
+  s.familyAuto = false;
+  s.options.outcomeType = field('outcomeType').value;
+  s.roles = changeFamily(s.roles, s.columns, outcomeType());
   syncRoles();
+  onControls();
+}
+
+// Standardize X and the outcome's log and standardize boxes.
+function onOptionField(input) {
+  setup().options[input.name] = input.checked;
   onControls();
 }
 
 function onBulk(button) {
-  state.roles = setRoleForMany(state.roles, state.columns, shownColumns(), button.dataset.bulk, button.dataset.on === '1', csvFamily());
+  const s = setup();
+  s.roles = setRoleForMany(s.roles, s.columns, shownColumns(), button.dataset.bulk, button.dataset.on === '1', outcomeType());
   syncRoles();
   onControls();
 }
 
-// Log-transform X, All or None: every chemical exposure among the rows shown.
-function onBulkLog(button) {
-  const shown = new Set(shownColumns()), on = button.dataset.log === '1';
-  for (const name of selection(state.roles, state.columns).exposures)
-    if (shown.has(name)) state.logged[on ? 'add' : 'delete'](name);
-  syncRoles();
+// Log-transform: every chemical exposure, or none.
+function onLogAll(box) {
+  const s = setup();
+  for (const name of selection(s.roles, s.columns).exposures) s.logged[box.checked ? 'add' : 'delete'](name);
+  renderTerms();
   onControls();
 }
 
-// A row's log or categorical box.
+// An X's log box or a Z's categorical box.
 function onOption(input) {
-  const [kind, j] = input.name.split('-'), name = state.columns[Number(j)].name;
-  const chosen = kind === 'log' ? state.logged : state.categorical;
+  const [kind, j] = input.name.split('-'), s = setup(), name = s.columns[Number(j)].name;
+  const chosen = kind === 'log' ? s.logged : s.categorical;
   chosen[input.checked ? 'add' : 'delete'](name);
+  if (kind === 'cat') renderTerms(); else syncLogAll();
   onControls();
 }
 
@@ -409,35 +564,24 @@ function onOption(input) {
 // (or the choice is cleared) is dropped.
 let fileToken = 0;
 async function onFile() {
-  const file = field('file').files[0], token = ++fileToken;
+  const file = field('file').files[0], token = ++fileToken, s = state.setups.csv;
   if (!file) return;
   try {
     const text = await file.text();
     if (token !== fileToken) return;
     const table = parseCsv(text);
     if (!table.rows.length) throw new Error('the file has a header but no data rows');
-    state.table = table;
-    state.columns = describeColumns(table);
-    state.fileName = file.name;
+    loadTable(s, table);
+    s.fileName = file.name;
   } catch (error) {
     if (token !== fileToken) return;
-    state.table = state.columns = state.roles = null;
-    state.fileName = '';
-    $('csv-columns').hidden = true;
+    Object.assign(s, {table: null, columns: null, roles: null, fileName: ''});
     message(`${file.name}: ${error.message}`);
+    if (source() === 'csv') renderSetup();
     return onControls();
   }
-  // A new file starts with every column ignored, nothing logged or categorical,
-  // and a continuous outcome.
-  state.roles = initialRoles(state.columns);
-  state.logged = new Set();
-  state.categorical = new Set();
-  state.familyAuto = true;
-  field('csvFamily').value = 'continuous';
-  renderColumns();
-  syncRoles();
-  $('csv-columns').hidden = false;
-  message(state.columns.some(c => c.numeric && c.present) ? null : `${file.name} has no numeric columns`);
+  if (source() === 'csv') renderSetup();
+  message(s.columns.some(c => c.numeric && c.present) ? null : `${file.name} has no numeric columns`);
   onControls();
 }
 
@@ -450,26 +594,30 @@ function message(text, kind = 'error') {
   box.classList.toggle('info', kind === 'info');
 }
 
-// While a fit or bootstrap runs, the progress row shows with Cancel. Focus moves
-// from the button that started the run (`from`) to Cancel, and when the run ends,
-// from Cancel to the Results heading if results were drawn, else back to `from`.
-// The progress text is not a live region: announce() says the coarse steps.
+// The progress text of a step without a count: the text and the time it has run.
 let timer = null;
-function busy(on, {text = '', from = null, rendered = false} = {}) {
+function clock(text) {
+  clearInterval(timer);
+  $('progress').querySelector('progress').removeAttribute('value');
+  $('progress-text').textContent = text;
+  if (!text) return;
+  const started = performance.now();
+  timer = setInterval(() => {
+    $('progress-text').textContent = `${text} ${duration((performance.now()-started)/1000)}`;
+  }, 250);
+}
+
+// While a run goes, the progress row shows with Cancel. Focus moves from the
+// button that started the run (`from`) to Cancel, and when the run ends, from
+// Cancel to the Results heading if results were drawn, else back to `from`. The
+// progress text is not a live region: announce() says the coarse steps.
+function busy(on, {from = null, rendered = false} = {}) {
   const cancel = $('cancel'), active = document.activeElement;
   state.busy = on;
-  const bar = $('progress').querySelector('progress');
-  bar.removeAttribute('value');
-  $('progress-text').textContent = text;
-  clearInterval(timer);
   if (on) {
     $('progress').hidden = false;
     if (!active || active === document.body || active === from) cancel.focus();
-    const started = performance.now();
-    if (text) timer = setInterval(() => {
-      $('progress-text').textContent = `${text} ${duration((performance.now()-started)/1000)}`;
-    }, 250);
-  }
+  } else clock('');
   onControls();
   if (!on) {
     // Before Cancel hides, which would drop focus to the page.
@@ -478,72 +626,99 @@ function busy(on, {text = '', from = null, rendered = false} = {}) {
   }
 }
 
-async function runFit() {
-  let data, s;
+// Fit with bootstrap (`bootstrap` true) fits, then bootstraps the fit; when the
+// controls still match the fit shown, it bootstraps that fit. Single fit only fits.
+async function run(bootstrap) {
+  let data, s, B;
   try {
     data = readData(); s = settings();
     const problem = networkProblem(data.p, data.q, s);
     if (problem) throw new Error(problem);
+    if (bootstrap) B = integer('B', 2, 1000, 'B');
   } catch (error) {
     return message(error.message);
   }
   message(null);
-  // The file is named as it was when the fit started: another may be open by the time it ends.
-  const key = controlsKey(), fileName = data.source === 'csv' ? state.fileName : null;
-  const text = s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…', from = $('fit');
-  const started = performance.now();
-  let rendered = false;
-  busy(true, {text, from});
-  announce(text);
+  const key = controlsKey(), from = $(bootstrap ? 'run' : 'fit');
+  let step = bootstrap && state.fit?.key === key ? 'bootstrap' : 'fit', rendered = false;
+  busy(true, {from});
   try {
-    const workers = await pool.ensure(s.spline ? 2 : 1);
-    const [neural, spline] = await Promise.all([pool.call(workers[0], 'fitNeural', [data, s, s.seed]),
-      s.spline ? pool.call(workers[1], 'fitSpline', [data, s.seed]) : null]);
-    state.fit = {data, settings: s, key, fileName, neural, spline};
-    state.boot = null;
-    render();
-    rendered = true;
-    announce(`Fit done in ${duration((performance.now()-started)/1000)}. The results are below.`);
+    let done = '';
+    if (step === 'fit') {
+      const seconds = await fitStep(data, s, key, bootstrap);
+      rendered = true;
+      done = `Fit done in ${duration(seconds)}.`;
+    }
+    if (bootstrap) {
+      step = 'bootstrap';
+      await bootstrapStep(B, done);
+      rendered = true;
+    } else announce(`${done} The results are below.`);
   } catch (error) {
-    message(error instanceof Cancelled ? 'Fit cancelled.' : error.message, error instanceof Cancelled ? 'info' : 'error');
+    // A failed replicate invalidates the whole bootstrap, as in the native engine.
+    if (step === 'bootstrap') pool.cancel();
+    const cancelled = error instanceof Cancelled;
+    message(cancelled ? `${step === 'fit' ? 'Fit' : 'Bootstrap'} cancelled.` : error.message, cancelled ? 'info' : 'error');
   } finally {
+    if (state.booting) {
+      state.booting = false;
+      render();
+    }
     busy(false, {from, rendered});
   }
 }
 
-async function runBootstrap() {
-  const f = state.fit;
-  let B;
-  try { B = integer('B', 2, 1000, 'B'); } catch (error) { return message(error.message); }
-  message(null);
-  const {data, settings: s} = f;
+// Fits NeuralPLSI (and SplinePLSI) on all rows and draws the results; returns
+// the seconds it took. With a bootstrap to follow, the tables say it is running.
+async function fitStep(data, s, key, bootstrap) {
+  // The file is named as it was when the fit started: another may be open by the time it ends.
+  const fileName = data.source === 'csv' ? setup().fileName : null;
+  const text = s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…', started = performance.now();
+  clock(text);
+  announce(text);
+  const workers = await pool.ensure(s.spline ? 2 : 1);
+  const [neural, spline] = await Promise.all([pool.call(workers[0], 'fitNeural', [data, s, s.seed]),
+    s.spline ? pool.call(workers[1], 'fitSpline', [data, s.seed]) : null]);
+  state.fit = {data, settings: s, key, fileName, neural, spline};
+  state.boot = null;
+  state.booting = bootstrap;
+  render();
+  return (performance.now()-started)/1000;
+}
+
+// B bootstrap refits of the fit shown, in parallel on the pool's workers. `done`
+// (the fit's announcement) comes before the bootstrap's.
+async function bootstrapStep(B, done) {
+  const f = state.fit, {data, settings: s} = f;
   const jobs = {neural: {state: f.neural.state, x: Float32Array.from(data.x), z: Float32Array.from(data.z),
                          y: Float32Array.from(data.y), n: data.n, grid: Float32Array.from(f.neural.grid), seed: s.seed}};
   if (f.spline) jobs.spline = {x: data.x, z: data.z, y: data.y, n: data.n, p: data.p, q: data.q, family: data.family,
                                grid: Float64Array.from(f.spline.grid), seed: s.seed};
   const kinds = Object.keys(jobs), tasks = [], rows = {neural: [], spline: []};
   for (let b = 0; b < B; ++b) for (const kind of kinds) tasks.push({kind, b});
-  const from = $('bootstrap');
-  busy(true, {from});
-  announce(`Bootstrap started: ${tasks.length} refits.`);
+  // The tables say the bootstrap is running, unless they show an earlier one.
+  state.booting = true;
+  if (!state.boot) render();
+  clock('');
+  announce(`${done ? `${done} ` : ''}Bootstrap started: ${tasks.length} refits.`);
   const bar = $('progress').querySelector('progress'), started = performance.now();
-  let done = 0, frame = 0, quarter = 0, rendered = false;
+  let count = 0, frame = 0, quarter = 0;
   const show = () => {
     frame = 0;
-    const elapsed = (performance.now()-started)/1000, left = done ? elapsed/done*(tasks.length-done) : NaN;
-    bar.value = done/tasks.length;
-    $('progress-text').textContent = `${done} of ${tasks.length} refits · ${duration(elapsed)} elapsed` +
-      (done ? ` · about ${duration(left)} left` : '')+` · ${pool.workers.length} workers`;
+    const elapsed = (performance.now()-started)/1000, left = count ? elapsed/count*(tasks.length-count) : NaN;
+    bar.value = count/tasks.length;
+    $('progress-text').textContent = `${count} of ${tasks.length} refits · ${duration(elapsed)} elapsed` +
+      (count ? ` · about ${duration(left)} left` : '')+` · ${pool.workers.length} workers`;
   };
   show();
   try {
     await pool.run(jobs, tasks, (task, row) => {
       rows[task.kind][task.b] = row;
-      ++done;
+      ++count;
       frame ||= requestAnimationFrame(show);
       // Said aloud at 25, 50 and 75%.
-      if (Math.floor(4*done/tasks.length) > quarter && done < tasks.length)
-        announce(`Bootstrap ${25*(quarter = Math.floor(4*done/tasks.length))}% done.`);
+      if (Math.floor(4*count/tasks.length) > quarter && count < tasks.length)
+        announce(`Bootstrap ${25*(quarter = Math.floor(4*count/tasks.length))}% done.`);
     });
     const boot = {B, seconds: (performance.now()-started)/1000, workers: pool.workers.length};
     for (const kind of kinds) {
@@ -553,16 +728,11 @@ async function runBootstrap() {
       boot[kind] = {draws, D, summary: await pool.call(pool.workers[0], 'summary', [draws.slice(), B, D])};
     }
     state.boot = boot;
+    state.booting = false;
     render();
-    rendered = true;
     announce(`Bootstrap done: B = ${B} in ${duration(boot.seconds)}. Standard errors and intervals are in the results.`);
-  } catch (error) {
-    // A failed replicate invalidates the whole bootstrap, as in the native engine.
-    pool.cancel();
-    message(error instanceof Cancelled ? 'Bootstrap cancelled.' : error.message, error instanceof Cancelled ? 'info' : 'error');
   } finally {
     if (frame) cancelAnimationFrame(frame);
-    busy(false, {from, rendered});
   }
 }
 
@@ -608,7 +778,7 @@ const cellName = text => h('span', {class: 'cell-name'}, breakable(text));
 
 function estimateCells(estimate, ci) {
   return [h('td', {}, fmt(estimate)), ci ? [ci.se[0], ci.lo[0], ci.hi[0]].map(v => h('td', {}, fmt(v)))
-                                         : h('td', {class: 'na', colspan: 3}, 'run the bootstrap')];
+                                         : h('td', {class: 'na', colspan: 3}, state.booting ? 'bootstrap running…' : 'no bootstrap')];
 }
 
 function diagnostics() {
@@ -627,7 +797,8 @@ function diagnostics() {
       return `${fmt(Math.acos(Math.min(1, c))*180/Math.PI)}°`;
     }], ['RMSE of g vs truth', m => fmt(Math.sqrt(m.g.reduce((s, v, i) => s+(v-link(m.grid[i]))**2, 0)/m.g.length))]);
   }
-  if (state.boot) rows.push(['Bootstrap', () => `B = ${state.boot.B}, ${duration(state.boot.seconds)}, ${state.boot.workers} workers`]);
+  rows.push(['Bootstrap', () => state.boot ? `B = ${state.boot.B}, ${duration(state.boot.seconds)}, ${state.boot.workers} workers` :
+    state.booting ? 'running…' : 'none (single fit)']);
   return h('div', {class: 'card'}, h('h3', {}, 'Fit diagnostics'), h('div', {class: 'table-wrap', role: 'region', 'aria-label': 'Fit diagnostics'}, h('table', {},
     h('thead', {}, h('tr', {}, h('th'), models.map(([, name]) => h('th', {}, name)))),
     h('tbody', {}, rows.map(([label, value]) => h('tr', {}, h('td', {}, cellName(label)), models.map(([k]) => h('td', {}, value(f[k])))))))));
@@ -674,16 +845,14 @@ function drawsCsv(kind) {
 // How each column of the fitted data was made from the file, for using the
 // model on new data.
 function preprocessingJson() {
-  const f = state.fit, d = f.data, nhanes = d.source === 'nhanes';
+  const f = state.fit, d = f.data;
   return JSON.stringify({
     description: 'How the columns of the NeuralPLSI fit were made from the data file, in model order. The model ' +
       'takes inputs in this form. x: the column, its natural log when log is true, then (value - mean) / sd when ' +
       'mean and sd are given. z: the column, or an indicator that is 1 where the column equals `equals` and 0 ' +
-      'elsewhere (reference: the level without one). y likewise. Means and SDs (population SD) are over ' +
-      (nhanes ? 'every row with a value in that column, as in reproduce/nhanes.py.' : 'the rows used.') +
-      ' Rows with a missing or non-finite value' + (nhanes ? '' : ', or a value of zero or below in a logged column,') +
-      ' were dropped.',
-    source: d.source, file: nhanes ? '12940_2020_644_MOESM2_ESM.csv' : f.fileName, family: d.family,
+      'elsewhere (reference: the level without one). y likewise. Means and SDs (population SD) are over the rows ' +
+      'used. Rows with a missing or non-finite value, or a value of zero or below in a logged column, were dropped.',
+    source: d.source, file: d.source === 'nhanes' ? '12940_2020_644_MOESM2_ESM.csv' : f.fileName, family: d.family,
     intercept: f.settings.intercept, rows: {file: d.rows, used: d.n, dropped: d.dropped},
     x: d.transforms.x, z: d.transforms.z, y: d.transforms.y}, null, 2)+'\n';
 }
@@ -692,7 +861,7 @@ function render() {
   const results = $('results'), f = state.fit;
   if (!f) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
-  const label = {simulated: `Simulated, g = ${d.truth?.g}`, nhanes: 'NHANES', csv: f.fileName}[d.source];
+  const label = {simulated: `Simulated, g = ${d.simulation?.g}`, nhanes: 'NHANES', csv: f.fileName}[d.source];
   // The heading takes focus when a run that drew results ends (busy).
   const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {id: 'results-title', tabindex: '-1'}, 'Results'),
       h('span', {class: 'facts'}, h('bdi', {}, label), ` · ${d.family}`)),
@@ -714,11 +883,11 @@ function render() {
       onclick: () => download(`${k === 'neural' ? 'neuralplsi' : 'splineplsi'}-bootstrap-draws.csv`, drawsCsv(k))}, `${name} draws (CSV)`)),
     h('button', {type: 'button', class: 'small', onclick: () => download('neuralplsi.nplsi', f.neural.state, 'text/plain')},
       'NeuralPLSI model (.nplsi)'),
-    d.transforms ? h('button', {type: 'button', class: 'small',
+    d.source !== 'simulated' ? h('button', {type: 'button', class: 'small',
       onclick: () => download('neuralplsi-preprocessing.json', preprocessingJson(), 'application/json')}, 'Preprocessing (JSON)') : null),
     h('p', {class: 'help'}, 'The model file loads with NeuralPLSI.load(path) in the Python package, load_model() in R ' +
       'and nplsi_load in C++.' +
-      (d.transforms ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
+      (d.source !== 'simulated' ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
         '(column order, logs, means and SDs, indicators) before predicting.' : '') +
       ' Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
   results.replaceChildren(head, h('div', {class: 'figures'}, gCard, fCard),
@@ -765,32 +934,38 @@ function markScrollable() {
 
 // ---- Wiring
 
-const ROW_OPTION = /^(log|cat)-\d+$/;
+const ROW_OPTION = /^(log|cat)-\d+$/, SIMULATION = new Set(['n', 'simSeed', 'g', 'outcome']);
+const OPTION_BOXES = new Set(['standardize', 'logOutcome', 'standardizeOutcome']);
+// Controls with their own handler on input; change events of the others refresh the page.
+const handled = target => target.id === 'column-filter' || target.id === 'log-all' || target.name === 'outcomeType' ||
+  target.name?.startsWith('role-') || ROW_OPTION.test(target.name) || SIMULATION.has(target.name) || OPTION_BOXES.has(target.name);
 form.addEventListener('input', event => {
   const target = event.target;
   if (target.id === 'column-filter') applyFilter();
-  else if (target.name === 'csvFamily') onCsvFamily();
+  else if (target.id === 'log-all') onLogAll(target);
+  else if (target.name === 'outcomeType') onOutcomeType();
   else if (target.name?.startsWith('role-')) onRole(target);
   else if (ROW_OPTION.test(target.name)) onOption(target);
+  else if (SIMULATION.has(target.name)) onSimulation();
+  else if (OPTION_BOXES.has(target.name)) onOptionField(target);
   else if (target.name !== 'source' && target.name !== 'file') onControls();
 });
 form.addEventListener('change', event => {
   const target = event.target;
   if (target.name === 'source') onSource();
   else if (target.name === 'file') onFile();
-  else if (target.name === 'csvFamily' || target.name?.startsWith('role-') || ROW_OPTION.test(target.name) ||
-           target.id === 'column-filter') return;
-  else onControls();
+  else if (!handled(target)) onControls();
 });
 form.addEventListener('submit', event => event.preventDefault());
 form.addEventListener('click', event => {
-  const bulk = event.target.closest('[data-bulk]'), log = event.target.closest('[data-log]');
+  const bulk = event.target.closest('[data-bulk]'), tab = event.target.closest('[role=tab]');
   if (bulk) onBulk(bulk);
-  if (log) onBulkLog(log);
+  if (tab) selectTab(tab.id.slice(4));
 });
+document.querySelector('[role=tablist]').addEventListener('keydown', onTabKey);
 $('nhanes-retry').addEventListener('click', loadNhanes);
-$('fit').addEventListener('click', runFit);
-$('bootstrap').addEventListener('click', runBootstrap);
+$('run').addEventListener('click', () => run(true));
+$('fit').addEventListener('click', () => run(false));
 $('cancel').addEventListener('click', () => pool.cancel());
 $('column-table').addEventListener('keydown', onRoleKey);
 let resize = 0;
@@ -799,4 +974,4 @@ onSource();
 if ('serviceWorker' in navigator && location.protocol !== 'file:')
   navigator.serviceWorker.register('sw.js').catch(() => {});
 // For tests and the browser console.
-globalThis.nplsiDemo = {state, pool};
+globalThis.nplsiDemo = {state, pool, setup};

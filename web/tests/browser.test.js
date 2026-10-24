@@ -1,12 +1,13 @@
 // Drives the built page in headless Chrome over the DevTools protocol (no npm
-// packages): Cancel while the WebAssembly module loads, a simulated fit and
+// packages): Cancel while the WebAssembly module loads, a simulated fit with
 // bootstrap through the real Web Worker pool, focus and announcements, text
-// contrast, the result tables on a phone, CSV files (column roles, arrow keys,
+// contrast, the result tables on a phone, the simulated data in the column setup
+// (its tabs, the log checkboxes and the truth), CSV files (column roles, arrow keys,
 // missing-value strings and decimal commas, the summary and the reasons Fit is
 // disabled, column names that look like HTML or carry bidi controls, long names
 // on a phone, a file chosen while another is read, the NHANES file as a user file
 // giving the NHANES example exactly and its role table on a phone in Cox mode),
-// the NHANES example and a failed download of it, Cancel, model and preprocessing
+// the NHANES example (a single fit, then a bootstrap of it) and a failed download of it, Cancel, model and preprocessing
 // downloads and offline use after the first load. Screenshots in light and dark
 // mode at desktop and phone widths go to NPLSI_SCREENSHOTS when it names a directory.
 // Skipped without Chrome (set CHROME to its path) or with NPLSI_BROWSER=0.
@@ -101,18 +102,23 @@ const roleInput = (column, role) => `document.querySelector(${JSON.stringify(
 const assign = (column, role) => `${roleInput(column, role)}.click()`;
 const roleOf = column => `document.querySelector(${JSON.stringify(
   `#column-table tr[data-column=${JSON.stringify(column)}] input[type=radio]:checked`)}).value`;
-// A row's log ('log') or categorical ('cat') box.
+// An X's log box ('log', in the X tab) or a Z's categorical box ('cat', in the Z tab).
 const option = (column, kind) => `document.querySelector(${JSON.stringify(
-  `#column-table tr[data-column=${JSON.stringify(column)}] input[name^=${kind}-]`)})`;
+  `#${kind === 'log' ? 'x' : 'z'}-list li[data-column=${JSON.stringify(column)}] input[name^=${kind}-]`)})`;
+const tab = name => `document.getElementById('tab-${name}').click()`;
 const check = name => `document.forms.controls.elements[${JSON.stringify(name)}].click()`;
 const checked = name => `document.forms.controls.elements[${JSON.stringify(name)}].checked`;
 // The position shown in each X row.
 const X_ORDER = `Object.fromEntries([...document.querySelectorAll('#column-table tbody tr[data-role=exposure]')].map(row =>
   [row.dataset.column, row.querySelector('.col-order').textContent]))`;
 const RESULTS_LABEL = `document.querySelector('.results-head .facts').textContent`;
+// The summary of the NHANES file set up as reproduce/nhanes.py.
+const NHANES_SUMMARY = {'Outcome': 'log triglyceride (z-score) · continuous',
+  'Chemical exposures (X)': '8, logged except a5.Retinol, then standardized',
+  'Confounders (Z)': '6 (sex: 1 indicator vs 1; race: 4 indicators vs 1)', 'Rows': '800 of 800 used'};
 const SUMMARY = `Object.fromEntries([...document.querySelectorAll('#data-summary div')].map(row =>
   [row.querySelector('dt').textContent, row.querySelector('dd').textContent]))`;
-const FIT_STATE = `[document.getElementById('fit').disabled, document.getElementById('fit-status').textContent]`;
+const FIT_STATE = `[document.getElementById('run').disabled, document.getElementById('fit-status').textContent]`;
 const filter = text => `(() => { const e = document.getElementById('column-filter'); e.value = ${JSON.stringify(text)};
   e.dispatchEvent(new Event('input', {bubbles: true})); })()`;
 // Every table in the results scrolls sideways inside its card when it is wider
@@ -148,12 +154,12 @@ async function chooseFile(page, file) {
 
 async function upload(page, file) {
   await chooseFile(page, file);
-  await page.until(`nplsiDemo.state.fileName === ${JSON.stringify(file.split('/').at(-1))} &&
-    !document.getElementById('csv-columns').hidden`);
+  await page.until(`nplsiDemo.setup().fileName === ${JSON.stringify(file.split('/').at(-1))} &&
+    !document.getElementById('setup').hidden`);
 }
 
 // A key pressed on the focused element (Enter activates a button).
-const KEYS = {Enter: 13, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40};
+const KEYS = {Enter: 13, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40};
 async function press(page, key) {
   const text = key === 'Enter' ? {text: String.fromCharCode(13)} : {};
   for (const type of ['keyDown', 'keyUp'])
@@ -174,7 +180,8 @@ const CONTRAST = `(() => {
     for (; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length < 4 || c[3] === 1) return c; }
     return [255, 255, 255];
   };
-  return Object.fromEntries([['Fit', '#fit'], ['Cancel', '#cancel'], ['link', '.intro a'], ['footer link', '.footer a']].map(([name, at]) => {
+  return Object.fromEntries([['Fit with bootstrap', '#run'], ['Single fit', '#fit'], ['Cancel', '#cancel'], ['selected tab', '[role=tab][aria-selected=true]'],
+                             ['link', '.intro a'], ['footer link', '.footer a']].map(([name, at]) => {
     const e = document.querySelector(at);
     return [name, Math.round(100*ratio(rgb(getComputedStyle(e).color), background(e)))/100];
   }));
@@ -295,14 +302,19 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     await page.send('Page.navigate', {url: `${origin}/`});
     await page.until('document.readyState === "complete" && globalThis.nplsiDemo');
 
-    await t.test('Cancel stops a fit while the WebAssembly module is still loading', async () => {
+    await t.test('the page opens on your own data; Cancel stops a fit while the WebAssembly module is still loading', async () => {
+      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.source.value, document.getElementById('setup').hidden,
+        [...document.querySelectorAll('.segmented span')].map(e => e.textContent)]`),
+        ['csv', true, ['Your own data', 'NHANES example', 'Simulated']]);
+      assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Open a CSV file.']);
+      await page.evaluate(choose('simulated'));
       // The module arrives 4 s after it is first asked for; nothing has asked yet.
       assert.equal(await page.evaluate('nplsiDemo.pool.compiled'), null);
       await page.evaluate(`void (nplsiDemo.pool.compiled = new Promise(resolve => setTimeout(() =>
         resolve(WebAssembly.compileStreaming(fetch('neuralplsi.wasm'))), 4000)))`);
       const started = Date.now();
-      // With the keyboard: Enter on Fit moves focus to Cancel, Enter on Cancel stops the run.
-      await page.evaluate(`document.getElementById('fit').focus()`);
+      // With the keyboard: Enter on Fit with bootstrap moves focus to Cancel, Enter on Cancel stops the run.
+      await page.evaluate(`document.getElementById('run').focus()`);
       await press(page, 'Enter');
       assert.equal(await page.evaluate('nplsiDemo.state.busy'), true);
       assert.equal(await page.evaluate(ACTIVE), 'cancel');
@@ -312,8 +324,8 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.ok(Date.now()-started < 2500, `the run ended ${Date.now()-started} ms after it started`);
       assert.deepEqual(await page.evaluate(`[document.getElementById('message').textContent, nplsiDemo.state.fit,
         nplsiDemo.pool.workers.length]`), ['Fit cancelled.', null, 0]);
-      // Focus is back on Fit, as no results were drawn.
-      assert.equal(await page.evaluate(ACTIVE), 'fit');
+      // Focus is back on Fit with bootstrap, as no results were drawn.
+      assert.equal(await page.evaluate(ACTIVE), 'run');
       // Nothing starts when the module arrives.
       await sleep(Math.max(0, 4500-(Date.now()-started)));
       assert.deepEqual(await page.evaluate('[nplsiDemo.state.busy, nplsiDemo.state.fit, nplsiDemo.pool.workers.length]'),
@@ -329,7 +341,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       })()`), 'Cancelled after less than 1 s');
     });
 
-    await t.test('simulated fit and pooled bootstrap equal the one-call bootstrap', async () => {
+    await t.test('Fit with bootstrap on simulated data: the pooled bootstrap equals the one-call bootstrap', async () => {
       await page.evaluate(setValue('n', '400'));
       await page.evaluate(setValue('outcome', 'cox'));
       await page.evaluate(`document.forms.controls.elements.spline.checked = true`);
@@ -337,24 +349,28 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       // Results are not a live region and the progress text is not announced; one status line is.
       assert.deepEqual(await page.evaluate(`['results', 'progress-text'].map(id => document.getElementById(id).getAttribute('aria-live'))
         .concat(document.getElementById('announce').getAttribute('role'))`), [null, null, 'status']);
-      await page.evaluate(`document.getElementById('fit').focus()`);
-      await press(page, 'Enter');
-      assert.equal(await page.evaluate(ACTIVE), 'cancel');
-      await page.until('nplsiDemo.state.fit && !nplsiDemo.state.busy');
-      assert.equal(await page.evaluate('document.getElementById("message").hidden'), true);
-      // Focus moves to the Results heading, and one line says the fit is done.
-      assert.equal(await page.evaluate(ACTIVE), 'results-title');
-      assert.match(await page.evaluate(ANNOUNCED), /^Fit done in [0-9.]+ s\. The results are below\.$/);
-      // Each announcement during the bootstrap: the start, 25, 50 and 75% and the end.
+      // The simulated columns come set up as generated: Cox, with time and event.
+      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.outcomeType.value,
+        [...document.querySelectorAll('#column-table tbody tr')].map(row => row.dataset.column+':'+row.dataset.role).join()]`),
+        ['cox', 'x1:exposure,x2:exposure,x3:exposure,x4:exposure,x5:exposure,x6:exposure,x7:exposure,x8:exposure,' +
+                'z1:confounder,z2:confounder,z3:confounder,time:outcome,event:event']);
+      // Each announcement: the fit, its end with the bootstrap's start, 25, 50 and 75% and the end.
       await page.evaluate(`nplsiDemo.said = []; new MutationObserver(() => nplsiDemo.said.push(document.getElementById('announce')
         .textContent.trim())).observe(document.getElementById('announce'), {childList: true, characterData: true, subtree: true})`);
-      await page.evaluate(`document.getElementById('bootstrap').focus()`);
+      await page.evaluate(`document.getElementById('run').focus()`);
       await press(page, 'Enter');
+      assert.equal(await page.evaluate(ACTIVE), 'cancel');
+      // The fit's results show first, with the bootstrap running.
+      await page.until('nplsiDemo.state.fit && nplsiDemo.state.booting');
+      assert.equal(await page.evaluate(`document.querySelector('.results .tables td.na').textContent`), 'bootstrap running…');
       await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
+      assert.equal(await page.evaluate('document.getElementById("message").hidden'), true);
+      // Focus moves to the Results heading.
       assert.equal(await page.evaluate(ACTIVE), 'results-title');
       const said = await page.evaluate('nplsiDemo.said');
-      assert.equal(said[0], 'Bootstrap started: 96 refits.');
-      assert.deepEqual(said.slice(1, -1), ['Bootstrap 25% done.', 'Bootstrap 50% done.', 'Bootstrap 75% done.']);
+      assert.equal(said[0], 'Fitting NeuralPLSI and SplinePLSI…');
+      assert.match(said[1], /^Fit done in [0-9.]+ s\. Bootstrap started: 96 refits\.$/);
+      assert.deepEqual(said.slice(2, -1), ['Bootstrap 25% done.', 'Bootstrap 50% done.', 'Bootstrap 75% done.']);
       assert.match(said.at(-1), /^Bootstrap done: B = 48 in [0-9.]+ s\. Standard errors and intervals are in the results\.$/);
       const result = await page.evaluate(COMPARE);
       assert.deepEqual({neural: result.neural, spline: result.spline}, {neural: true, spline: true});
@@ -362,6 +378,9 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       console.log(`# pooled bootstrap on ${result.workers} workers equals nplsi_bootstrap and splsi_bootstrap`);
       assert.ok(await page.evaluate('document.querySelectorAll("#link-chart path.band").length === 2'));
       assert.ok(await page.evaluate('document.querySelectorAll("#forest-chart line.whisker").length === 16'));
+      // The setup is the design, so the results show the truth.
+      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.fit.data.truth.g, nplsiDemo.state.fit.data.names.x.join(),
+        document.querySelector('.results .tables thead tr:not(.group) th:nth-child(2)').textContent]`), ['sigmoid', 'x1,x2,x3,x4,x5,x6,x7,x8', 'Truth']);
     });
 
     await t.test('buttons and links have AA contrast in light and dark', async () => {
@@ -403,12 +422,64 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.send('Emulation.setDeviceMetricsOverride', DESKTOP);
     });
 
+    await t.test('the simulated data in the column setup: tabs, log boxes, a new draw and the truth', async () => {
+      // The tabs, with the keyboard: arrows, Home and End move along them and show their panel.
+      await page.evaluate(`document.getElementById('tab-columns').focus()`);
+      const visited = [];
+      for (const key of ['ArrowRight', 'ArrowRight', 'End', 'ArrowRight', 'ArrowLeft', 'Home']) {
+        await press(page, key);
+        visited.push(await page.evaluate(`[document.activeElement.id, [...document.querySelectorAll('[role=tabpanel]')]
+          .filter(e => !e.hidden).map(e => e.id).join()]`));
+      }
+      assert.deepEqual(visited, [['tab-x', 'panel-x'], ['tab-z', 'panel-z'], ['tab-outcome', 'panel-outcome'],
+        ['tab-columns', 'panel-columns'], ['tab-outcome', 'panel-outcome'], ['tab-columns', 'panel-columns']]);
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('[role=tab]')].map(e => [e.tabIndex, e.getAttribute('aria-label')])`),
+        [[0, null], [-1, 'Chemical exposures (X): 8 columns'], [-1, 'Confounders (Z): 3 columns'], [-1, null]]);
+      assert.equal(await page.evaluate(`document.getElementById('outcome-chosen').textContent`), 'Time: time · event: event');
+      // Log-transform: off, mixed after one log box, then every X; simulated exposures can be negative.
+      await page.evaluate(tab('x'));
+      const LOG_ALL = `(e => [e.checked, e.indeterminate])(document.getElementById('log-all'))`;
+      assert.deepEqual(await page.evaluate(LOG_ALL), [false, false]);
+      await page.evaluate(`${option('x1', 'log')}.click()`);
+      assert.deepEqual(await page.evaluate(LOG_ALL), [false, true]);
+      await page.evaluate(click('#log-all'));
+      assert.deepEqual(await page.evaluate(LOG_ALL), [true, false]);
+      assert.equal(await page.evaluate(`document.querySelectorAll('#x-list input:checked').length`), 8);
+      const logged = await page.evaluate(SUMMARY);
+      assert.equal(logged['Chemical exposures (X)'], '8, logged');
+      assert.match(logged['Rows'], /^[0-9]+ of 400 used · dropped: [0-9]+ not positive \(log\)$/);
+      await page.evaluate(click('#log-all'));
+      assert.deepEqual(await page.evaluate(LOG_ALL), [false, false]);
+      assert.equal((await page.evaluate(SUMMARY))['Chemical exposures (X)'], '8, untransformed');
+      // A new draw keeps the setup; without x8 the setup is not the design, so a fit has no truth.
+      await page.evaluate(tab('columns'));
+      await page.evaluate(assign('x8', 'ignore'));
+      await page.evaluate(setValue('simSeed', '3'));
+      assert.deepEqual(await page.evaluate(`[document.getElementById('count-x').textContent, ${roleOf('x8')}]`), ['7', 'ignore']);
+      await page.evaluate(click('#fit'));
+      await page.until('nplsiDemo.state.fit?.data.p === 7 && !nplsiDemo.state.busy');
+      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.fit.data.truth ?? null, document.querySelector('.results-head .facts').textContent,
+        document.querySelector('.results .tables thead tr:not(.group) th:nth-child(2)').textContent]`),
+        [null, 'Simulated, g = sigmoid · cox', 'Estimate']);
+      // Back to the design, at seed 0.
+      await page.evaluate(assign('x8', 'exposure'));
+      await page.evaluate(setValue('simSeed', '0'));
+      assert.deepEqual(Object.values(await page.evaluate(X_ORDER)), ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'X8']);
+      // A new outcome starts again from the design.
+      await page.evaluate(setValue('outcome', 'binary'));
+      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.outcomeType.value, document.forms.controls.elements.family.value,
+        ${roleOf('y')}, document.querySelectorAll('#column-table tbody tr').length]`), ['binary', 'binary', 'outcome', 12]);
+      await page.evaluate(setValue('outcome', 'cox'));
+      assert.equal(await page.evaluate('document.forms.controls.elements.family.value'), 'cox');
+    });
+
     await t.test('switching to a CSV file keeps nothing of the simulated Cox setup', async () => {
       assert.equal(await page.evaluate('document.forms.controls.elements.family.value'), 'cox');
       await page.evaluate(choose('csv'));
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.family.value,
-        document.forms.controls.elements.csvFamily.value, document.forms.controls.elements.intercept.checked,
-        document.forms.controls.elements.intercept.disabled]`), ['continuous', 'continuous', true, false]);
+        document.forms.controls.elements.outcomeType.value, document.forms.controls.elements.intercept.checked,
+        document.forms.controls.elements.intercept.disabled, document.getElementById('setup').hidden]`),
+        ['continuous', 'continuous', true, false, true]);
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Open a CSV file.']);
     });
 
@@ -441,9 +512,13 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(setValue('hiddenUnits', '32'));
       await page.evaluate(setValue('layers', '2'));
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
+      // Single fit: the estimates, without a bootstrap.
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.data.source === "csv" && !nplsiDemo.state.busy');
       assert.deepEqual(await page.evaluate('nplsiDemo.state.fit.data.names.z'), ['age', 'group=b', 'group=c']);
+      assert.match(await page.evaluate(ANNOUNCED), /^Fit done in [0-9.]+ s\. The results are below\.$/);
+      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.boot, document.querySelector('.results .tables td.na').textContent]`),
+                       [null, 'no bootstrap']);
       assert.match(await page.evaluate('document.querySelector(".results-head + .facts").textContent'),
                    /^118 of 120 rows used · dropped: 2 missing · 3 chemical exposures \(X\) · 3 confounders \(Z\)$/);
       assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.results thead tr:not(.group) th:first-child')]
@@ -451,8 +526,8 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), true);
       await page.evaluate(setValue('hiddenUnits', '16'));
       assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), false);
-      assert.equal(await page.evaluate('document.getElementById("bootstrap").disabled'), true);
       await page.evaluate(setValue('hiddenUnits', '32'));
+      assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), true);
     });
 
     await t.test('a messy CSV: column types, exclusive roles, select all, Cox event and the summary', async () => {
@@ -486,7 +561,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(assign('case', 'outcome'));
       assert.equal(await page.evaluate(ANNOUNCED), 'case: outcome. wt, the outcome before, is now ignored. Outcome type: binary (0/1).');
       assert.equal(await page.evaluate(roleOf('wt')), 'ignore');
-      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.csvFamily.value, document.forms.controls.elements.family.value,
+      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.outcomeType.value, document.forms.controls.elements.family.value,
         document.getElementById('family-note').textContent]`), ['binary', 'binary', 'Binary (logistic), because case is coded 0/1.']);
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Choose at least one chemical exposure (X).']);
       // The name filter, then All for X applies to the columns shown.
@@ -534,10 +609,14 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(filter(''));
       assert.equal(await page.evaluate(ROLES), before);
       for (const name of ['race', 'sex']) await page.evaluate(assign(name, 'confounder'));
-      // Log-transform X: All ticks the log box of every X row.
-      await page.evaluate(click('[data-log="1"]'));
-      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#column-table input[name^=log-]:checked')]
-        .map(e => e.closest('tr').dataset.column)`), ['metal_pb', 'metal_cd', 'metal_hg']);
+      // The X tab lists the exposures in model order; Log-transform ticks the log box of each.
+      await page.evaluate(tab('x'));
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#x-list li')].map(e => e.textContent)`),
+        ['X1metal_pblog', 'X2metal_cd5 values ≤ 0, dropped when logged' + 'log', 'X3metal_hglog']);
+      await page.evaluate(click('#log-all'));
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#x-list input[name^=log-]:checked')]
+        .map(e => e.closest('li').dataset.column)`), ['metal_pb', 'metal_cd', 'metal_hg']);
+      await page.evaluate(tab('columns'));
       const kept = 200-messy.drops.missing-messy.drops.nonfinite-messy.drops.nonpositive;
       assert.deepEqual(messy.drops, {missing: 19, nonfinite: 1, nonpositive: 5});
       assert.deepEqual(await page.evaluate(SUMMARY), {
@@ -548,7 +627,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
 
       // Cox: the Event column appears and guesses status; the event can never be the outcome.
-      await page.evaluate(setValue('csvFamily', 'cox'));
+      await page.evaluate(setValue('outcomeType', 'cox'));
       assert.deepEqual(await page.evaluate(`[getComputedStyle(document.querySelector('#column-table .h-event')).display,
         document.querySelector('#head-outcome .h-full').textContent, document.forms.controls.elements.intercept.disabled]`),
         ['table-cell', 'Time', true]);
@@ -559,7 +638,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Choose the survival time column (Time).']);
       assert.equal((await page.evaluate(SUMMARY))['Outcome'], 'not chosen');
       // Back to binary: the event role is dropped and the outcome type stays as chosen.
-      await page.evaluate(setValue('csvFamily', 'binary'));
+      await page.evaluate(setValue('outcomeType', 'binary'));
       assert.equal(await page.evaluate(roleOf('case')), 'ignore');
       assert.equal(await page.evaluate(`getComputedStyle(document.querySelector('#column-table .h-event')).display`), 'none');
       await page.evaluate(assign('case', 'outcome'));
@@ -584,7 +663,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await sleep(200);
 
       await page.evaluate(click('#fit'));
-      await page.until('nplsiDemo.state.fit?.data.source === "csv" && nplsiDemo.state.fileName === "messy.csv" && !nplsiDemo.state.busy');
+      await page.until('nplsiDemo.state.fit?.data.source === "csv" && nplsiDemo.state.fit.fileName === "messy.csv" && !nplsiDemo.state.busy');
       assert.equal(await page.evaluate('document.getElementById("message").hidden'), true);
       assert.deepEqual(await page.evaluate(`(() => { const d = nplsiDemo.state.fit.data;
         return [d.family, d.n, d.p, d.q, d.names.x, d.names.z, nplsiDemo.state.fit.neural.beta.length]; })()`),
@@ -603,7 +682,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       writeFileSync(file, rows.join('\n'));
       await upload(page, file);
       const notes = await page.evaluate(`Object.fromEntries([...document.querySelectorAll('#column-table tbody tr')].map((row, j) =>
-        [j, [...row.querySelectorAll('.col-detail > span')].map(e => e.textContent)]))`);
+        [j, [...row.querySelectorAll('.col-detail > span:not(.col-order)')].map(e => e.textContent)]))`);
       assert.deepEqual(Object.values(notes), [
         ['numeric · none missing', 'e.g. 1, 2, 3'],
         ['text, 3 levels · none missing', 'e.g. None, Former, Current', 'Text: Z only, as 2 indicators vs “Current”'],
@@ -630,7 +709,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       const bidi = `new RegExp('[' + String.fromCharCode(0x61c, 0x200e, 0x200f, 0x202a) + '-' + String.fromCharCode(0x202e, 0x2066) + '-' +
         String.fromCharCode(0x2069) + ']')`;
       assert.deepEqual(await page.evaluate(`(() => { const bidi = ${bidi};
-        return [nplsiDemo.state.roles.get(${JSON.stringify(evil)}), document.querySelector('#column-table tr[data-index="6"] .col-name').textContent,
+        return [nplsiDemo.setup().roles.get(${JSON.stringify(evil)}), document.querySelector('#column-table tr[data-index="6"] .col-name').textContent,
                 bidi.test(document.body.innerText), [...document.querySelectorAll('[title], [aria-label]')].some(e =>
                   bidi.test(e.title) || bidi.test(e.getAttribute('aria-label') || ''))]; })()`),
         ['confounder', 'evilSCV.exe', false, false]);
@@ -653,9 +732,9 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       try {
         await chooseFile(page, join(profile, 'slow.csv'));
         await chooseFile(page, join(profile, 'quick.csv'));
-        await page.until('nplsiDemo.state.fileName === "quick.csv"');
+        await page.until('nplsiDemo.setup().fileName === "quick.csv"');
         await sleep(2000);
-        assert.deepEqual(await page.evaluate(`[nplsiDemo.state.fileName, nplsiDemo.state.table.header.join(),
+        assert.deepEqual(await page.evaluate(`[nplsiDemo.setup().fileName, nplsiDemo.setup().table.header.join(),
           [...document.querySelectorAll('#column-table tbody tr')].map(row => row.dataset.column).join()]`),
           ['quick.csv', 'q1,q2,q3', 'q1,q2,q3']);
       } finally {
@@ -684,13 +763,16 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.fileName === "long-names.csv" && !nplsiDemo.state.busy');
       assert.equal(await page.evaluate(RESULTS_LABEL), 'long-names.csv · continuous');
-      // Another file opened during a bootstrap of this fit does not rename its results.
+      // Fit with bootstrap, with the setup unchanged, bootstraps this fit; another file
+      // opened during the bootstrap does not rename its results.
       await page.evaluate(setValue('B', '100'));
-      await page.evaluate(click('#bootstrap'));
+      await page.evaluate('void (nplsiDemo.before = nplsiDemo.state.fit)');
+      await page.evaluate(click('#run'));
       await page.until('nplsiDemo.state.busy && /^[1-9]/.test(document.getElementById("progress-text").textContent)');
       await upload(page, join(profile, 'example.csv'));
       assert.equal(await page.evaluate('nplsiDemo.state.busy'), true, 'the bootstrap ended before the second file opened');
       await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
+      assert.equal(await page.evaluate('nplsiDemo.state.fit === nplsiDemo.before'), true, 'the fit was redone');
       assert.equal(await page.evaluate(RESULTS_LABEL), 'long-names.csv · continuous');
       assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), false);
       // The forest plot tooltip shows the name as text and runs nothing.
@@ -729,40 +811,49 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
 
     await t.test('the NHANES file as a user CSV, set up as reproduce/nhanes.py, gives the NHANES example', async () => {
       await upload(page, join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'));
-      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.csvFamily.value,
+      assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.outcomeType.value,
         document.querySelectorAll('#column-table input[value=ignore]:checked').length,
-        document.querySelectorAll('#column-table input[type=checkbox]:checked').length]`), ['continuous', 28, 0]);
+        document.querySelectorAll('#x-list li, #z-list li').length]`), ['continuous', 28, 0]);
       // reproduce/nhanes.py: log triglyceride, z-scored; eight exposures in its order, logged except
       // retinol, z-scored; age, sex (female = 1) and race as indicators against White (1).
       await page.evaluate(assign('triglyceride', 'outcome'));
-      for (const [name] of NHANES_EXPOSURES) await page.evaluate(assign(name, 'exposure'));
+      for (const name of NHANES_EXPOSURES) await page.evaluate(assign(name, 'exposure'));
       for (const name of ['age', 'sex', 'race']) await page.evaluate(assign(name, 'confounder'));
-      assert.deepEqual(await page.evaluate(X_ORDER), Object.fromEntries(NHANES_EXPOSURES.map(([name], k) => [name, `X${k+1}`])));
-      // Codes are suggested as categorical, not set.
-      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#column-table .suggest')].map(e =>
-        [e.closest('tr').dataset.column, e.textContent, e.closest('label').querySelector('input').checked])`),
-        [['sex', '(suggested)', false], ['race', '(suggested)', false]]);
-      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#column-table tr[data-role=confounder]')].map(row =>
-        [row.dataset.column, row.querySelector('.col-meta').textContent, getComputedStyle(row.querySelector('.opt-categorical')).display])`),
-        [['age', 'numeric · none missing', 'none'], ['sex', 'numeric, 2 integer codes · none missing', 'flex'],
-         ['race', 'numeric, 5 integer codes · none missing', 'flex']]);
+      assert.deepEqual(await page.evaluate(X_ORDER), Object.fromEntries(NHANES_EXPOSURES.map((name, k) => [name, `X${k+1}`])));
+      assert.deepEqual(await page.evaluate(`['x', 'z'].map(t => document.getElementById('count-'+t).textContent)`), ['8', '3']);
+      // The Z tab: codes are suggested as categorical, not set; age has too many values for the box.
+      await page.evaluate(tab('z'));
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#z-list li')].map(li =>
+        [li.dataset.column, li.querySelector('.col-meta').textContent, li.querySelector('.suggest')?.textContent ?? null,
+         li.querySelector('input')?.checked ?? null])`),
+        [['age', 'numeric, enters as it is', null, null], ['sex', 'numeric, enters as it is', '(suggested)', false],
+         ['race', 'numeric, enters as it is', '(suggested)', false]]);
       assert.equal((await page.evaluate(SUMMARY))['Confounders (Z)'], '3');
-      await page.evaluate(click('[data-log="1"]'));
-      await page.evaluate(`${option('a5.Retinol', 'log')}.click()`);
       for (const name of ['sex', 'race']) await page.evaluate(`${option(name, 'cat')}.click()`);
-      assert.equal(await page.evaluate(`${option('age', 'cat')}.checked`), false);
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#z-list .col-meta')].map(e => e.textContent)`),
+                       ['numeric, enters as it is', '1 indicator vs 1', '4 indicators vs 1']);
+      // The X tab: Log-transform logs every X, then retinol is left unlogged and the box shows a mix.
+      await page.evaluate(tab('x'));
+      await page.evaluate(click('#log-all'));
+      await page.evaluate(`${option('a5.Retinol', 'log')}.click()`);
+      assert.deepEqual(await page.evaluate(`(e => [e.checked, e.indeterminate])(document.getElementById('log-all'))`), [false, true]);
+      await page.evaluate(tab('outcome'));
       assert.deepEqual(await page.evaluate(`[${checked('standardize')}, ${checked('logOutcome')}, ${checked('standardizeOutcome')}]`),
                        [true, false, false]);
       for (const name of ['logOutcome', 'standardizeOutcome']) await page.evaluate(check(name));
       await page.evaluate(setValue('activation', 'ELU'));
       await page.evaluate(`document.forms.controls.elements.spline.checked = false`);
       assert.equal(await page.evaluate(checked('intercept')), true);
-      assert.deepEqual(await page.evaluate(SUMMARY), {'Outcome': 'log triglyceride (z-score) · continuous',
-        'Chemical exposures (X)': '8, logged except a5.Retinol, then standardized',
-        'Confounders (Z)': '6 (sex: 1 indicator vs 1; race: 4 indicators vs 1)', 'Rows': '800 of 800 used'});
+      assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
+      for (const name of ['x', 'z', 'outcome']) {
+        await page.evaluate(tab(name));
+        await page.evaluate('document.activeElement.blur()');
+        await screenshot(page, `csv-step-nhanes-tab-${name}-desktop-light`, '#controls > section:first-child');
+      }
+      await page.evaluate(tab('columns'));
 
-      // The CSV step with its new controls: the last X rows with their log boxes and the Z rows of codes.
+      // The column table: the last X rows.
       const showLastRows = `document.activeElement.blur(); (wrap => { wrap.scrollTop =
         wrap.querySelector('tr[data-column="a22.2.3.4.6.7.8.hxcdf"]').offsetTop-wrap.querySelector('thead').offsetHeight; })(
         document.querySelector('.role-wrap'))`;
@@ -787,7 +878,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       // Cox on a 360 px phone: short role headers, names broken only at their <wbr>s, notes
       // across the row under the role buttons, nothing scrolling sideways.
       await page.send('Emulation.setDeviceMetricsOverride', {...PHONE, width: 360});
-      await page.evaluate(setValue('csvFamily', 'cox'));
+      await page.evaluate(setValue('outcomeType', 'cox'));
       await sleep(300);
       const cox = await page.evaluate(ROLE_TABLE);
       assert.deepEqual([cox.broken, cox.scrolls, cox.outside, cox.heads], [[], false, 0, ['Column', 'X', 'Z', 'Time', 'Evt', 'Ign']]);
@@ -799,11 +890,9 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         await screenshot(page, `csv-step-nhanes-phone-cox-360-${value}`, '#controls > section:first-child');
       }
       await scheme(page, 'light');
-      await page.evaluate(setValue('csvFamily', 'continuous'));
+      await page.evaluate(setValue('outcomeType', 'continuous'));
       // Back to continuous: the setup is as before.
-      assert.deepEqual(await page.evaluate(SUMMARY), {'Outcome': 'log triglyceride (z-score) · continuous',
-        'Chemical exposures (X)': '8, logged except a5.Retinol, then standardized',
-        'Confounders (Z)': '6 (sex: 1 indicator vs 1; race: 4 indicators vs 1)', 'Rows': '800 of 800 used'});
+      assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
       assert.equal(await page.evaluate(checked('intercept')), true);
       // The desktop's full headers and no broken names there either.
       await page.send('Emulation.setDeviceMetricsOverride', DESKTOP);
@@ -818,7 +907,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         nplsiDemo.csvFit = nplsiDemo.state.fit;
         return {n: data.n, p: data.p, q: data.q, x: data.names.x, z: data.names.z, beta: neural.beta}; })()`);
       assert.deepEqual([fit.n, fit.p, fit.q, fit.beta.length], [800, 8, 6, 8]);
-      assert.deepEqual(fit.x, NHANES_EXPOSURES.map(([name]) => name === 'a5.Retinol' ? name : `log ${name}`));
+      assert.deepEqual(fit.x, NHANES_EXPOSURES.map(name => name === 'a5.Retinol' ? name : `log ${name}`));
       assert.deepEqual(fit.z, ['age', 'sex=2', 'race=2', 'race=3', 'race=4', 'race=5']);
       console.log(`# NHANES as a CSV: beta = ${fit.beta.map(v => v.toFixed(3)).join(', ')}`);
     });
@@ -833,23 +922,28 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         document.getElementById('nhanes-error-text').textContent]`), [false, 'Could not load the NHANES file (HTTP 503).']);
       failing.delete('/nhanes.csv');
       await page.evaluate(click('#nhanes-retry'));
-      await page.until('nplsiDemo.state.nhanes && !nplsiDemo.state.nhanesLoading');
+      await page.until('nplsiDemo.state.setups.nhanes.table && !nplsiDemo.state.nhanesLoading');
       assert.deepEqual(await page.evaluate(`[nplsiDemo.state.nhanesError, document.getElementById('nhanes-error').hidden]`),
                        [null, true]);
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
     });
 
-    await t.test('NHANES loads, fits and a bootstrap can be cancelled', async () => {
+    await t.test('the NHANES example comes set up as reproduce/nhanes.py, fits, and its bootstrap can be cancelled', async () => {
       await page.evaluate(choose('nhanes'));
-      await page.until('nplsiDemo.state.nhanes');
-      assert.deepEqual(await page.evaluate(SUMMARY), {'Outcome': 'log triglyceride (z-score) · continuous',
-        'Chemical exposures (X)': '8, logged (except retinol), then standardized',
-        'Confounders (Z)': '6 (age, female and 4 race indicators)', 'Rows': '800 of 800 used'});
+      await page.until('nplsiDemo.state.setups.nhanes.table');
+      // The same column setup the file got by hand above.
+      assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
+      assert.deepEqual(await page.evaluate(X_ORDER), Object.fromEntries(NHANES_EXPOSURES.map((name, k) => [name, `X${k+1}`])));
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.activation.value,
         document.forms.controls.elements.intercept.checked]`), ['ELU', true]);
       await page.evaluate(`document.forms.controls.elements.spline.checked = false`);
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.data.source === "nhanes" && !nplsiDemo.state.busy');
+      // Your own data keeps its setup, the NHANES file as set up by hand.
+      await page.evaluate(choose('csv'));
+      assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
+      await page.evaluate(choose('nhanes'));
+      assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), true);
       // The CSV set up as reproduce/nhanes.py gave the same data and, with the same seed, the same fit.
       const same = await page.evaluate(`(() => {
         const a = nplsiDemo.csvFit, b = nplsiDemo.state.fit;
@@ -862,16 +956,20 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       })()`);
       assert.deepEqual(same, {x: true, z: true, y: true, settings: true, beta: true, gamma: true, intercept: true, g: true,
                               state: true});
+      // Fit with bootstrap bootstraps this fit; Cancel keeps the fit.
+      await page.evaluate('void (nplsiDemo.before = nplsiDemo.state.fit)');
       await page.evaluate(setValue('B', '1000'));
-      await page.evaluate(click('#bootstrap'));
+      await page.evaluate(click('#run'));
       await page.until('nplsiDemo.state.busy && /^[1-9]/.test(document.getElementById("progress-text").textContent)');
       await page.evaluate(click('#cancel'));
       await page.until('!nplsiDemo.state.busy');
       assert.equal(await page.evaluate('document.getElementById("message").textContent'), 'Bootstrap cancelled.');
-      assert.equal(await page.evaluate('nplsiDemo.state.boot'), null);
+      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.boot, nplsiDemo.state.fit === nplsiDemo.before,
+        document.querySelector('.results .tables td.na').textContent]`), [null, true, 'no bootstrap']);
       await page.evaluate(setValue('B', '8'));
-      await page.evaluate(click('#bootstrap'));
+      await page.evaluate(click('#run'));
       await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
+      assert.equal(await page.evaluate('nplsiDemo.state.fit === nplsiDemo.before'), true);
       await screenshot(page, 'desktop-nhanes');
     });
 
@@ -882,7 +980,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       const json = JSON.parse(readFileSync(file, 'utf8'));
       assert.deepEqual([json.source, json.file, json.family, json.intercept, json.rows.used, json.x.length, json.z.length],
                        ['nhanes', '12940_2020_644_MOESM2_ESM.csv', 'continuous', true, 800, 8, 6]);
-      assert.deepEqual(json.z[1], {name: 'female', column: 'sex', equals: 2, reference: 1});
+      assert.deepEqual(json.z[1], {name: 'sex=2', column: 'sex', equals: 2, reference: 1});
       assert.match(await page.evaluate(`document.querySelector('.downloads + .help').textContent`),
                    /^The model file loads with NeuralPLSI\.load\(path\) in the Python package, load_model\(\) in R and nplsi_load in C\+\+\. .*preprocessing file says/);
       // Every row of the NHANES file is used, so the rebuilt matrices are the fitted ones.
@@ -941,7 +1039,7 @@ print(json.dumps({'beta': model.beta.tolist(), 'params': model.get_params()}))`,
       await page.send('Page.reload');
       await page.until('document.readyState === "complete" && globalThis.nplsiDemo');
       await page.evaluate(choose('nhanes'));
-      await page.until('nplsiDemo.state.nhanes');
+      await page.until('nplsiDemo.state.setups.nhanes.table');
       await page.evaluate(choose('simulated'));
       await page.evaluate(setValue('n', '100'));
       await page.evaluate(click('#fit'));
