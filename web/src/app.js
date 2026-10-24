@@ -79,15 +79,27 @@ function integer(name, lo, hi, label) {
   return v;
 }
 
+const nonnegative = (name, label) => {
+  const raw = field(name).value.trim();
+  if (raw === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0) throw new Error(`${label} must be finite and nonnegative`);
+  return Number(raw);
+};
+
+// The Model page: the shared family and seed, which models run (neural, spline)
+// and the settings of each model that runs.
 function settings() {
-  const family = field('family').value, decay = field('weightDecay').value.trim(), seed = field('seed').value.trim();
-  if (decay === '' || !Number.isFinite(Number(decay)) || Number(decay) < 0)
-    throw new Error('Weight decay must be finite and nonnegative');
+  const family = field('family').value, seed = field('seed').value.trim();
   if (!/^\d+$/.test(seed) || BigInt(seed) > MAX_SEED) throw new Error(`The seed must be an integer from 0 to ${MAX_SEED}`);
-  return {family, activation: field('activation').value, hiddenUnits: integer('hiddenUnits', 1, 1024, 'Hidden units'),
-          layers: integer('layers', 1, 16, 'Hidden layers'), weightDecay: Number(decay),
-          maxIter: integer('maxIter', 0, 1000000, 'Max iterations'), intercept: family !== 'cox' && field('intercept').checked,
-          spline: field('spline').checked, seed: BigInt(seed)};
+  const s = {family, seed: BigInt(seed), neural: field('runNeural').checked, spline: field('runSpline').checked, intercept: false};
+  if (!s.neural && !s.spline) throw new Error('Choose a model to run under Model');
+  if (s.neural)
+    Object.assign(s, {activation: field('activation').value, hiddenUnits: integer('hiddenUnits', 1, 1024, 'Hidden units'),
+      layers: integer('layers', 1, 16, 'Hidden layers'), weightDecay: nonnegative('weightDecay', 'Weight decay'),
+      maxIter: integer('maxIter', 0, 1000000, 'Max iterations'), intercept: family !== 'cox' && field('intercept').checked});
+  if (s.spline)
+    s.splineSettings = {knots: integer('knots', 2, 50, 'Knots'), alpha: nonnegative('ridge', 'The ridge penalty'),
+                        maxIter: integer('splineMaxIter', 1, 100000, 'SplinePLSI max iterations')};
+  return s;
 }
 
 // A table becomes a setup: from a preset ({family, outcome, event, exposures,
@@ -244,7 +256,13 @@ function onControls() {
   syncFamily();
   const status = dataStatus();
   let reason = status.reason;
-  if (!reason) try { reason = networkProblem(status.facts.p, status.facts.q, settings()); } catch (error) { reason = error.message; }
+  // A model that does not run keeps its settings, which are then not checked.
+  $('fields-neural').disabled = !field('runNeural').checked;
+  $('fields-spline').disabled = !field('runSpline').checked;
+  if (!reason) try {
+    const s = settings();
+    reason = s.neural ? networkProblem(status.facts.p, status.facts.q, s) : null;
+  } catch (error) { reason = error.message; }
   renderSummary(status.facts);
   familyNote();
   setText($('fit-status'), reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '');
@@ -700,7 +718,7 @@ async function run(bootstrap) {
   let data, s, B;
   try {
     data = readData(); s = settings();
-    const problem = networkProblem(data.p, data.q, s);
+    const problem = s.neural ? networkProblem(data.p, data.q, s) : null;
     if (problem) throw new Error(problem);
     if (bootstrap) B = integer('B', 2, 1000, 'B');
   } catch (error) {
@@ -743,12 +761,13 @@ async function run(bootstrap) {
 async function fitStep(data, s, key, bootstrap) {
   // The file is named as it was when the fit started: another may be open by the time it ends.
   const fileName = data.source === 'simulated' ? null : setup().fileName;
-  const text = s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…', started = performance.now();
+  const names = MODELS.filter(([kind]) => s[kind]).map(([, name]) => name), started = performance.now();
+  const text = `Fitting ${names.join(' and ')}…`;
   clock(text);
   announce(text);
-  const workers = await pool.ensure(s.spline ? 2 : 1);
-  const [neural, spline] = await Promise.all([pool.call(workers[0], 'fitNeural', [data, s, s.seed]),
-    s.spline ? pool.call(workers[1], 'fitSpline', [data, s.seed]) : null]);
+  const workers = await pool.ensure(names.length), next = workers.values();
+  const [neural, spline] = await Promise.all([s.neural ? pool.call(next.next().value, 'fitNeural', [data, s, s.seed]) : null,
+    s.spline ? pool.call(next.next().value, 'fitSpline', [data, s.seed, s.splineSettings]) : null]);
   state.fit = {data, settings: s, key, fileName, neural, spline};
   state.boot = null;
   state.booting = bootstrap;
@@ -761,10 +780,11 @@ async function fitStep(data, s, key, bootstrap) {
 // (the fit's announcement) comes before the bootstrap's.
 async function bootstrapStep(B, done) {
   const f = state.fit, {data, settings: s} = f;
-  const jobs = {neural: {state: f.neural.state, x: Float32Array.from(data.x), z: Float32Array.from(data.z),
-                         y: Float32Array.from(data.y), n: data.n, grid: Float32Array.from(f.neural.grid), seed: s.seed}};
+  const jobs = {};
+  if (f.neural) jobs.neural = {state: f.neural.state, x: Float32Array.from(data.x), z: Float32Array.from(data.z),
+                               y: Float32Array.from(data.y), n: data.n, grid: Float32Array.from(f.neural.grid), seed: s.seed};
   if (f.spline) jobs.spline = {x: data.x, z: data.z, y: data.y, n: data.n, p: data.p, q: data.q, family: data.family,
-                               grid: Float64Array.from(f.spline.grid), seed: s.seed};
+                               grid: Float64Array.from(f.spline.grid), seed: s.seed, settings: s.splineSettings};
   const kinds = Object.keys(jobs), tasks = [], rows = {neural: [], spline: []};
   for (let b = 0; b < B; ++b) for (const kind of kinds) tasks.push({kind, b});
   // The tables say the bootstrap is running, unless they show an earlier one.
@@ -835,7 +855,7 @@ function coefficientTable(title, names, block, truth) {
   };
   const body = names.map((label, i) => h('tr', {}, h('td', {}, cellName(label)), truth ? h('td', {}, fmt(truth[i])) : null,
     models.map(([kind]) => cells(kind, i))));
-  if (block === 'gamma' && f.settings.intercept)
+  if (block === 'gamma' && f.neural && f.settings.intercept)
     body.push(h('tr', {}, h('td', {}, cellName('Intercept')), truth ? h('td', {}, '0') : null,
       models.map(([kind]) => kind === 'neural' ? estimateCells(f.neural.intercept, interval(kind, p+f.data.q, 1))
                                                : h('td', {class: 'na', colspan: 4}, 'part of g'))));
@@ -955,15 +975,15 @@ function render() {
     h('button', {type: 'button', class: 'small', onclick: () => download('estimates.csv', estimatesCsv())}, 'Estimates (CSV)'),
     models.filter(([k]) => state.boot?.[k]).map(([k, name]) => h('button', {type: 'button', class: 'small',
       onclick: () => download(`${k === 'neural' ? 'neuralplsi' : 'splineplsi'}-bootstrap-draws.csv`, drawsCsv(k))}, `${name} draws (CSV)`)),
-    h('button', {type: 'button', class: 'small', onclick: () => download('neuralplsi.nplsi', f.neural.state, 'text/plain')},
-      'NeuralPLSI model (.nplsi)'),
+    f.neural ? h('button', {type: 'button', class: 'small', onclick: () => download('neuralplsi.nplsi', f.neural.state, 'text/plain')},
+      'NeuralPLSI model (.nplsi)') : null,
     d.source !== 'simulated' ? h('button', {type: 'button', class: 'small',
       onclick: () => download('neuralplsi-preprocessing.json', preprocessingJson(), 'application/json')}, 'Preprocessing (JSON)') : null),
-    h('p', {class: 'help'}, 'The model file loads with NeuralPLSI.load(path) in the Python package, load_model() in R ' +
-      'and nplsi_load in C++.' +
+    h('p', {class: 'help'}, (f.neural ? 'The model file loads with NeuralPLSI.load(path) in the Python package, load_model() ' +
+      'in R and nplsi_load in C++.' +
       (d.source !== 'simulated' ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
-        '(column order, logs, means and SDs, indicators) before predicting.' : '') +
-      ' Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
+        '(column order, logs, means and SDs, indicators) before predicting. ' : ' ') : '') +
+      'Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
   results.replaceChildren(head, h('div', {class: 'figures'}, gCard, fCard),
     h('div', {class: 'tables'}, coefficientTable('Chemical exposure weights β', d.names.x, 'beta', d.truth?.beta),
       coefficientTable('Confounder effects γ', d.names.z, 'gamma', d.truth?.gamma)),
@@ -988,7 +1008,8 @@ function drawCharts() {
     const x = Array.from(linspace(lo, hi, 200));
     truth = {x, y: x.map(LINKS[d.truth.g])};
   }
-  linkChart($('link-chart'), {series, truth, index: f.neural.index, indexLabel: 'u = Xβ̂; bars: distribution of the fitted NeuralPLSI index'});
+  const [first, firstName] = f.neural ? [f.neural, 'NeuralPLSI'] : [f.spline, 'SplinePLSI'];
+  linkChart($('link-chart'), {series, truth, index: first.index, indexLabel: `u = Xβ̂; bars: distribution of the fitted ${firstName} index`});
   forestChart($('forest-chart'), {rows: d.names.x.map((name, j) => ({name, truth: d.truth?.beta[j]})),
     series: models.map(([kind, name, color]) => {
       const ci = interval(kind, 0, d.p);

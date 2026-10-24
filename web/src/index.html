@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="intro">
-  <h1>NeuralPLSI</h1>
+  <h1>Neural Partially Linear Single-Index Model Demo</h1>
   <p>NeuralPLSI models an outcome as <i>g</i>(<i>X</i>′β) + <i>Z</i>′γ. The chemical exposures (<i>X</i>, a
     mixture) enter through one weighted index <i>X</i>′β, with β of unit length and a positive first weight, and
     an unknown function <i>g</i> learned by a small neural network. The confounders (<i>Z</i>) enter linearly. The
@@ -211,33 +211,67 @@
 
     <section role="tabpanel" id="page-model" class="page page-model" aria-labelledby="step-model" hidden>
     <div class="card">
-      <h2 id="model-title">Model</h2>
+      <h2 id="model-title">Models</h2>
+      <p class="help">Choose the models to fit with <b>Run</b> on each; both use the family and seed below, the
+        same data and the same bootstrap resamples.</p>
       <div class="fields">
         <label>Family<select name="family" disabled aria-describedby="family-help"><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">Cox</option></select></label>
-        <label>Activation
-          <select name="activation"><option>ELU</option><option>LeakyReLU</option><option>ReLU</option><option>Tanh</option></select></label>
-        <label>Hidden units<input name="hiddenUnits" type="number" min="1" max="1024" step="1" value="32"></label>
-        <label>Hidden layers<input name="layers" type="number" min="1" max="16" step="1" value="2"></label>
-        <label>Weight decay<input name="weightDecay" type="number" min="0" step="any" value="0.001"></label>
-        <label>Max iterations<input name="maxIter" type="number" min="0" max="1000000" step="1" value="5000"></label>
-        <label>Seed<input name="seed" type="text" inputmode="numeric" value="0"></label>
+        <label>Seed<input name="seed" type="text" inputmode="numeric" value="0" aria-describedby="seed-help"></label>
       </div>
-      <div class="options">
-        <label class="check"><input type="checkbox" name="intercept">Intercept</label>
-        <label class="check"><input type="checkbox" name="spline">Also fit SplinePLSI</label>
+      <p class="help" id="family-help"><b>Family</b> sets the loss: squared error, logistic likelihood or Cox
+        partial likelihood. It follows the outcome type chosen under Data.
+        <span id="seed-help">The <b>seed</b> sets the initializations and the bootstrap resamples.</span></p>
+    </div>
+    <div class="model-cards">
+      <div class="card model-card" id="card-neural">
+        <div class="model-head">
+          <h2>NeuralPLSI</h2>
+          <label class="check run-check"><input type="checkbox" name="runNeural" checked>Run</label>
+        </div>
+        <fieldset class="model-fields" id="fields-neural">
+          <legend class="sr-only">NeuralPLSI settings</legend>
+          <div class="fields">
+            <label>Activation
+              <select name="activation"><option>ELU</option><option>LeakyReLU</option><option>ReLU</option><option>Tanh</option></select></label>
+            <label>Hidden units<input name="hiddenUnits" type="number" min="1" max="1024" step="1" value="32"></label>
+            <label>Hidden layers<input name="layers" type="number" min="1" max="16" step="1" value="2"></label>
+            <label>Weight decay<input name="weightDecay" type="number" min="0" step="any" value="0.001"></label>
+            <label>Max iterations<input name="maxIter" type="number" min="0" max="1000000" step="1" value="5000"></label>
+          </div>
+          <div class="options">
+            <label class="check"><input type="checkbox" name="intercept">Intercept</label>
+          </div>
+        </fieldset>
+        <details class="help">
+          <summary>What these do</summary>
+          <p>A small neural network learns <i>g</i>. <b>Activation</b>, <b>hidden units</b> and <b>hidden layers</b>
+            shape it. <b>Weight decay</b> is the L2 penalty on the network; larger values give a smoother <i>g</i>.
+            Full-batch L-BFGS runs until the objective stops improving or <b>max iterations</b>; γ is then fitted
+            exactly. <i>g</i> is anchored at <i>g</i>(0) = 0, so an <b>intercept</b> carries the outcome level (not
+            identifiable for Cox).</p>
+        </details>
       </div>
-      <details class="help">
-        <summary>What these do</summary>
-        <p id="family-help"><b>Family</b> sets the loss: squared error, logistic likelihood or Cox partial
-          likelihood. It follows the outcome type chosen under Data.
-          <b>Activation</b>, <b>hidden units</b> and <b>hidden layers</b> shape the network for <i>g</i>.
-          <b>Weight decay</b> is the L2 penalty on the network; larger values give a smoother <i>g</i>.
-          Full-batch L-BFGS runs until the objective stops improving or <b>max iterations</b>; γ is then fitted
-          exactly. <i>g</i> is anchored at <i>g</i>(0) = 0, so an <b>intercept</b> carries the outcome level
-          (not identifiable for Cox). The <b>seed</b> sets the initialization and the bootstrap resamples.</p>
-        <p><b>SplinePLSI</b> (Wang et al., 2020) replaces the network with a cubic B-spline with 5 knots and is
-          fitted on the same data and bootstrap resamples, for comparison.</p>
-      </details>
+      <div class="card model-card" id="card-spline">
+        <div class="model-head">
+          <h2>SplinePLSI</h2>
+          <label class="check run-check"><input type="checkbox" name="runSpline">Run</label>
+        </div>
+        <fieldset class="model-fields" id="fields-spline" disabled>
+          <legend class="sr-only">SplinePLSI settings</legend>
+          <div class="fields">
+            <label>Knots<input name="knots" type="number" min="2" max="50" step="1" value="5"></label>
+            <label>Ridge penalty<input name="ridge" type="number" min="0" step="any" value="0.000001"></label>
+            <label>Max iterations<input name="splineMaxIter" type="number" min="1" max="100000" step="1" value="200"></label>
+          </div>
+        </fieldset>
+        <details class="help">
+          <summary>What these do</summary>
+          <p>SplinePLSI (Wang et al., 2020) replaces the network with a cubic B-spline. <b>Knots</b> are placed at
+            quantiles of the index (more knots, a more flexible <i>g</i>); the <b>ridge penalty</b> shrinks the
+            spline and γ. β is found by BFGS over the unit sphere, for at most <b>max iterations</b>; the spline's
+            <i>g</i> carries the outcome level.</p>
+        </details>
+      </div>
     </div>
     <div class="next"><button type="button" class="primary" data-goto="run">Next: Run</button></div>
     </section>

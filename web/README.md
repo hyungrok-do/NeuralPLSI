@@ -23,6 +23,13 @@ the next, and the arrow keys, Home and End move between the tabs. The bar stays
 in view with the progress of a run, Cancel and any error, and Results opens as
 soon as a fit's estimates are drawn.
 
+The Model page has the family (which follows the outcome type) and the seed,
+shared by both models, then a card for NeuralPLSI and one for SplinePLSI side
+by side, each with a **Run** box and its own settings: the network for
+NeuralPLSI (activation, width, depth, weight decay, max iterations, intercept),
+and knots, the ridge penalty and max iterations for SplinePLSI. Either model or
+both can run; a model that does not run keeps its settings unchecked.
+
 The main button, **Fit with bootstrap**, fits on all rows and then runs the
 bootstrap; the estimates show as soon as the fit ends, with the standard errors
 and intervals filled in when the bootstrap does. When the controls still match

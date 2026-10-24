@@ -105,13 +105,22 @@ h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
 .page { display: grid; gap: 16px; min-width: 0; align-items: start; }
 .page[hidden] { display: none; }
 .next { display: flex; justify-content: flex-end; }
+/* The Model page: a card for each model, side by side, each with its Run box. */
+.page-model > .card .fields { max-width: 36rem; }
+.model-cards { display: grid; gap: 16px; align-items: start; }
+@media (min-width: 760px) { .model-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.model-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 0.75rem; }
+.model-head h2 { margin: 0; }
+.run-check { font-weight: 600; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; }
+.run-check:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.model-fields { margin: 0; }
+.model-fields:disabled { opacity: 0.5; }
+.model-card:has(.model-fields:disabled) h2 { color: var(--ink-2); }
 @media (min-width: 980px) {
   .page-data { grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); }
   .page-data .next { grid-column: 1 / -1; }
   .page-data:has(#setup[hidden]) .source-card { grid-column: 1 / -1; max-width: 720px; }
-  .page-model .card, .page-run .card { max-width: 860px; }
-  .page-model .fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .page-model .next { max-width: 860px; }
+  .page-run .card { max-width: 860px; }
 }
 .results { display: grid; gap: 16px; min-width: 0; }
 .footer { color: var(--muted); font-size: 0.85rem; padding-bottom: 32px; }

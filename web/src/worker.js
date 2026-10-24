@@ -10,7 +10,7 @@ const operations = {
     return engine.version();
   },
   fitNeural: (data, settings, seed) => fitNeural(engine, data, settings, seed),
-  fitSpline: (data, seed) => fitSpline(engine, data, seed),
+  fitSpline: (data, seed, settings) => fitSpline(engine, data, seed, settings),
   setup(jobs) {
     for (const r of Object.values(replicates)) r.close();
     replicates = {};

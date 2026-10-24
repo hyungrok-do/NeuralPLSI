@@ -95,7 +95,7 @@ which fits, bootstraps, saves and reloads a model through the C API in
 
 ### Web demo
 
-https://hyungrok-do.github.io/NeuralPLSI/ fits NeuralPLSI and SplinePLSI with
+https://hyungrok-do.github.io/NeuralPLSI/ fits NeuralPLSI, SplinePLSI or both with
 bootstrap inference in the browser, on your own CSV file (or the NHANES example,
 one button away) or simulated data; the data stay on the visitor's machine.
 Both go through the same column setup: the user gives each column a role

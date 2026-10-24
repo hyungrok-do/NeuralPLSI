@@ -60,8 +60,9 @@ function splineLink(basis, coefficients, offset, rows) {
   return g;
 }
 
-export function fitSpline(engine, data, randomState) {
-  const {n, p, q, family} = data, spline = splineConfig(p, q, family);
+// settings: {knots, alpha, maxIter}, as SPLINE_DEFAULTS.
+export function fitSpline(engine, data, randomState, settings = {}) {
+  const {n, p, q, family} = data, spline = splineConfig(p, q, family, settings);
   const started = performance.now();
   const f = engine.splineFit(spline, data.x, data.z, data.y, n, randomState);
   const seconds = (performance.now()-started)/1000;
@@ -131,8 +132,8 @@ export class NeuralReplicate {
 // seeded by seed+1337+b, and [beta, gamma, spline coefficients, g(grid)], with g
 // summed over the basis in the order the engine sums it.
 export class SplineReplicate {
-  constructor(engine, {x, z, y, n, p, q, family, grid, seed}) {
-    const e = this.engine = engine, s = this.spline = splineConfig(p, q, family);
+  constructor(engine, {x, z, y, n, p, q, family, grid, seed, settings = {}}) {
+    const e = this.engine = engine, s = this.spline = splineConfig(p, q, family, settings);
     Object.assign(this, {x, z, y, n, p, q, yd: family === 'cox' ? 2 : 1, seed: BigInt(seed), grid: Float64Array.from(grid)});
     this.knots = s.config[3]+2*s.degree;
     this.D = p+q+s.bases+grid.length;

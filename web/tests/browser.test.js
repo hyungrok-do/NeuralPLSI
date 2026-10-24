@@ -356,7 +356,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     await t.test('Fit with bootstrap on simulated data: the pooled bootstrap equals the one-call bootstrap', async () => {
       await page.evaluate(setValue('n', '400'));
       await page.evaluate(setValue('outcome', 'cox'));
-      await page.evaluate(`document.forms.controls.elements.spline.checked = true`);
+      await page.evaluate(`document.forms.controls.elements.runSpline.checked = true`);
       await page.evaluate(setValue('B', '48'));
       // Results are not a live region and the progress text is not announced; one status line is.
       assert.deepEqual(await page.evaluate(`['results', 'progress-text'].map(id => document.getElementById(id).getAttribute('aria-live'))
@@ -517,6 +517,41 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         ${roleOf('y')}, document.querySelectorAll('#column-table tbody tr').length]`), ['binary', 'binary', 'outcome', 12]);
       await page.evaluate(setValue('outcome', 'cox'));
       assert.equal(await page.evaluate('document.forms.controls.elements.family.value'), 'cox');
+    });
+
+    await t.test('the Model page: either model runs, each with its own settings', async () => {
+      assert.equal(await page.evaluate(`document.querySelector('h1').textContent`), 'Neural Partially Linear Single-Index Model Demo');
+      await page.evaluate(step('model'));
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.model-card')].map(card =>
+        [card.querySelector('h2').textContent, card.querySelector('.run-check input').name])`),
+        [['NeuralPLSI', 'runNeural'], ['SplinePLSI', 'runSpline']]);
+      const NONE = `(() => { const e = document.forms.controls.elements; e.runNeural.checked = false; e.runSpline.checked = false;
+        e.runSpline.dispatchEvent(new Event('input', {bubbles: true})); })()`;
+      await page.evaluate(NONE);
+      assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Choose a model to run under Model.']);
+      assert.deepEqual(await page.evaluate(`['neural', 'spline'].map(k => document.getElementById('fields-'+k).disabled)`), [true, true]);
+      // A setting of a model that does not run is not checked.
+      await page.evaluate(setValue('hiddenUnits', '0'));
+      await page.evaluate(check('runSpline'));
+      assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
+      await page.evaluate(setValue('hiddenUnits', '32'));
+      await page.evaluate(setValue('knots', '1'));
+      assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Knots must be an integer from 2 to 50.']);
+      await page.evaluate(setValue('knots', '7'));
+      // SplinePLSI alone, with 7 knots: a cubic spline with 9 coefficients, and its bootstrap.
+      await page.evaluate(setValue('B', '8'));
+      await page.evaluate(click('#run'));
+      await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
+      assert.deepEqual(await page.evaluate(`(() => { const f = nplsiDemo.state.fit;
+        return [f.neural, f.spline.spline.length, Object.keys(nplsiDemo.state.boot).filter(k => ['neural', 'spline'].includes(k)),
+                [...document.querySelectorAll('.downloads button')].map(b => b.textContent),
+                document.querySelector('.results .tables thead tr.group').textContent.trim()]; })()`),
+        [null, 9, ['spline'], ['Estimates (CSV)', 'SplinePLSI draws (CSV)'], 'SplinePLSI']);
+      assert.match(await page.evaluate(`document.querySelector('#link-chart').textContent`), /fitted SplinePLSI index/);
+      // Back to NeuralPLSI with the spline, as before.
+      await page.evaluate(check('runNeural'));
+      await page.evaluate(setValue('knots', '5'));
+      assert.deepEqual(await page.evaluate(`['neural', 'spline'].map(k => document.getElementById('fields-'+k).disabled)`), [false, false]);
     });
 
     await t.test('switching to a CSV file keeps nothing of the simulated Cox setup', async () => {
@@ -810,7 +845,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(assign('y', 'outcome'));
       for (const name of names.slice(0, 3)) await page.evaluate(assign(name, 'exposure'));
       await page.evaluate(assign(names[3], 'confounder'));
-      await page.evaluate(`document.forms.controls.elements.spline.checked = true`);
+      await page.evaluate(`document.forms.controls.elements.runSpline.checked = true`);
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.fileName === "long-names.csv" && !nplsiDemo.state.busy');
       assert.equal(await page.evaluate(RESULTS_LABEL), 'long-names.csv · continuous');
@@ -905,7 +940,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
                        [true, false, false]);
       for (const name of ['logOutcome', 'standardizeOutcome']) await page.evaluate(check(name));
       await page.evaluate(setValue('activation', 'ELU'));
-      await page.evaluate(`document.forms.controls.elements.spline.checked = false`);
+      await page.evaluate(`document.forms.controls.elements.runSpline.checked = false`);
       assert.equal(await page.evaluate(checked('intercept')), true);
       assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
@@ -1003,7 +1038,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.deepEqual(await page.evaluate(X_ORDER), Object.fromEntries(NHANES_EXPOSURES.map((name, k) => [name, `X${k+1}`])));
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.activation.value,
         document.forms.controls.elements.intercept.checked]`), ['ELU', true]);
-      await page.evaluate(`document.forms.controls.elements.spline.checked = false`);
+      await page.evaluate(`document.forms.controls.elements.runSpline.checked = false`);
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.data.source === "nhanes" && !nplsiDemo.state.busy');
       assert.equal(await page.evaluate(RESULTS_LABEL), 'NHANES example · continuous');
