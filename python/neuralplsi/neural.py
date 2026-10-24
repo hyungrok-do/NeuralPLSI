@@ -35,7 +35,7 @@ class NeuralPLSI(_SummaryMixin):
     """
     def __init__(self, family='continuous', max_iter=5000, weight_decay=1e-3,
                  hidden_units=32, n_hidden_layers=2,
-                 num_workers=0, add_intercept=False, activation='LeakyReLU',
+                 num_workers=0, add_intercept=False, activation='ELU',
                  initial=False, optimizer='lbfgs', batch_size=64, learning_rate=1e-3,
                  patience=10, device='cpu', backend='cpp'):
         if family not in FAMILIES:

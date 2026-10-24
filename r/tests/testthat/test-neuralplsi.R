@@ -32,7 +32,7 @@ test_that("defaults match the Python NeuralPLSI class", {
   data <- simulate(n = 60)
   fit <- neuralplsi(data$x, data$z, data$y, max_iter = 0)
   expect_identical(fit$settings, list(hidden_units = 32L, n_hidden_layers = 2L,
-    activation = "LeakyReLU", weight_decay = 0.0010000000474974513, max_iter = 0L,
+    activation = "ELU", weight_decay = 0.0010000000474974513, max_iter = 0L,
     add_intercept = FALSE, initial = FALSE, optimizer = "lbfgs", batch_size = 64L,
     learning_rate = 0.0010000000474974513, patience = 10L))
 })

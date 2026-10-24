@@ -6,7 +6,7 @@ export const FAMILIES = {continuous: 0, binary: 1, cox: 2};
 export const ACTIVATIONS = {ELU: 0, LeakyReLU: 1, ReLU: 2, Tanh: 3};
 // NeuralPLSI() and SplinePLSI() defaults.
 export const NEURAL_DEFAULTS = {family: 'continuous', maxIter: 5000, weightDecay: 1e-3, hiddenUnits: 32,
-                                layers: 2, activation: 'LeakyReLU', intercept: false};
+                                layers: 2, activation: 'ELU', intercept: false};
 export const SPLINE_DEFAULTS = {knots: 5, degree: 3, alpha: 1e-6, maxIter: 200, tol: 1e-6};
 
 export function parameterCount(p, q, width, depth, intercept) {

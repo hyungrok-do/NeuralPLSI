@@ -83,7 +83,7 @@ from neuralplsi import NeuralPLSI, SplinePLSI, simulate_data
 
 X, Z, y, *_ = simulate_data(1000, outcome='binary', g_type='sigmoid', seed=0)
 
-model = NeuralPLSI(family='binary', activation='ELU')
+model = NeuralPLSI(family='binary')
 model.fit(X, Z, y, random_state=0)
 print(model.beta, model.gamma)
 
@@ -135,13 +135,13 @@ Fitted models can also be pickled.
 ## Parameters
 
 `NeuralPLSI(family='continuous', max_iter=5000, weight_decay=1e-3, hidden_units=32,
-n_hidden_layers=2, add_intercept=False, activation='LeakyReLU', initial=False,
+n_hidden_layers=2, add_intercept=False, activation='ELU', initial=False,
 optimizer='lbfgs', batch_size=64, learning_rate=1e-3, patience=10)`
 
 | Parameter | Meaning |
 |---|---|
 | `family` | `'continuous'`, `'binary'` or `'cox'`. |
-| `activation` | `'ELU'`, `'LeakyReLU'`, `'ReLU'` or `'Tanh'`. The simulations and the NHANES analysis use ELU. |
+| `activation` | `'ELU'` (the default, used in the simulations and the NHANES analysis), `'LeakyReLU'`, `'ReLU'` or `'Tanh'`. |
 | `hidden_units`, `n_hidden_layers` | Width and depth of the link network. |
 | `weight_decay` | L2 penalty on the link network (not on beta, gamma or the intercept). |
 | `max_iter` | L-BFGS iterations (AdamW epochs); 0 only initializes. |

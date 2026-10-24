@@ -45,7 +45,7 @@ python -m pip install .
 from neuralplsi import NeuralPLSI, simulate_data
 
 X, Z, y, *_ = simulate_data(1000, outcome='binary', g_type='sigmoid', seed=0)
-model = NeuralPLSI(family='binary', activation='ELU').fit(X, Z, y, random_state=0)
+model = NeuralPLSI(family='binary').fit(X, Z, y, random_state=0)
 model.inference_bootstrap(X, Z, y, n_samples=1000, random_state=0)
 print(model.summary())
 ```

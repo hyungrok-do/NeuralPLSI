@@ -124,20 +124,20 @@ summary(fit)
 #> Call: neuralplsi(x = x, z = z, y = y)
 #>
 #> Index coefficients (beta, unit length):
-#>         Estimate Std. Error   2.5 %   97.5 %
-#> lead     0.46366    0.02670  0.4086  0.51380
-#> cadmium  0.53061    0.02168  0.4962  0.58197
-#> mercury -0.50436    0.01536 -0.5328 -0.47199
-#> arsenic  0.41213    0.02239  0.3664  0.44815
-#> pfoa     0.28113    0.02110  0.2308  0.31624
-#> bpa      0.01417    0.02149 -0.0338  0.04897
+#>           Estimate Std. Error    2.5 %   97.5 %
+#> lead     0.4704566    0.02320  0.41713  0.51040
+#> cadmium  0.5373262    0.01954  0.49819  0.57449
+#> mercury -0.4974372    0.01447 -0.52867 -0.47349
+#> arsenic  0.4099630    0.01963  0.37360  0.44964
+#> pfoa     0.2728288    0.02055  0.22926  0.30898
+#> bpa     -0.0004116    0.02016 -0.03653  0.04016
 #>
 #> Covariate coefficients (gamma):
 #>     Estimate Std. Error   2.5 %  97.5 %
-#> age   0.4716    0.03016  0.4153  0.5332
-#> sex  -0.3405    0.06174 -0.4633 -0.2218
+#> age   0.4690    0.03049  0.4132  0.5314
+#> sex  -0.3199    0.05933 -0.4488 -0.2056
 #>
-#> Network: 2 hidden layers of 32 LeakyReLU units. L-BFGS: 580 iterations, penalized objective 0.907294.
+#> Network: 2 hidden layers of 32 ELU units. L-BFGS: 346 iterations, penalized objective 0.918552.
 #> Bootstrap: B = 1000 pairs resamples with cold-start refits, seed 0, 95% percentile intervals (linear quantiles), 10 threads.
 confint(fit, level = 0.9)
 plot(fit)
@@ -145,8 +145,8 @@ fit$bootstrap$draws[1:3, ]
 ```
 
 Every interval contains the true value, and the one for `bpa`, which has no
-effect, contains zero. The 1000 refits took about 50 seconds on a 10-core
-laptop (macOS arm64); other CPUs and compilers can give slightly different
+effect, contains zero. The 1000 refits took about two and a half minutes on a
+10-core laptop (macOS arm64); other CPUs and compilers can give slightly different
 numbers.
 
 Replicate `b` resamples rows with seed `seed + b` and refits from a fresh

@@ -33,7 +33,7 @@
 #' @param family \code{"continuous"}, \code{"binary"} or \code{"cox"}.
 #' @param hidden_units Width of each hidden layer of the link network.
 #' @param n_hidden_layers Number of hidden layers.
-#' @param activation \code{"LeakyReLU"}, \code{"ELU"}, \code{"ReLU"} or \code{"Tanh"}.
+#' @param activation \code{"ELU"} (the default), \code{"LeakyReLU"}, \code{"ReLU"} or \code{"Tanh"}.
 #' @param weight_decay L2 penalty on the link network (decoupled weight decay for AdamW).
 #' @param max_iter L-BFGS iterations, or AdamW epochs. 0 only initializes.
 #' @param add_intercept Fit an intercept (not for Cox outcomes). \code{x} and
@@ -61,7 +61,7 @@
 #' @export
 neuralplsi <- function(x, z, y, family = c("continuous", "binary", "cox"),
                        hidden_units = 32, n_hidden_layers = 2,
-                       activation = c("LeakyReLU", "ELU", "ReLU", "Tanh"),
+                       activation = c("ELU", "LeakyReLU", "ReLU", "Tanh"),
                        weight_decay = 1e-3, max_iter = 5000, add_intercept = FALSE,
                        initial = FALSE, optimizer = c("lbfgs", "adam", "adam_exact_gamma"),
                        batch_size = 64, learning_rate = 1e-3, patience = 10, seed = 0) {

@@ -11,7 +11,7 @@ neuralplsi(
   family = c("continuous", "binary", "cox"),
   hidden_units = 32,
   n_hidden_layers = 2,
-  activation = c("LeakyReLU", "ELU", "ReLU", "Tanh"),
+  activation = c("ELU", "LeakyReLU", "ReLU", "Tanh"),
   weight_decay = 0.001,
   max_iter = 5000,
   add_intercept = FALSE,
@@ -39,7 +39,7 @@ indicators.}
 
 \item{n_hidden_layers}{Number of hidden layers.}
 
-\item{activation}{\code{"LeakyReLU"}, \code{"ELU"}, \code{"ReLU"} or \code{"Tanh"}.}
+\item{activation}{\code{"ELU"} (the default), \code{"LeakyReLU"}, \code{"ReLU"} or \code{"Tanh"}.}
 
 \item{weight_decay}{L2 penalty on the link network (decoupled weight decay for AdamW).}
 
