@@ -12,7 +12,7 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     g_dict = {
         'linear': lambda x, a=1: a * x,
         'sigmoid': lambda x, a=2: (1 / (1 + np.exp(-a * x)) - 0.5) * 5,
-        'sfun': lambda x: (2 / (1 + np.exp(-x)) - 0.2 * x - 1) * 10,
+        'nlrelu': lambda x: 2 * np.tanh(1.5 * np.maximum(x, 0)) + 0.1 * x,
     }
     if g_type not in g_dict:
         raise ValueError(f"Invalid g_type '{g_type}'. Choose from {list(g_dict.keys())}.")

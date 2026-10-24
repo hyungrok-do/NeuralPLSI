@@ -39,9 +39,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT/'python')]  # this checkout's reproduce/ and neuralplsi
 from reproduce.result_io import true_g
 
-SHAPES = ['linear', 'sfun', 'sigmoid']
+SHAPES = ['linear', 'nlrelu', 'sigmoid']
 OUTCOMES = ['continuous', 'binary', 'cox']
-SHAPE_LABEL = {'linear': 'Linear', 'sfun': 'S-shape', 'sigmoid': 'Sigmoid'}
+SHAPE_LABEL = {'linear': 'Linear', 'nlrelu': 'Nonlinear ReLU', 'sigmoid': 'Sigmoid'}
 OUTCOME_LABEL = {'continuous': 'Continuous', 'binary': 'Binary', 'cox': 'Cox'}
 MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
                'NeuralPLSI-Adam': 'NeuralPLSI, minibatch AdamW with early stopping',

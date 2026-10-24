@@ -4,7 +4,7 @@ set -euo pipefail
 n=${1:?Pass the sample size}
 id=${SLURM_ARRAY_TASK_ID:?Set SLURM_ARRAY_TASK_ID (0-35)}
 [[ "$id" =~ ^[0-9]+$ ]] && (( id <= 35 )) || { echo 'Array ID must be 0-35' >&2; exit 2; }
-g_values=(sigmoid sfun linear)
+g_values=(sigmoid nlrelu linear)
 outcomes=(continuous binary cox)
 # 0-8 NeuralPLSI, 9-17 SplinePLSI, 18-26 the minibatch AdamW baseline,
 # 27-35 the baseline followed by the exact gamma fit.

@@ -23,7 +23,7 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
     commands = []
-    for n, outcome, link in itertools.product([500, 2000], ['continuous', 'binary', 'cox'], ['linear', 'sfun', 'sigmoid']):
+    for n, outcome, link in itertools.product([500, 2000], ['continuous', 'binary', 'cox'], ['linear', 'nlrelu', 'sigmoid']):
         for model, initial in [('NeuralPLSI', False), ('NeuralPLSI', True), ('PLSI', False)]:
             command = [sys.executable, str(ROOT/'reproduce/main_simulation.py'),
                 '--n_instances', str(n), '--outcome', outcome, '--g_fn', link, '--models', model,

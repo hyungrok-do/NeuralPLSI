@@ -46,7 +46,7 @@ export const TRUE_BETA = unit([1, 0.7, -0.5, 0.5, 0.3, -0.1, 0, 0]);
 export const TRUE_GAMMA = [1, -0.5, 0.5];
 export const LINKS = {
   sigmoid: u => (1/(1+Math.exp(-2*u))-0.5)*5,
-  sfun: u => (2/(1+Math.exp(-u))-0.2*u-1)*10,
+  nlrelu: u => 2*Math.tanh(1.5*Math.max(u, 0))+0.1*u,
   linear: u => u,
 };
 

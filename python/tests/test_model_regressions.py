@@ -33,7 +33,7 @@ class ModelRegressionTest(unittest.TestCase):
     def test_final_spline_components_use_returned_index(self):
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
-                x, z, y, *_ = simulate_data(200, outcome=family, g_type='sfun', seed=10)
+                x, z, y, *_ = simulate_data(200, outcome=family, g_type='nlrelu', seed=10)
                 # A start with beta[0] < 0 exercises the final sign identification.
                 start = -np.array([1., .7, -.5, .5, .3, -.1, 0., 0.])
                 model = SplinePLSI(family=family).fit(x, z, y, beta_init=start)
@@ -47,7 +47,7 @@ class ModelRegressionTest(unittest.TestCase):
 
     def test_spline_knots_and_basis_match_independent_references(self):
         from scipy.interpolate import BSpline
-        x, z, y, *_ = simulate_data(101, g_type='sfun', seed=6)
+        x, z, y, *_ = simulate_data(101, g_type='nlrelu', seed=6)
         model = SplinePLSI().fit(x, z, y, random_state=1)
         eta = np.sort(x @ model.beta)
         knots = eta[np.linspace(0, len(eta)-1, 5).astype(np.int64)]
@@ -103,7 +103,7 @@ class ModelRegressionTest(unittest.TestCase):
         rng = np.random.default_rng(0)
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
-                x, z, y, *_ = simulate_data(400, outcome=family, g_type='sfun', seed=12)
+                x, z, y, *_ = simulate_data(400, outcome=family, g_type='nlrelu', seed=12)
                 model = SplinePLSI(family=family).fit(x, z, y, random_state=2)
                 self.assertTrue(model.converged_)
                 for _ in range(6):

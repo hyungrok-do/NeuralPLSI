@@ -187,7 +187,7 @@ returns `X, Z, y, xb, gxb, g_fn`:
 - `X`: 8 exposures, equicorrelated (0.3) normal, or uniform or t(5) with the
   same Gaussian copula (`x_dist='uniform'` or `'t'`).
 - `Z`: two standard normal covariates and one +-1 covariate.
-- `g_type`: `'linear'`, `'sigmoid'` or `'sfun'` (S-shaped).
+- `g_type`: `'linear'`, `'sigmoid'` or `'nlrelu'` (nonlinear ReLU, `2 tanh(1.5 max(u, 0)) + 0.1u`).
 - `outcome`: `'continuous'` (normal errors), `'binary'` (logistic) or `'cox'`
   (exponential event times and exponential censoring).
 - `xb`, `gxb` and `g_fn`: the true index, link values and link.

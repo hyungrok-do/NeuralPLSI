@@ -104,7 +104,7 @@ def main(argv=None):
         run(compiler+flags+[str(temp/'core.cpp'), '-o', str(reference_path)])
         reference = load_reference(reference_path, current)
         for family in args.outcomes:
-            x, z, y, *_ = simulate_data(args.n, outcome=family, g_type='sfun', seed=args.seed)
+            x, z, y, *_ = simulate_data(args.n, outcome=family, g_type='nlrelu', seed=args.seed)
             for jobs in args.jobs:
                 for repeat in range(args.repeats):
                     versions = [('before', reference), ('after', current)]
