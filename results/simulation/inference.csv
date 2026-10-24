@@ -41,48 +41,48 @@ NeuralPLSI,2000,linear,cox,gamma,1,1,0.942,0.0205087,1.04864,0.0324494,0.0337918
 NeuralPLSI,2000,linear,cox,gamma,2,-0.5,0.948,0.0194807,1.01089,0.0288623,0.029494,500
 NeuralPLSI,2000,linear,cox,gamma,3,0.5,0.944,0.0201733,0.986088,0.029463,0.0300181,500
 NeuralPLSI,2000,linear,cox,g,all,,,,,0.0543673,,500
-NeuralPLSI,2000,sfun,binary,beta,all,,0.94675,0.0075391,0.991245,0.0283761,0.0283223,500
-NeuralPLSI,2000,sfun,binary,beta,1,0.691714,0.948,0.0194807,0.994279,0.0227492,0.0227252,500
-NeuralPLSI,2000,sfun,binary,beta,2,0.4842,0.952,0.0187559,0.984412,0.0276848,0.0278053,500
-NeuralPLSI,2000,sfun,binary,beta,3,-0.345857,0.93,0.0223866,0.984886,0.0264921,0.0264709,500
-NeuralPLSI,2000,sfun,binary,beta,4,0.345857,0.958,0.0175997,1.0354,0.0278963,0.0278512,500
-NeuralPLSI,2000,sfun,binary,beta,5,0.207514,0.962,0.0167756,1.0489,0.0283892,0.0282344,500
-NeuralPLSI,2000,sfun,binary,beta,6,-0.0691714,0.944,0.0201733,0.973813,0.0302205,0.0301413,500
-NeuralPLSI,2000,sfun,binary,beta,7,0,0.934,0.0217843,0.928674,0.0321425,0.0320398,500
-NeuralPLSI,2000,sfun,binary,beta,8,0,0.946,0.0198308,0.979595,0.0304181,0.0303157,500
-NeuralPLSI,2000,sfun,binary,gamma,all,,0.933333,0.0129481,0.97858,0.0743892,0.0764957,500
-NeuralPLSI,2000,sfun,binary,gamma,1,1,0.93,0.0223866,0.978563,0.0793784,0.0819144,500
-NeuralPLSI,2000,sfun,binary,gamma,2,-0.5,0.934,0.0217843,0.968017,0.0727286,0.0746971,500
-NeuralPLSI,2000,sfun,binary,gamma,3,0.5,0.936,0.0214746,0.989159,0.0707876,0.0725614,500
-NeuralPLSI,2000,sfun,binary,g,all,,,,,0.206779,,500
-NeuralPLSI,2000,sfun,continuous,beta,all,,0.954,0.00680141,1.01678,0.0105715,0.010564,500
-NeuralPLSI,2000,sfun,continuous,beta,1,0.691714,0.964,0.0163451,1.04909,0.00823086,0.0082284,500
-NeuralPLSI,2000,sfun,continuous,beta,2,0.4842,0.948,0.0194807,0.996272,0.0104139,0.0104091,500
-NeuralPLSI,2000,sfun,continuous,beta,3,-0.345857,0.944,0.0201733,1.04633,0.00947183,0.00949879,500
-NeuralPLSI,2000,sfun,continuous,beta,4,0.345857,0.948,0.0194807,1.01212,0.0109349,0.0109048,500
-NeuralPLSI,2000,sfun,continuous,beta,5,0.207514,0.95,0.0191225,1.02592,0.0111047,0.0110779,500
-NeuralPLSI,2000,sfun,continuous,beta,6,-0.0691714,0.962,0.0167756,0.979028,0.0114756,0.0114658,500
-NeuralPLSI,2000,sfun,continuous,beta,7,0,0.954,0.0183802,0.994574,0.0114794,0.0115267,500
-NeuralPLSI,2000,sfun,continuous,beta,8,0,0.962,0.0167756,1.03088,0.0110361,0.0109787,500
-NeuralPLSI,2000,sfun,continuous,gamma,all,,0.940667,0.0123501,0.977344,0.0229499,0.0229644,500
-NeuralPLSI,2000,sfun,continuous,gamma,1,1,0.936,0.0214746,0.955126,0.0234811,0.0235223,500
-NeuralPLSI,2000,sfun,continuous,gamma,2,-0.5,0.942,0.0205087,0.981747,0.0228298,0.0228391,500
-NeuralPLSI,2000,sfun,continuous,gamma,3,0.5,0.944,0.0201733,0.995157,0.0225284,0.0225203,500
-NeuralPLSI,2000,sfun,continuous,g,all,,,,,0.0592273,,500
-NeuralPLSI,2000,sfun,cox,beta,all,,0.94325,0.00784682,0.983191,0.0133945,0.0133994,500
-NeuralPLSI,2000,sfun,cox,beta,1,0.691714,0.948,0.0194807,1.00091,0.0106085,0.0106214,500
-NeuralPLSI,2000,sfun,cox,beta,2,0.4842,0.94,0.0208371,0.972662,0.013071,0.0131202,500
-NeuralPLSI,2000,sfun,cox,beta,3,-0.345857,0.948,0.0194807,0.980478,0.0123476,0.0123535,500
-NeuralPLSI,2000,sfun,cox,beta,4,0.345857,0.94,0.0208371,0.959117,0.0141908,0.0142151,500
-NeuralPLSI,2000,sfun,cox,beta,5,0.207514,0.938,0.021159,0.973987,0.0143292,0.0143383,500
-NeuralPLSI,2000,sfun,cox,beta,6,-0.0691714,0.944,0.0201733,1.00194,0.0138218,0.0137843,500
-NeuralPLSI,2000,sfun,cox,beta,7,0,0.946,0.0198308,0.970188,0.0144401,0.0144123,500
-NeuralPLSI,2000,sfun,cox,beta,8,0,0.942,0.0205087,1.00625,0.0138993,0.013907,500
-NeuralPLSI,2000,sfun,cox,gamma,all,,0.942,0.0123988,1.02329,0.0314458,0.0325332,500
-NeuralPLSI,2000,sfun,cox,gamma,1,1,0.942,0.0205087,1.05244,0.0336241,0.0353546,500
-NeuralPLSI,2000,sfun,cox,gamma,2,-0.5,0.942,0.0205087,1.0235,0.0299229,0.0306625,500
-NeuralPLSI,2000,sfun,cox,gamma,3,0.5,0.942,0.0205087,0.993927,0.0306685,0.0313861,500
-NeuralPLSI,2000,sfun,cox,g,all,,,,,0.115359,,500
+NeuralPLSI,2000,nlrelu,binary,beta,all,,0.9705,0.00555246,1.14979,0.0548388,0.0545374,500
+NeuralPLSI,2000,nlrelu,binary,beta,1,0.691714,0.97,0.0149673,1.13929,0.0450878,0.0465656,500
+NeuralPLSI,2000,nlrelu,binary,beta,2,0.4842,0.978,0.01287,1.14794,0.0533089,0.0532754,500
+NeuralPLSI,2000,nlrelu,binary,beta,3,-0.345857,0.956,0.0179951,1.17345,0.05095,0.0530579,500
+NeuralPLSI,2000,nlrelu,binary,beta,4,0.345857,0.966,0.0159011,1.16123,0.0556819,0.0555544,500
+NeuralPLSI,2000,nlrelu,binary,beta,5,0.207514,0.986,0.0103086,1.16865,0.0564642,0.0537584,500
+NeuralPLSI,2000,nlrelu,binary,beta,6,-0.0691714,0.976,0.0134285,1.08202,0.0608671,0.0603127,500
+NeuralPLSI,2000,nlrelu,binary,beta,7,0,0.958,0.0175997,1.10243,0.0602502,0.0592264,500
+NeuralPLSI,2000,nlrelu,binary,beta,8,0,0.974,0.0139625,1.22335,0.0544442,0.0533963,500
+NeuralPLSI,2000,nlrelu,binary,gamma,all,,0.954,0.0107442,1.04972,0.0578974,0.0595068,500
+NeuralPLSI,2000,nlrelu,binary,gamma,1,1,0.942,0.0205087,1.05073,0.0627775,0.0649746,500
+NeuralPLSI,2000,nlrelu,binary,gamma,2,-0.5,0.95,0.0191225,1.01071,0.0579117,0.0590604,500
+NeuralPLSI,2000,nlrelu,binary,gamma,3,0.5,0.97,0.0149673,1.08771,0.0525504,0.0539756,500
+NeuralPLSI,2000,nlrelu,binary,g,all,,,,,0.15285,,500
+NeuralPLSI,2000,nlrelu,continuous,beta,all,,0.96275,0.00644378,1.07514,0.0208357,0.0207493,500
+NeuralPLSI,2000,nlrelu,continuous,beta,1,0.691714,0.968,0.0154422,1.11335,0.0160985,0.0161124,500
+NeuralPLSI,2000,nlrelu,continuous,beta,2,0.4842,0.942,0.0205087,1.0359,0.0208403,0.020876,500
+NeuralPLSI,2000,nlrelu,continuous,beta,3,-0.345857,0.956,0.0179951,1.09271,0.0190432,0.0190516,500
+NeuralPLSI,2000,nlrelu,continuous,beta,4,0.345857,0.962,0.0167756,1.08597,0.0212085,0.02111,500
+NeuralPLSI,2000,nlrelu,continuous,beta,5,0.207514,0.972,0.0144747,1.10284,0.0215737,0.0215796,500
+NeuralPLSI,2000,nlrelu,continuous,beta,6,-0.0691714,0.958,0.0175997,1.0213,0.0228809,0.0225827,500
+NeuralPLSI,2000,nlrelu,continuous,beta,7,0,0.964,0.0163451,1.03442,0.0229264,0.0228396,500
+NeuralPLSI,2000,nlrelu,continuous,beta,8,0,0.98,0.0122836,1.1146,0.0212723,0.0210466,500
+NeuralPLSI,2000,nlrelu,continuous,gamma,all,,0.944667,0.0120745,0.981574,0.0228854,0.0229197,500
+NeuralPLSI,2000,nlrelu,continuous,gamma,1,1,0.944,0.0201733,0.964102,0.023304,0.0233948,500
+NeuralPLSI,2000,nlrelu,continuous,gamma,2,-0.5,0.942,0.0205087,0.981793,0.0228692,0.0228829,500
+NeuralPLSI,2000,nlrelu,continuous,gamma,3,0.5,0.948,0.0194807,0.998826,0.0224754,0.0224722,500
+NeuralPLSI,2000,nlrelu,continuous,g,all,,,,,0.0593716,,500
+NeuralPLSI,2000,nlrelu,cox,beta,all,,0.957,0.00674001,1.0435,0.0251128,0.0252568,500
+NeuralPLSI,2000,nlrelu,cox,beta,1,0.691714,0.962,0.0167756,1.06505,0.0197703,0.0200033,500
+NeuralPLSI,2000,nlrelu,cox,beta,2,0.4842,0.954,0.0183802,1.03798,0.0244217,0.0245612,500
+NeuralPLSI,2000,nlrelu,cox,beta,3,-0.345857,0.948,0.0194807,1.00163,0.0240908,0.0244366,500
+NeuralPLSI,2000,nlrelu,cox,beta,4,0.345857,0.962,0.0167756,1.04317,0.026028,0.0261217,500
+NeuralPLSI,2000,nlrelu,cox,beta,5,0.207514,0.958,0.0175997,1.04259,0.0267487,0.0267749,500
+NeuralPLSI,2000,nlrelu,cox,beta,6,-0.0691714,0.95,0.0191225,1.04776,0.0262555,0.0264581,500
+NeuralPLSI,2000,nlrelu,cox,beta,7,0,0.954,0.0183802,1.02862,0.0270673,0.0271263,500
+NeuralPLSI,2000,nlrelu,cox,beta,8,0,0.968,0.0154422,1.08119,0.0257418,0.0258384,500
+NeuralPLSI,2000,nlrelu,cox,gamma,all,,0.942667,0.0122143,1.02155,0.0299888,0.0310808,500
+NeuralPLSI,2000,nlrelu,cox,gamma,1,1,0.94,0.0208371,1.05204,0.0322065,0.0339242,500
+NeuralPLSI,2000,nlrelu,cox,gamma,2,-0.5,0.948,0.0194807,1.01994,0.0284551,0.0291234,500
+NeuralPLSI,2000,nlrelu,cox,gamma,3,0.5,0.94,0.0208371,0.992659,0.0291724,0.0299837,500
+NeuralPLSI,2000,nlrelu,cox,g,all,,,,,0.197141,,500
 NeuralPLSI,2000,sigmoid,binary,beta,all,,0.94425,0.00730047,0.993706,0.0364228,0.036359,500
 NeuralPLSI,2000,sigmoid,binary,beta,1,0.691714,0.942,0.0205087,1.0064,0.0288847,0.0290938,500
 NeuralPLSI,2000,sigmoid,binary,beta,2,0.4842,0.95,0.0191225,0.980054,0.0356212,0.0357315,500
@@ -167,48 +167,48 @@ NeuralPLSI,2000,sigmoid,cox,g,all,,,,,0.09359,,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,linear,cox,gamma,2,-0.5,0.972,0.0144747,1.12845,0.0332942,0.0319304,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,linear,cox,gamma,3,0.5,0.966,0.0159011,1.10388,0.0345219,0.0324274,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,linear,cox,g,all,,,,,0.102127,,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,all,,0.97,0.0057031,0.999347,0.0312306,0.0282921,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,1,0.691714,0.978,0.01287,0.98692,0.0256281,0.0227974,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,2,0.4842,0.966,0.0159011,0.988143,0.0307445,0.0278507,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,3,-0.345857,0.962,0.0167756,0.989869,0.0291098,0.026436,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,4,0.345857,0.982,0.0116651,1.03225,0.0312258,0.0279855,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,5,0.207514,0.988,0.0095536,1.05369,0.0314045,0.0280787,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,6,-0.0691714,0.966,0.0159011,0.998909,0.0327597,0.0301041,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,7,0,0.96,0.0171935,0.950394,0.0347809,0.0320035,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,beta,8,0,0.958,0.0175997,0.994599,0.033305,0.0301197,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,gamma,all,,0.932667,0.0132483,1.05353,0.122757,0.0913581,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,gamma,1,1,0.89,0.027453,0.990311,0.182797,0.11961,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,gamma,2,-0.5,0.954,0.0183802,1.07611,0.0773778,0.0737102,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,gamma,3,0.5,0.954,0.0183802,1.09417,0.076195,0.072795,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,binary,g,all,,,,,0.249464,,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,all,,0.97325,0.00541981,1.01762,0.0117414,0.0105486,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,1,0.691714,0.974,0.0139625,1.06744,0.00898999,0.00817261,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,2,0.4842,0.964,0.0163451,0.988309,0.0116591,0.0103569,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,3,-0.345857,0.972,0.0144747,1.05373,0.0103974,0.00947505,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,4,0.345857,0.968,0.0154422,0.980607,0.0125452,0.0109154,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,5,0.207514,0.978,0.01287,1.01947,0.0124008,0.0111365,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,6,-0.0691714,0.97,0.0149673,0.992768,0.0125791,0.0114787,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,7,0,0.976,0.0134285,0.989545,0.0127924,0.0114898,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,beta,8,0,0.984,0.0110092,1.04909,0.0120411,0.0109272,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,gamma,all,,0.958,0.00988018,1.02721,0.0386889,0.0270579,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,gamma,1,1,0.92,0.0238033,0.925553,0.0564654,0.033603,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,gamma,2,-0.5,0.974,0.0139625,1.07026,0.025678,0.0230965,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,gamma,3,0.5,0.98,0.0122836,1.08582,0.0253533,0.0231037,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,continuous,g,all,,,,,0.087333,,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,all,,0.96675,0.00599958,0.987103,0.0150582,0.0136145,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,1,0.691714,0.97,0.0149673,0.96611,0.0124264,0.0108367,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,2,0.4842,0.964,0.0163451,0.962911,0.0149437,0.0134442,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,3,-0.345857,0.964,0.0163451,1.00025,0.0136684,0.012482,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,4,0.345857,0.966,0.0159011,0.959363,0.0160519,0.0145391,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,5,0.207514,0.966,0.0159011,1.03178,0.0152939,0.0144633,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,6,-0.0691714,0.966,0.0159011,1.01011,0.0154892,0.0139728,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,7,0,0.966,0.0159011,0.969589,0.0163285,0.0145204,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,beta,8,0,0.972,0.0144747,0.996707,0.0158538,0.0142199,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,gamma,all,,0.938,0.0127953,1.10349,0.0603932,0.0439395,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,gamma,1,1,0.9,0.026322,1.02127,0.0913828,0.0582261,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,gamma,2,-0.5,0.958,0.0175997,1.15038,0.0354315,0.0343309,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,gamma,3,0.5,0.956,0.0179951,1.13881,0.0365487,0.0349736,500
-"NeuralPLSI, minibatch AdamW with early stopping",2000,sfun,cox,g,all,,,,,0.178484,,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,all,,0.9815,0.00436082,1.12598,0.0617388,0.056289,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,1,0.691714,0.982,0.0116651,1.12328,0.0508487,0.0487406,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,2,0.4842,0.988,0.0095536,1.07603,0.0627705,0.0547552,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,3,-0.345857,0.978,0.01287,1.17494,0.0562547,0.0564152,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,4,0.345857,0.98,0.0122836,1.14389,0.0625891,0.0579756,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,5,0.207514,0.992,0.00781625,1.17206,0.0618372,0.0540367,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,6,-0.0691714,0.982,0.0116651,1.09781,0.066327,0.0617946,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,7,0,0.966,0.0159011,1.08987,0.0669842,0.061303,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,beta,8,0,0.984,0.0110092,1.13,0.0646201,0.0541609,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,gamma,all,,0.965333,0.00892786,1.06823,0.101559,0.0680639,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,gamma,1,1,0.944,0.0201733,0.926723,0.152809,0.0860976,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,gamma,2,-0.5,0.97,0.0149673,1.1133,0.0631938,0.059501,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,gamma,3,0.5,0.982,0.0116651,1.16467,0.059992,0.054267,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,binary,g,all,,,,,0.158959,,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,all,,0.97225,0.00551346,1.02865,0.0234869,0.0209729,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,1,0.691714,0.974,0.0139625,1.08272,0.0178355,0.0163817,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,2,0.4842,0.958,0.0175997,0.996734,0.0232748,0.0212313,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,3,-0.345857,0.968,0.0154422,1.03376,0.0217827,0.0195343,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,4,0.345857,0.966,0.0159011,0.988105,0.025115,0.0217459,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,5,0.207514,0.982,0.0116651,1.04854,0.0244171,0.0216689,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,6,-0.0691714,0.968,0.0154422,1.00946,0.0250054,0.0227094,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,7,0,0.97,0.0149673,0.994499,0.0256673,0.023141,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,beta,8,0,0.992,0.00781625,1.07536,0.0238275,0.020604,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,gamma,all,,0.961333,0.00972398,1.04135,0.0367596,0.0267862,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,gamma,1,1,0.926,0.0229678,0.973294,0.0524489,0.0330667,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,gamma,2,-0.5,0.978,0.01287,1.05998,0.0258182,0.0230412,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,gamma,3,0.5,0.98,0.0122836,1.09077,0.0252256,0.0229827,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,continuous,g,all,,,,,0.0879339,,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,all,,0.97,0.00574513,1.0349,0.0287909,0.0266607,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,1,0.691714,0.972,0.0144747,1.06889,0.0224144,0.0210976,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,2,0.4842,0.972,0.0144747,1.02607,0.0280021,0.0261632,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,3,-0.345857,0.95,0.0191225,0.995182,0.0276733,0.0262447,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,4,0.345857,0.974,0.0139625,1.01503,0.0303358,0.0275151,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,5,0.207514,0.97,0.0149673,1.08588,0.0290203,0.0279172,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,6,-0.0691714,0.972,0.0144747,1.03203,0.0303996,0.02811,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,7,0,0.974,0.0139625,0.994116,0.031767,0.0284255,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,beta,8,0,0.976,0.0134285,1.06199,0.0297202,0.0270796,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,gamma,all,,0.955333,0.0106276,1.06875,0.0534889,0.038148,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,gamma,1,1,0.938,0.021159,0.993193,0.0793576,0.0490489,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,gamma,2,-0.5,0.97,0.0149673,1.12575,0.0331733,0.0312011,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,gamma,3,0.5,0.958,0.0175997,1.0873,0.0344252,0.0314087,500
+"NeuralPLSI, minibatch AdamW with early stopping",2000,nlrelu,cox,g,all,,,,,0.281767,,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,sigmoid,binary,beta,all,,0.96625,0.00564693,1.00769,0.039901,0.0363784,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,sigmoid,binary,beta,1,0.691714,0.964,0.0163451,1.01178,0.0321464,0.0291942,500
 "NeuralPLSI, minibatch AdamW with early stopping",2000,sigmoid,binary,beta,2,0.4842,0.974,0.0139625,1.0026,0.0388848,0.0359276,500
@@ -293,48 +293,48 @@ NeuralPLSI,2000,sigmoid,cox,g,all,,,,,0.09359,,500
 "the same AdamW fit, then the exact γ fit",2000,linear,cox,gamma,2,-0.5,0.956,0.0179951,0.994625,0.0298879,0.0284969,500
 "the same AdamW fit, then the exact γ fit",2000,linear,cox,gamma,3,0.5,0.954,0.0183802,0.972872,0.0304344,0.0291695,500
 "the same AdamW fit, then the exact γ fit",2000,linear,cox,g,all,,,,,0.102127,,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,all,,0.97,0.0057031,0.999347,0.0312306,0.0282921,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,1,0.691714,0.978,0.01287,0.98692,0.0256281,0.0227974,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,2,0.4842,0.966,0.0159011,0.988143,0.0307445,0.0278507,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,3,-0.345857,0.962,0.0167756,0.989869,0.0291098,0.026436,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,4,0.345857,0.982,0.0116651,1.03225,0.0312258,0.0279855,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,5,0.207514,0.988,0.0095536,1.05369,0.0314045,0.0280787,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,6,-0.0691714,0.966,0.0159011,0.998909,0.0327597,0.0301041,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,7,0,0.96,0.0171935,0.950394,0.0347809,0.0320035,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,beta,8,0,0.958,0.0175997,0.994599,0.033305,0.0301197,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,gamma,all,,0.937333,0.0124309,0.997282,0.0735929,0.0724565,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,gamma,1,1,0.938,0.021159,1.01207,0.0815208,0.0779494,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,gamma,2,-0.5,0.932,0.0220882,0.980448,0.0701003,0.0705273,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,gamma,3,0.5,0.942,0.0205087,0.999326,0.0684693,0.0685539,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,binary,g,all,,,,,0.249464,,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,all,,0.97325,0.00541981,1.01762,0.0117414,0.0105486,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,1,0.691714,0.974,0.0139625,1.06744,0.00898999,0.00817261,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,2,0.4842,0.964,0.0163451,0.988309,0.0116591,0.0103569,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,3,-0.345857,0.972,0.0144747,1.05373,0.0103974,0.00947505,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,4,0.345857,0.968,0.0154422,0.980607,0.0125452,0.0109154,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,5,0.207514,0.978,0.01287,1.01947,0.0124008,0.0111365,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,6,-0.0691714,0.97,0.0149673,0.992768,0.0125791,0.0114787,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,7,0,0.976,0.0134285,0.989545,0.0127924,0.0114898,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,beta,8,0,0.984,0.0110092,1.04909,0.0120411,0.0109272,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,gamma,all,,0.944667,0.0120745,0.976961,0.023078,0.023076,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,gamma,1,1,0.942,0.0205087,0.955045,0.0235904,0.0237436,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,gamma,2,-0.5,0.946,0.0198308,0.97925,0.0230119,0.0228947,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,gamma,3,0.5,0.946,0.0198308,0.99659,0.0226215,0.0225739,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,continuous,g,all,,,,,0.087333,,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,all,,0.96675,0.00599958,0.987103,0.0150582,0.0136145,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,1,0.691714,0.97,0.0149673,0.96611,0.0124264,0.0108367,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,2,0.4842,0.964,0.0163451,0.962911,0.0149437,0.0134442,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,3,-0.345857,0.964,0.0163451,1.00025,0.0136684,0.012482,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,4,0.345857,0.966,0.0159011,0.959363,0.0160519,0.0145391,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,5,0.207514,0.966,0.0159011,1.03178,0.0152939,0.0144633,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,6,-0.0691714,0.966,0.0159011,1.01011,0.0154892,0.0139728,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,7,0,0.966,0.0159011,0.969589,0.0163285,0.0145204,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,beta,8,0,0.972,0.0144747,0.996707,0.0158538,0.0142199,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,gamma,all,,0.965333,0.0093032,1.01163,0.0372377,0.031745,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,gamma,1,1,0.972,0.0144747,1.03289,0.0446522,0.0350508,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,gamma,2,-0.5,0.958,0.0175997,1.02213,0.0322606,0.0294098,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,gamma,3,0.5,0.966,0.0159011,0.979856,0.0335465,0.0304916,500
-"the same AdamW fit, then the exact γ fit",2000,sfun,cox,g,all,,,,,0.178484,,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,all,,0.9815,0.00436082,1.12598,0.0617388,0.056289,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,1,0.691714,0.982,0.0116651,1.12328,0.0508487,0.0487406,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,2,0.4842,0.988,0.0095536,1.07603,0.0627705,0.0547552,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,3,-0.345857,0.978,0.01287,1.17494,0.0562547,0.0564152,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,4,0.345857,0.98,0.0122836,1.14389,0.0625891,0.0579756,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,5,0.207514,0.992,0.00781625,1.17206,0.0618372,0.0540367,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,6,-0.0691714,0.982,0.0116651,1.09781,0.066327,0.0617946,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,7,0,0.966,0.0159011,1.08987,0.0669842,0.061303,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,beta,8,0,0.984,0.0110092,1.13,0.0646201,0.0541609,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,gamma,all,,0.958,0.0100518,1.04584,0.0582661,0.0577331,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,gamma,1,1,0.96,0.0171935,1.0408,0.0642918,0.0625537,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,gamma,2,-0.5,0.94,0.0208371,1.00422,0.0579695,0.0578748,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,gamma,3,0.5,0.974,0.0139625,1.09249,0.051874,0.0523151,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,binary,g,all,,,,,0.158959,,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,all,,0.97225,0.00551346,1.02865,0.0234869,0.0209729,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,1,0.691714,0.974,0.0139625,1.08272,0.0178355,0.0163817,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,2,0.4842,0.958,0.0175997,0.996734,0.0232748,0.0212313,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,3,-0.345857,0.968,0.0154422,1.03376,0.0217827,0.0195343,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,4,0.345857,0.966,0.0159011,0.988105,0.025115,0.0217459,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,5,0.207514,0.982,0.0116651,1.04854,0.0244171,0.0216689,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,6,-0.0691714,0.968,0.0154422,1.00946,0.0250054,0.0227094,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,7,0,0.97,0.0149673,0.994499,0.0256673,0.023141,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,beta,8,0,0.992,0.00781625,1.07536,0.0238275,0.020604,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,gamma,all,,0.945333,0.0121683,0.982017,0.0229553,0.0229386,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,gamma,1,1,0.944,0.0201733,0.964524,0.0233593,0.0234453,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,gamma,2,-0.5,0.942,0.0205087,0.979121,0.0230139,0.0228867,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,gamma,3,0.5,0.95,0.0191225,1.00241,0.0224844,0.0224732,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,continuous,g,all,,,,,0.0879339,,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,all,,0.97,0.00574513,1.0349,0.0287909,0.0266607,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,1,0.691714,0.972,0.0144747,1.06889,0.0224144,0.0210976,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,2,0.4842,0.972,0.0144747,1.02607,0.0280021,0.0261632,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,3,-0.345857,0.95,0.0191225,0.995182,0.0276733,0.0262447,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,4,0.345857,0.974,0.0139625,1.01503,0.0303358,0.0275151,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,5,0.207514,0.97,0.0149673,1.08588,0.0290203,0.0279172,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,6,-0.0691714,0.972,0.0144747,1.03203,0.0303996,0.02811,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,7,0,0.974,0.0139625,0.994116,0.031767,0.0284255,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,beta,8,0,0.976,0.0134285,1.06199,0.0297202,0.0270796,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,gamma,all,,0.964,0.00962638,1.01656,0.0324084,0.0296771,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,gamma,1,1,0.98,0.0122836,1.05455,0.0365798,0.031869,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,gamma,2,-0.5,0.956,0.0179951,1.01393,0.0297721,0.0280195,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,gamma,3,0.5,0.956,0.0179951,0.981197,0.0304378,0.0290081,500
+"the same AdamW fit, then the exact γ fit",2000,nlrelu,cox,g,all,,,,,0.281767,,500
 "the same AdamW fit, then the exact γ fit",2000,sigmoid,binary,beta,all,,0.96625,0.00564693,1.00769,0.039901,0.0363784,500
 "the same AdamW fit, then the exact γ fit",2000,sigmoid,binary,beta,1,0.691714,0.964,0.0163451,1.01178,0.0321464,0.0291942,500
 "the same AdamW fit, then the exact γ fit",2000,sigmoid,binary,beta,2,0.4842,0.974,0.0139625,1.0026,0.0388848,0.0359276,500
@@ -419,48 +419,48 @@ SplinePLSI,2000,linear,cox,gamma,1,1,0.938,0.021159,1.04995,0.0328215,0.0345029,
 SplinePLSI,2000,linear,cox,gamma,2,-0.5,0.942,0.0205087,1.01054,0.0291191,0.0298186,500
 SplinePLSI,2000,linear,cox,gamma,3,0.5,0.942,0.0205087,0.988868,0.0295994,0.0302512,500
 SplinePLSI,2000,linear,cox,g,all,,,,,0.0869493,,500
-SplinePLSI,2000,sfun,binary,beta,all,,0.94875,0.00732363,1.00781,0.0283951,0.0284099,500
-SplinePLSI,2000,sfun,binary,beta,1,0.691714,0.954,0.0183802,1.01566,0.0226371,0.0227168,500
-SplinePLSI,2000,sfun,binary,beta,2,0.4842,0.952,0.0187559,0.995703,0.0279024,0.0280799,500
-SplinePLSI,2000,sfun,binary,beta,3,-0.345857,0.942,0.0205087,1.00257,0.0263268,0.0263465,500
-SplinePLSI,2000,sfun,binary,beta,4,0.345857,0.958,0.0175997,1.04566,0.0281391,0.0281466,500
-SplinePLSI,2000,sfun,binary,beta,5,0.207514,0.962,0.0167756,1.06944,0.0283136,0.0282729,500
-SplinePLSI,2000,sfun,binary,beta,6,-0.0691714,0.944,0.0201733,1.00611,0.0297627,0.0297376,500
-SplinePLSI,2000,sfun,binary,beta,7,0,0.932,0.0220882,0.942042,0.0322676,0.0323088,500
-SplinePLSI,2000,sfun,binary,beta,8,0,0.946,0.0198308,0.985319,0.0307522,0.0306354,500
-SplinePLSI,2000,sfun,binary,gamma,all,,0.925333,0.013524,0.980113,0.0766448,0.0800626,500
-SplinePLSI,2000,sfun,binary,gamma,1,1,0.918,0.0240728,0.980999,0.0818744,0.0867871,500
-SplinePLSI,2000,sfun,binary,gamma,2,-0.5,0.928,0.0226797,0.967401,0.0750641,0.0777103,500
-SplinePLSI,2000,sfun,binary,gamma,3,0.5,0.93,0.0223866,0.99194,0.0726996,0.0752274,500
-SplinePLSI,2000,sfun,binary,g,all,,,,,0.227871,,500
-SplinePLSI,2000,sfun,continuous,beta,all,,0.953,0.00706212,1.0141,0.0105758,0.0105616,500
-SplinePLSI,2000,sfun,continuous,beta,1,0.691714,0.966,0.0159011,1.05199,0.00818388,0.00817387,500
-SplinePLSI,2000,sfun,continuous,beta,2,0.4842,0.95,0.0191225,0.993122,0.0104219,0.010404,500
-SplinePLSI,2000,sfun,continuous,beta,3,-0.345857,0.944,0.0201733,1.04371,0.00945831,0.00945279,500
-SplinePLSI,2000,sfun,continuous,beta,4,0.345857,0.948,0.0194807,1.00933,0.0109438,0.0109161,500
-SplinePLSI,2000,sfun,continuous,beta,5,0.207514,0.946,0.0198308,1.02098,0.0111191,0.0111149,500
-SplinePLSI,2000,sfun,continuous,beta,6,-0.0691714,0.956,0.0179951,0.976086,0.011486,0.0114528,500
-SplinePLSI,2000,sfun,continuous,beta,7,0,0.95,0.0191225,0.982555,0.0115876,0.0116155,500
-SplinePLSI,2000,sfun,continuous,beta,8,0,0.964,0.0163451,1.03502,0.01096,0.0109173,500
-SplinePLSI,2000,sfun,continuous,gamma,all,,0.941333,0.0123053,0.977422,0.0229572,0.0229881,500
-SplinePLSI,2000,sfun,continuous,gamma,1,1,0.936,0.0214746,0.956394,0.023463,0.0235263,500
-SplinePLSI,2000,sfun,continuous,gamma,2,-0.5,0.944,0.0201733,0.980498,0.0228673,0.0228862,500
-SplinePLSI,2000,sfun,continuous,gamma,3,0.5,0.944,0.0201733,0.995373,0.0225315,0.0225409,500
-SplinePLSI,2000,sfun,continuous,g,all,,,,,0.0532191,,500
-SplinePLSI,2000,sfun,cox,beta,all,,0.94325,0.0078161,0.98477,0.0133776,0.0133846,500
-SplinePLSI,2000,sfun,cox,beta,1,0.691714,0.946,0.0198308,1.00361,0.0105692,0.0105897,500
-SplinePLSI,2000,sfun,cox,beta,2,0.4842,0.938,0.021159,0.97223,0.0130753,0.0130863,500
-SplinePLSI,2000,sfun,cox,beta,3,-0.345857,0.944,0.0201733,0.984407,0.0123282,0.0123316,500
-SplinePLSI,2000,sfun,cox,beta,4,0.345857,0.94,0.0208371,0.95931,0.0141793,0.0142066,500
-SplinePLSI,2000,sfun,cox,beta,5,0.207514,0.936,0.0214746,0.974957,0.0143275,0.0143488,500
-SplinePLSI,2000,sfun,cox,beta,6,-0.0691714,0.944,0.0201733,1.0024,0.01381,0.0137872,500
-SplinePLSI,2000,sfun,cox,beta,7,0,0.946,0.0198308,0.971323,0.0144293,0.0143831,500
-SplinePLSI,2000,sfun,cox,beta,8,0,0.952,0.0187559,1.00993,0.013848,0.0138936,500
-SplinePLSI,2000,sfun,cox,gamma,all,,0.945333,0.0120269,1.02414,0.0316587,0.0327347,500
-SplinePLSI,2000,sfun,cox,gamma,1,1,0.94,0.0208371,1.05297,0.0339427,0.035699,500
-SplinePLSI,2000,sfun,cox,gamma,2,-0.5,0.95,0.0191225,1.02536,0.030071,0.0308073,500
-SplinePLSI,2000,sfun,cox,gamma,3,0.5,0.946,0.0198308,0.994085,0.0308292,0.0314829,500
-SplinePLSI,2000,sfun,cox,g,all,,,,,0.113844,,500
+SplinePLSI,2000,nlrelu,binary,beta,all,,0.97675,0.00499478,1.34192,0.0574087,0.0572682,500
+SplinePLSI,2000,nlrelu,binary,beta,1,0.691714,0.97,0.0149673,1.39788,0.0475784,0.0505955,500
+SplinePLSI,2000,nlrelu,binary,beta,2,0.4842,0.982,0.0116651,1.51735,0.0549633,0.05638,500
+SplinePLSI,2000,nlrelu,binary,beta,3,-0.345857,0.976,0.0134285,1.36686,0.053821,0.0555446,500
+SplinePLSI,2000,nlrelu,binary,beta,4,0.345857,0.972,0.0144747,1.37385,0.0582917,0.0586518,500
+SplinePLSI,2000,nlrelu,binary,beta,5,0.207514,0.988,0.0095536,1.36592,0.0580979,0.056362,500
+SplinePLSI,2000,nlrelu,binary,beta,6,-0.0691714,0.976,0.0134285,1.17509,0.063936,0.0619433,500
+SplinePLSI,2000,nlrelu,binary,beta,7,0,0.972,0.0144747,1.23441,0.0621604,0.0610243,500
+SplinePLSI,2000,nlrelu,binary,beta,8,0,0.978,0.01287,1.30401,0.0588192,0.0568833,500
+SplinePLSI,2000,nlrelu,binary,gamma,all,,0.958,0.0103866,1.05371,0.059113,0.0611946,500
+SplinePLSI,2000,nlrelu,binary,gamma,1,1,0.944,0.0201733,1.05853,0.0642773,0.0673585,500
+SplinePLSI,2000,nlrelu,binary,gamma,2,-0.5,0.956,0.0179951,1.0143,0.058806,0.0602121,500
+SplinePLSI,2000,nlrelu,binary,gamma,3,0.5,0.974,0.0139625,1.08829,0.0537895,0.0554225,500
+SplinePLSI,2000,nlrelu,binary,g,all,,,,,0.169664,,500
+SplinePLSI,2000,nlrelu,continuous,beta,all,,0.95875,0.00687637,1.02205,0.0225406,0.0219659,500
+SplinePLSI,2000,nlrelu,continuous,beta,1,0.691714,0.968,0.0154422,1.02659,0.0180162,0.0172247,500
+SplinePLSI,2000,nlrelu,continuous,beta,2,0.4842,0.954,0.0183802,0.976698,0.0228032,0.0223224,500
+SplinePLSI,2000,nlrelu,continuous,beta,3,-0.345857,0.96,0.0171935,1.06543,0.0200014,0.0198109,500
+SplinePLSI,2000,nlrelu,continuous,beta,4,0.345857,0.95,0.0191225,0.986699,0.0240237,0.0227526,500
+SplinePLSI,2000,nlrelu,continuous,beta,5,0.207514,0.964,0.0163451,1.06088,0.0230165,0.0226097,500
+SplinePLSI,2000,nlrelu,continuous,beta,6,-0.0691714,0.946,0.0198308,0.967148,0.0248719,0.0242529,500
+SplinePLSI,2000,nlrelu,continuous,beta,7,0,0.948,0.0194807,0.98951,0.0246207,0.0241199,500
+SplinePLSI,2000,nlrelu,continuous,beta,8,0,0.98,0.0122836,1.10346,0.0220974,0.0217649,500
+SplinePLSI,2000,nlrelu,continuous,gamma,all,,0.944667,0.0120745,0.9792,0.0230036,0.0230316,500
+SplinePLSI,2000,nlrelu,continuous,gamma,1,1,0.944,0.0201733,0.957767,0.0235153,0.0235592,500
+SplinePLSI,2000,nlrelu,continuous,gamma,2,-0.5,0.946,0.0198308,0.980269,0.0229616,0.0229757,500
+SplinePLSI,2000,nlrelu,continuous,gamma,3,0.5,0.944,0.0201733,0.999563,0.0225232,0.0225486,500
+SplinePLSI,2000,nlrelu,continuous,g,all,,,,,0.0903008,,500
+SplinePLSI,2000,nlrelu,cox,beta,all,,0.95425,0.00686713,1.04021,0.0268824,0.0265524,500
+SplinePLSI,2000,nlrelu,cox,beta,1,0.691714,0.958,0.0175997,1.09258,0.0207985,0.0208007,500
+SplinePLSI,2000,nlrelu,cox,beta,2,0.4842,0.952,0.0187559,1.03132,0.0266758,0.0263363,500
+SplinePLSI,2000,nlrelu,cox,beta,3,-0.345857,0.94,0.0208371,1.00107,0.0256837,0.0255419,500
+SplinePLSI,2000,nlrelu,cox,beta,4,0.345857,0.964,0.0163451,1.05595,0.0275725,0.0274646,500
+SplinePLSI,2000,nlrelu,cox,beta,5,0.207514,0.95,0.0191225,1.03793,0.0284275,0.0280405,500
+SplinePLSI,2000,nlrelu,cox,beta,6,-0.0691714,0.962,0.0167756,1.02148,0.0284726,0.0280571,500
+SplinePLSI,2000,nlrelu,cox,beta,7,0,0.948,0.0194807,1.00611,0.0292278,0.0284199,500
+SplinePLSI,2000,nlrelu,cox,beta,8,0,0.96,0.0171935,1.07524,0.0272796,0.0269469,500
+SplinePLSI,2000,nlrelu,cox,gamma,all,,0.943333,0.0120268,1.0215,0.0299632,0.0305755,500
+SplinePLSI,2000,nlrelu,cox,gamma,1,1,0.944,0.0201733,1.05557,0.0320664,0.0329953,500
+SplinePLSI,2000,nlrelu,cox,gamma,2,-0.5,0.944,0.0201733,1.02442,0.0283339,0.0287268,500
+SplinePLSI,2000,nlrelu,cox,gamma,3,0.5,0.942,0.0205087,0.984516,0.0293653,0.0298442,500
+SplinePLSI,2000,nlrelu,cox,g,all,,,,,0.259594,,500
 SplinePLSI,2000,sigmoid,binary,beta,all,,0.9475,0.00707043,1.01696,0.0369331,0.0368262,500
 SplinePLSI,2000,sigmoid,binary,beta,1,0.691714,0.946,0.0198308,1.03817,0.0291154,0.0293122,500
 SplinePLSI,2000,sigmoid,binary,beta,2,0.4842,0.958,0.0175997,1.01777,0.0357903,0.0358842,500
