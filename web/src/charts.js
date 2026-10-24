@@ -184,3 +184,25 @@ export function forestChart(host, {rows, series, label = 'Chemical exposure weig
   });
   el('text', {x: (m.left+W-m.right)/2, y: H-2, class: 'axis-title', 'text-anchor': 'middle'}, svg).textContent = symbol;
 }
+
+// A small histogram of a column's values for the column setup: `bins` equal
+// bins between the smallest and largest finite value, bar heights relative to
+// the fullest bin. Values that are not finite are left out. The label names the
+// range for screen readers; the chart is otherwise decorative.
+export function histogram(values, {width = 96, height = 22, bins = 20, label = ''} = {}) {
+  let lo = Infinity, hi = -Infinity, k = 0;
+  for (const v of values) if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); ++k; }
+  const svg = el('svg', {viewBox: `0 0 ${width} ${height}`, width, height, class: 'hist-mini', role: 'img',
+                         'aria-label': k ? `${label}histogram from ${fmt(lo)} to ${fmt(hi)}` : `${label}no finite values`});
+  if (!k) return svg;
+  const counts = new Uint32Array(lo === hi ? 1 : bins), n = counts.length;
+  for (const v of values) if (Number.isFinite(v)) ++counts[lo === hi ? 0 : Math.min(n-1, Math.floor((v-lo)/(hi-lo)*n))];
+  const most = Math.max(...counts), w = width/n;
+  counts.forEach((c, i) => {
+    if (!c) return;
+    const h = Math.max(1, c/most*(height-1));
+    el('rect', {x: i*w+0.5, y: height-h, width: Math.max(1, w-1), height: h}, svg);
+  });
+  el('line', {x1: 0, x2: width, y1: height-0.5, y2: height-0.5, class: 'hist-base'}, svg);
+  return svg;
+}

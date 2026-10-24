@@ -96,14 +96,15 @@ which fits, bootstraps, saves and reloads a model through the C API in
 ### Web demo
 
 https://hyungrok-do.github.io/NeuralPLSI/ fits NeuralPLSI and SplinePLSI with
-bootstrap inference in the browser, on your own CSV file, the NHANES example or
-simulated data; the data stay on the visitor's machine. All three go through
-the same column setup: the user gives each column a role (exposure X,
-confounder Z, outcome, event for Cox outcomes, or ignore), and tabs for X, Z and
-the outcome set the transforms. Exposures can be logged and standardized, a
-numeric confounder can be treated as categorical, and a continuous outcome can
-be logged and standardized. The NHANES example starts set up as
-`reproduce/nhanes.py`. Fit with bootstrap is the main run; a single fit is the
+bootstrap inference in the browser, on your own CSV file (or the NHANES example,
+one button away) or simulated data; the data stay on the visitor's machine.
+Both go through the same column setup: the user gives each column a role
+(exposure X, confounder Z, outcome, event for Cox outcomes, or ignore), with a
+small histogram of each column, and tabs for X, Z and the outcome set the
+transforms. Exposures and numeric confounders can each be logged and
+standardized, a numeric confounder can be treated as categorical, and a
+continuous outcome can be logged and standardized. The NHANES example opens set
+up as `reproduce/nhanes.py`. Fit with bootstrap is the main run; a single fit is the
 quick alternative.
 [`web/README.md`](web/README.md) has the details. The page is live once GitHub
 Pages is enabled for the repository (Settings > Pages > Source: GitHub

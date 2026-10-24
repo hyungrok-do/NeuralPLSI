@@ -5,15 +5,17 @@ inference in the browser. The C++ engine in `core/` is compiled to WebAssembly
 and runs in Web Workers on the visitor's machine; data never leave the browser.
 The page is hosted on GitHub Pages and works offline once loaded.
 
-Data sources, in the order the page offers them: your own data (a CSV file,
-the default), the NHANES example, and the simulation design of the paper
-(ported to JavaScript with a seeded generator; it does not reproduce NumPy's
-draws). All three go through the same column setup below. The NHANES example
-starts set up as `reproduce/nhanes.py` (`NHANES_SETUP` in `src/data.js`), and
-the simulated data (columns x1-x8, z1-z3 and y, or time and event for Cox) as
-generated; the results show the true β, γ and g while the simulated setup is
-the design. Each source keeps its own setup when the visitor switches between
-them; a new simulated draw keeps the setup, a new simulated outcome restarts it.
+Data sources: your own data (a CSV file, the default) and the simulation
+design of the paper (ported to JavaScript with a seeded generator; it does not
+reproduce NumPy's draws). Under your own data, a **Use the NHANES example**
+button opens the NHANES file as your data, set up as `reproduce/nhanes.py`
+(`NHANES_SETUP` in `src/data.js`) with that script's activation and intercept;
+like a file, it replaces the data open. Both sources go through the same column
+setup below. The simulated data (columns x1-x8, z1-z3 and y, or time and event
+for Cox) start set up as generated; the results show the true β, γ and g while
+the simulated setup is the design. Each source keeps its own setup when the
+visitor switches between them; a new simulated draw keeps the setup, a new
+simulated outcome restarts it.
 
 The steps are tabs along the top, each a full-width page: Data (the source,
 then the column setup), Model, Run and Results; Next buttons lead from one to
@@ -39,9 +41,14 @@ was standardized with, and for indicators the level coded 1 and the reference.
 A CSV file is read on the device. The column setup has an outcome type and
 four tabs: Columns (the role of each column), X (the chemical exposures in
 model order, a Log-transform checkbox for all of them, mixed when only some are
-logged, a log box for each and Standardize), Z (the confounders, with a
-categorical box for numeric ones) and Outcome (the log and standardize boxes of
+logged, a log box for each and Standardize), Z (the confounders: each numeric
+one has its own log, standardize and categorical boxes, with Log-transform and
+Standardize boxes for all of them, set apart from the exposures'; a categorical
+confounder has no log or z-score) and Outcome (the log and standardize boxes of
 a continuous outcome). The arrow keys, Home and End move between the tabs.
+Every numeric column has a small histogram of its values in the Columns tab;
+in the X and Z tabs the histogram shows the values as the model takes them, on
+the log scale when the column is logged.
 The Columns tab lists every column with its type
 (numeric, 0/1, text or mostly missing), its missing and non-finite values (with
 the strings counted as missing) and a few examples, and the user gives each

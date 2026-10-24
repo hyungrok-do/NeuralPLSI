@@ -325,3 +325,31 @@ test('a binary outcome with no cases or no non-cases cannot be fitted', () => {
   assert.equal(planCsv(tiny, tc, {family: 'binary', roles: new Map([['y', 'outcome'], ['x', 'exposure']])}).reason,
                'Only 1 complete row remains');
 });
+
+test('numeric confounders have their own log and z-score, and categorical ones have neither', () => {
+  const t = parseCsv(['y,x,age,bmi,race', ...Array.from({length: 40}, (_, i) =>
+    [(Math.sin(i)+i/20).toFixed(3), (1+i%7).toString(), 20+i, i === 3 ? '0' : (18+(i*7)%15).toString(), 1+i%3].join(','))].join('\n'));
+  const cc = describeColumns(t), roles = [['y', 'outcome'], ['x', 'exposure'], ['age', 'confounder'], ['bmi', 'confounder'],
+    ['race', 'confounder']].reduce((r, [name, role]) => assignRole(r, cc, name, role, 'continuous'), initialRoles(cc));
+  const p = planCsv(t, cc, {family: 'continuous', roles, zLog: ['bmi', 'race'], zStandardize: ['age', 'bmi', 'race'],
+                            categorical: ['race']});
+  assert.equal(p.ready, true, p.reason);
+  // race is categorical, so its log and z-score do not apply; bmi's log drops its zero.
+  assert.deepEqual([p.zLogged, p.zStandardized, p.n, p.dropped.nonpositive], [['bmi'], ['age', 'bmi'], 39, 1]);
+  assert.deepEqual(p.data.names.z, ['age', 'log bmi', 'race=2', 'race=3']);
+  const keep = [...Array(40).keys()].filter(i => i !== 3), col = j => keep.map((_, i) => p.data.z[i*p.data.q+j]);
+  const mean = v => v.reduce((a, b) => a+b, 0)/v.length, sd = v => Math.sqrt(mean(v.map(e => (e-mean(v))**2)));
+  for (const j of [0, 1]) {
+    assert.ok(Math.abs(mean(col(j))) < 1e-12 && Math.abs(sd(col(j))-1) < 1e-12, `z column ${j} is a z-score`);
+  }
+  const bmi = p.data.transforms.z[1], logs = keep.map(i => Math.log(cc[3].values[i]));
+  assert.deepEqual([bmi.column, bmi.log], ['bmi', true]);
+  assert.ok(Math.abs(bmi.mean-mean(logs)) < 1e-12 && Math.abs(bmi.sd-sd(logs)) < 1e-12);
+  assert.deepEqual(p.data.transforms.z[0], {name: 'age', column: 'age', log: false, mean: p.data.transforms.z[0].mean,
+                                            sd: p.data.transforms.z[0].sd});
+  assert.equal(Object.fromEntries(summaryRows(planFacts(p)))['Confounders (Z)'],
+               '4 (race: 2 indicators vs 1; logged: bmi; standardized: age, bmi)');
+  // Without the options, numeric confounders enter as they are.
+  const plain = planCsv(t, cc, {family: 'continuous', roles});
+  assert.deepEqual([plain.n, plain.data.transforms.z[1]], [40, {name: 'bmi', column: 'bmi'}]);
+});

@@ -7,7 +7,7 @@
 // disabled, column names that look like HTML or carry bidi controls, long names
 // on a phone, a file chosen while another is read, the NHANES file as a user file
 // giving the NHANES example exactly and its role table on a phone in Cox mode),
-// the NHANES example (a single fit, then a bootstrap of it) and a failed download of it, Cancel, model and preprocessing
+// the NHANES example button under Your own data (a single fit, then a bootstrap of it) and a failed download of it, Cancel, model and preprocessing
 // downloads and offline use after the first load. Screenshots in light and dark
 // mode at desktop and phone widths go to NPLSI_SCREENSHOTS when it names a directory.
 // Skipped without Chrome (set CHROME to its path) or with NPLSI_BROWSER=0.
@@ -105,6 +105,9 @@ const roleOf = column => `document.querySelector(${JSON.stringify(
 // An X's log box ('log', in the X tab) or a Z's categorical box ('cat', in the Z tab).
 const option = (column, kind) => `document.querySelector(${JSON.stringify(
   `#${kind === 'log' ? 'x' : 'z'}-list li[data-column=${JSON.stringify(column)}] input[name^=${kind}-]`)})`;
+// The small histogram of each column of the role table.
+const HISTOGRAMS = `[...document.querySelectorAll('#column-table tbody tr')].map(row =>
+  [row.dataset.column, row.querySelectorAll('.col-detail svg.hist-mini rect').length > 0])`;
 const tab = name => `document.getElementById('tab-${name}').click()`;
 // The steps of the analysis, each a page under its tab along the top.
 const step = name => `document.getElementById('step-${name}').click()`;
@@ -309,7 +312,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     await t.test('the page opens on your own data; Cancel stops a fit while the WebAssembly module is still loading', async () => {
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.source.value, document.getElementById('setup').hidden,
         [...document.querySelectorAll('.segmented span')].map(e => e.textContent)]`),
-        ['csv', true, ['Your own data', 'NHANES example', 'Simulated']]);
+        ['csv', true, ['Your own data', 'Simulated']]);
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Open a CSV file.']);
       // The steps are tabs along the top; Data shows first.
       assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.steps [role=tab]')].map(e => e.textContent)`),
@@ -585,6 +588,9 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         metal_pb: 'numeric · 9 missing (NA)', metal_cd: 'numeric · none missing', metal_hg: 'numeric · 1 non-finite',
         age: 'numeric · 4 missing (blank)', sex: '0/1 · none missing', status: '0/1 · none missing', case: '0/1 · none missing',
         notes: 'mostly missing (text) · 180 of 200 missing (blank)'});
+      // Numeric columns show a small histogram; text columns do not.
+      assert.deepEqual(Object.fromEntries(await page.evaluate(HISTOGRAMS)), {id: true, race: false, wt: true, metal_pb: true,
+        metal_cd: true, metal_hg: true, age: true, sex: true, status: true, case: true, notes: false});
       assert.match(await page.evaluate(`document.querySelector('tr[data-column=race] .col-text').textContent`),
                    /^Text: Z only, as 3 indicators vs “Black”$/);
       assert.equal(await page.evaluate(`document.querySelector('tr[data-column=wt] .col-examples').textContent`),
@@ -871,13 +877,24 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(tab('z'));
       assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#z-list li')].map(li =>
         [li.dataset.column, li.querySelector('.col-meta').textContent, li.querySelector('.suggest')?.textContent ?? null,
-         li.querySelector('input')?.checked ?? null])`),
-        [['age', 'numeric, enters as it is', null, null], ['sex', 'numeric, enters as it is', '(suggested)', false],
-         ['race', 'numeric, enters as it is', '(suggested)', false]]);
+         [...li.querySelectorAll('input')].map(e => e.name.split('-')[0]+(e.checked ? '+' : '')).join()])`),
+        [['age', 'numeric, enters as it is', null, 'zlog,zstd'], ['sex', 'numeric, enters as it is', '(suggested)', 'zlog,zstd,cat'],
+         ['race', 'numeric, enters as it is', '(suggested)', 'zlog,zstd,cat']]);
+      assert.equal((await page.evaluate(SUMMARY))['Confounders (Z)'], '3');
+      // Z has its own log and standardize, for each column and for all; the X boxes do not touch them.
+      await page.evaluate(click('#zstd-all'));
+      assert.equal((await page.evaluate(SUMMARY))['Confounders (Z)'], '3 (standardized: age, sex, race)');
+      await page.evaluate(`${option('age', 'zstd')}.click()`);
+      assert.deepEqual(await page.evaluate(`(e => [e.checked, e.indeterminate])(document.getElementById('zstd-all'))`), [false, true]);
+      await page.evaluate(click('#zstd-all'));
+      await page.evaluate(click('#zstd-all'));
       assert.equal((await page.evaluate(SUMMARY))['Confounders (Z)'], '3');
       for (const name of ['sex', 'race']) await page.evaluate(`${option(name, 'cat')}.click()`);
       assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#z-list .col-meta')].map(e => e.textContent)`),
                        ['numeric, enters as it is', '1 indicator vs 1', '4 indicators vs 1']);
+      // Categorical confounders have no log, z-score or histogram.
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#z-list li')].map(li =>
+        [li.querySelectorAll('input[name^=zlog]:disabled').length, li.querySelectorAll('svg').length])`), [[0, 1], [1, 0], [1, 0]]);
       // The X tab: Log-transform logs every X, then retinol is left unlogged and the box shows a mix.
       await page.evaluate(tab('x'));
       await page.evaluate(click('#log-all'));
@@ -958,25 +975,29 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       console.log(`# NHANES as a CSV: beta = ${fit.beta.map(v => v.toFixed(3)).join(', ')}`);
     });
 
-    await t.test('a failed NHANES download is reported until Retry loads it', async () => {
+    await t.test('a failed download of the NHANES example is reported until Retry loads it', async () => {
+      // The example is a button under Your own data; the file opened by hand stays open when it fails.
       failing.add('/nhanes.csv');
-      await page.evaluate(choose('nhanes'));
+      await page.evaluate(click('#nhanes-load'));
       await page.until('nplsiDemo.state.nhanesError !== null');
-      assert.deepEqual(await page.evaluate(FIT_STATE), [true,
-        'Cannot fit yet. Could not load the NHANES file (HTTP 503). Press Retry under Data to load it again.']);
       assert.deepEqual(await page.evaluate(`[document.getElementById('nhanes-error').hidden,
-        document.getElementById('nhanes-error-text').textContent]`), [false, 'Could not load the NHANES file (HTTP 503).']);
+        document.getElementById('nhanes-error-text').textContent, nplsiDemo.setup().fileName, nplsiDemo.setup().example,
+        document.getElementById('nhanes-load').disabled]`),
+        [false, 'Could not load the NHANES example (HTTP 503).', '12940_2020_644_MOESM2_ESM.csv', false, false]);
+      assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
       failing.delete('/nhanes.csv');
       await page.evaluate(click('#nhanes-retry'));
-      await page.until('nplsiDemo.state.setups.nhanes.table && !nplsiDemo.state.nhanesLoading');
-      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.nhanesError, document.getElementById('nhanes-error').hidden]`),
-                       [null, true]);
+      await page.until('nplsiDemo.setup().example && !nplsiDemo.state.nhanesLoading');
+      assert.deepEqual(await page.evaluate(`[nplsiDemo.state.nhanesError, document.getElementById('nhanes-error').hidden,
+        document.forms.controls.elements.file.value, document.forms.controls.elements.source.value]`), [null, true, '', 'csv']);
       assert.deepEqual(await page.evaluate(FIT_STATE), [false, '']);
     });
 
     await t.test('the NHANES example comes set up as reproduce/nhanes.py, fits, and its bootstrap can be cancelled', async () => {
-      await page.evaluate(choose('nhanes'));
-      await page.until('nplsiDemo.state.setups.nhanes.table');
+      // A setup changed by hand goes back to the script's when the example is loaded again.
+      await page.evaluate(assign('a5.Retinol', 'ignore'));
+      await page.evaluate(click('#nhanes-load'));
+      await page.until('nplsiDemo.setup().example && !nplsiDemo.state.nhanesLoading');
       // The same column setup the file got by hand above.
       assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
       assert.deepEqual(await page.evaluate(X_ORDER), Object.fromEntries(NHANES_EXPOSURES.map((name, k) => [name, `X${k+1}`])));
@@ -985,11 +1006,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(`document.forms.controls.elements.spline.checked = false`);
       await page.evaluate(click('#fit'));
       await page.until('nplsiDemo.state.fit?.data.source === "nhanes" && !nplsiDemo.state.busy');
-      // Your own data keeps its setup, the NHANES file as set up by hand.
-      await page.evaluate(choose('csv'));
-      assert.deepEqual(await page.evaluate(SUMMARY), NHANES_SUMMARY);
-      await page.evaluate(choose('nhanes'));
-      assert.equal(await page.evaluate('document.querySelector(".stale").hidden'), true);
+      assert.equal(await page.evaluate(RESULTS_LABEL), 'NHANES example · continuous');
       // The CSV set up as reproduce/nhanes.py gave the same data and, with the same seed, the same fit.
       const same = await page.evaluate(`(() => {
         const a = nplsiDemo.csvFit, b = nplsiDemo.state.fit;
@@ -1084,8 +1101,8 @@ print(json.dumps({'beta': model.beta.tolist(), 'params': model.get_params()}))`,
       await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
       await page.send('Page.reload');
       await page.until('document.readyState === "complete" && globalThis.nplsiDemo');
-      await page.evaluate(choose('nhanes'));
-      await page.until('nplsiDemo.state.setups.nhanes.table');
+      await page.evaluate(click('#nhanes-load'));
+      await page.until('nplsiDemo.setup().example && !nplsiDemo.state.nhanesLoading');
       await page.evaluate(choose('simulated'));
       await page.evaluate(setValue('n', '100'));
       await page.evaluate(click('#fit'));

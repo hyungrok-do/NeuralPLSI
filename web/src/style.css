@@ -223,7 +223,11 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
   .col-detail { position: relative; margin-right: calc(-1 * var(--roles)); }
 }
 
-.segmented { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--raised); border-radius: 9px; padding: 3px; }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--raised); border-radius: 9px; padding: 3px; }
+.example { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.example-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
+.example-title { font-size: 0.86rem; font-weight: 600; color: var(--ink); }
+.example .help { margin-bottom: 0; }
 .segmented, .tabs { margin-bottom: 0.25rem; }
 .segmented label { display: block; }
 .segmented input { position: absolute; opacity: 0; pointer-events: none; }
@@ -255,13 +259,25 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 .terms { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
 .terms:empty { display: none; }
 .term {
-  display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; align-items: center; gap: 0 8px;
+  display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) 120px auto; align-items: center; gap: 0 10px;
   padding: 6px 10px; font-size: 0.84rem; border-bottom: 1px solid var(--grid);
 }
 .term:last-child { border-bottom: 0; }
 .term-order { font-size: 0.75rem; font-weight: 600; color: var(--series-1-ink); }
 #z-list .term-order { color: var(--ink-2); }
 .term-name { min-width: 0; }
+.term-options { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 12px; }
+/* Small histograms of the columns' values. */
+.hist-mini { display: block; overflow: visible; }
+.hist-mini rect { fill: color-mix(in srgb, var(--series-1) 55%, var(--axis)); }
+.hist-mini .hist-base { stroke: var(--axis); stroke-width: 1; }
+.col-detail .hist-mini { margin: 3px 0 1px; }
+@media (max-width: 600px) {
+  .term { grid-template-columns: 2.25rem minmax(0, 1fr) auto; }
+  .term .hist-mini { grid-column: 2; grid-row: 2; margin-top: 2px; }
+  .term > span:nth-child(3):empty { display: none; }
+  .term-options { grid-column: 3; grid-row: 1 / span 2; flex-direction: column; align-items: flex-start; }
+}
 .opt { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 5px; min-height: 1.75rem; color: var(--ink); cursor: pointer; }
 .opt input { margin: 0; width: 0.95rem; height: 0.95rem; accent-color: var(--accent); cursor: inherit; }
 .opt .suggest { color: var(--muted); white-space: nowrap; }

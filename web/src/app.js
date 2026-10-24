@@ -5,7 +5,7 @@ import {ROLES, blockedRole, blockedCategorical, initialRoles, presetRoles, roleO
         suggestFamily, changeFamily, planCsv, planFacts, summaryRows} from './roles.js';
 import {NEURAL_DEFAULTS, networkProblem} from './engine.js';
 import {Pool, Cancelled} from './pool.js';
-import {linkChart, forestChart} from './charts.js';
+import {linkChart, forestChart, histogram} from './charts.js';
 import {fmt, duration, toCsv, linspace, mergeRows, displayText} from './stats.js';
 
 const form = document.getElementById('controls');
@@ -15,25 +15,31 @@ const pool = new Pool();
 // The controls every source's column setup shares; each setup keeps its own values.
 const OPTIONS = ['outcomeType', 'standardize', 'logOutcome', 'standardizeOutcome'];
 // One column setup per data source, so switching sources keeps each one's
-// choices: the table and its columns, the roles, logged (exposures to log) and
-// categorical (numeric confounders to dummy-code), familyAuto (true until the
+// choices: the table and its columns, the roles, logged (exposures to log),
+// categorical (numeric confounders to dummy-code), zLogged and zStandardized
+// (numeric confounders to log and to z-score), familyAuto (true until the
 // visitor picks the outcome type, which until then follows the outcome column)
 // and the values of the shared controls (options). fileName names an opened CSV
-// file. A simulated setup also keeps the truth, the setup of the design itself,
-// the simulation's settings and why the simulation could not run (error).
-const blankSetup = () => ({table: null, columns: null, roles: null, logged: new Set(), categorical: new Set(), familyAuto: true,
-  fileName: '', options: {outcomeType: 'continuous', standardize: true, logOutcome: false, standardizeOutcome: false},
+// file, and example is true when that file is the NHANES example. A simulated
+// setup also keeps the truth, the setup of the design itself, the simulation's
+// settings and why the simulation could not run (error).
+const blankSetup = () => ({table: null, columns: null, roles: null, logged: new Set(), categorical: new Set(),
+  zLogged: new Set(), zStandardized: new Set(), familyAuto: true,
+  fileName: '', example: false,
+  options: {outcomeType: 'continuous', standardize: true, logOutcome: false, standardizeOutcome: false},
   truth: null, design: null, simulation: null, error: null});
-// nhanesError keeps why the NHANES file did not load. booting is true while a
+// nhanesError keeps why the NHANES example did not load. booting is true while a
 // bootstrap of the fit shown runs. tab is the column setup's open tab.
-const state = {setups: {csv: blankSetup(), nhanes: blankSetup(), simulated: blankSetup()}, nhanesError: null,
+const state = {setups: {csv: blankSetup(), simulated: blankSetup()}, nhanesError: null,
                nhanesLoading: null, fit: null, boot: null, busy: false, booting: false, family: null, tab: 'columns'};
+// The NHANES example's file, as it is named in the preprocessing file.
+const NHANES_FILE = '12940_2020_644_MOESM2_ESM.csv';
 // Seeds must leave room for the bootstrap fit seeds seed+1337+b below 2**64.
 const MAX_SEED = 2n**64n-1n-1337n-1000n;
 const MODELS = [['neural', 'NeuralPLSI', 'var(--series-1)'], ['spline', 'SplinePLSI', 'var(--series-2)']];
 // The intercept each source starts with: Python's default for the simulation,
-// reproduce/nhanes.py for NHANES, and one for other data, since g(0) = 0.
-const INTERCEPT = {simulated: NEURAL_DEFAULTS.intercept, nhanes: NHANES_SETTINGS.intercept, csv: true};
+// and one for your own data, since g(0) = 0.
+const INTERCEPT = {simulated: NEURAL_DEFAULTS.intercept, csv: true};
 
 // Elements are built from text nodes, never parsed as HTML. Text, titles and
 // labels lose their bidi controls (displayText), so a column name cannot reorder
@@ -94,6 +100,8 @@ function loadTable(s, table, preset = null) {
   s.roles = preset ? presetRoles(s.columns, preset) : initialRoles(s.columns);
   s.logged = new Set(preset?.log ?? []);
   s.categorical = new Set(preset?.categorical ?? []);
+  s.zLogged = new Set(preset?.zLog ?? []);
+  s.zStandardized = new Set(preset?.zStandardize ?? []);
   s.familyAuto = !preset;
   s.options.outcomeType = preset?.family ?? 'continuous';
   if (preset) Object.assign(s.options, {standardize: preset.standardize, logOutcome: preset.logOutcome,
@@ -102,7 +110,8 @@ function loadTable(s, table, preset = null) {
 
 function setupPlan(s = setup()) {
   return planCsv(s.table, s.columns, {family: s.options.outcomeType, roles: s.roles, log: [...s.logged],
-    standardize: s.options.standardize, categorical: [...s.categorical], logOutcome: s.options.logOutcome,
+    standardize: s.options.standardize, categorical: [...s.categorical], zLog: [...s.zLogged],
+    zStandardize: [...s.zStandardized], logOutcome: s.options.logOutcome,
     standardizeOutcome: s.options.standardizeOutcome});
 }
 
@@ -131,15 +140,16 @@ function matchesDesign(s, plan) {
   const d = s.design, same = (a, b) => a.length === b.length && a.every((v, k) => v === b[k]);
   return plan.family === d.family && plan.outcome === d.outcome && plan.event === d.event &&
     same(plan.exposures, d.exposures) && same(plan.confounders, d.confounders) && !plan.logged.length &&
-    !plan.standardize && !plan.logOutcome && !plan.standardizeOutcome && plan.terms.every(t => t.levels === undefined);
+    !plan.standardize && !plan.zLogged.length && !plan.zStandardized.length && !plan.logOutcome && !plan.standardizeOutcome &&
+    plan.terms.every(t => t.levels === undefined);
 }
 
 // Why the source has no table to set up, or null.
 function missingTable() {
   const s = setup();
-  if (source() === 'nhanes') {
-    if (state.nhanesError) return `${state.nhanesError}. Press Retry under Data to load it again`;
-    if (!s.table) return 'The NHANES file is still loading';
+  if (source() === 'csv') {
+    if (state.nhanesLoading) return 'The NHANES example is still loading';
+    if (state.nhanesError && !setup().table) return `${state.nhanesError}. Press Retry under Data to load it again`;
   }
   if (source() === 'simulated' && s.error) return s.error;
   return s.table ? null : 'Open a CSV file';
@@ -150,7 +160,7 @@ function readData() {
   if (missing) throw new Error(missing);
   const s = setup(), plan = setupPlan(s);
   if (!plan.ready) throw new Error(plan.reason);
-  const data = {...plan.data, source: source()};
+  const data = {...plan.data, source: s.example ? 'nhanes' : source()};
   if (source() === 'simulated') {
     data.simulation = s.simulation;
     if (matchesDesign(s, plan)) data.truth = s.truth;
@@ -252,39 +262,49 @@ function loadOptions() {
   }
 }
 
-async function onSource() {
+function onSource() {
   for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== source();
-  // Presets: Python's defaults for the simulation, reproduce/nhanes.py for NHANES,
-  // and an intercept for other data, since g is anchored at g(0) = 0.
+  // Presets: Python's defaults for the simulation, and an intercept for your
+  // own data, since g is anchored at g(0) = 0.
   if (source() === 'simulated') field('activation').value = NEURAL_DEFAULTS.activation;
-  else if (source() === 'nhanes') field('activation').value = NHANES_SETTINGS.activation;
   field('intercept').checked = INTERCEPT[source()];
   if (source() === 'simulated' && !setup().table) simulateTable();
   renderSetup();
   onControls();
-  if (source() === 'nhanes') await loadNhanes();
 }
 
-// The NHANES file loads when NHANES is first chosen, set up as reproduce/nhanes.py.
-// A failure is kept and shown with a Retry button until a retry starts.
+// The NHANES example opens as your own data, set up as reproduce/nhanes.py, with
+// that script's activation and intercept. Like a file, it replaces the data open,
+// and a file chosen while it loads wins. A failure is kept and shown with a Retry
+// button until the next attempt or file.
+let fileToken = 0;
 function loadNhanes() {
-  const s = state.setups.nhanes;
-  if (s.table || state.nhanesLoading) return state.nhanesLoading;
+  if (state.nhanesLoading) return state.nhanesLoading;
+  const token = ++fileToken, s = state.setups.csv;
   state.nhanesError = null;
   state.nhanesLoading = (async () => {
     try {
       const response = await fetch('nhanes.csv');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      loadTable(s, parseCsv(await response.text()), NHANES_SETUP);
+      const table = parseCsv(await response.text());
+      if (token !== fileToken) return;
+      loadTable(s, table, NHANES_SETUP);
+      Object.assign(s, {fileName: NHANES_FILE, example: true});
+      field('file').value = '';
+      field('activation').value = NHANES_SETTINGS.activation;
+      field('intercept').checked = NHANES_SETTINGS.intercept;
+      message(null);
     } catch (error) {
-      state.nhanesError = `Could not load the NHANES file (${error.message})`;
+      if (token === fileToken) state.nhanesError = `Could not load the NHANES example (${error.message})`;
     } finally {
       state.nhanesLoading = null;
+      $('nhanes-load').disabled = false;
     }
     showNhanesError();
-    if (source() === 'nhanes') renderSetup();
+    if (source() === 'csv') renderSetup();
     onControls();
   })();
+  $('nhanes-load').disabled = true;
   showNhanesError();
   onControls();
   return state.nhanesLoading;
@@ -393,6 +413,7 @@ function renderColumns() {
   const rows = setup().columns.map((c, j) => h('tr', {'data-column': c.name, 'data-index': j},
     h('th', {scope: 'row'}, h('span', {class: 'col-name', id: `col-${j}`}, breakable(c.name)),
       h('div', {class: 'col-detail'}, columnNotes(c),
+        c.numeric && c.present ? histogram(c.values, {label: `${c.name}: `}) : null,
         h('span', {class: 'col-order', title: 'Position in the index X′β; the first X has a positive weight'}))),
     ROLES.map(role => h('td', {class: `role role-${role}`},
       h('label', {}, h('input', {type: 'radio', name: `role-${j}`, value: role, 'aria-labelledby': `col-${j} head-${role}`}))))));
@@ -423,51 +444,74 @@ function syncRoles() {
 
 // Values of zero or below in a column, which a log drops.
 const nonpositive = c => c.values.reduce((k, v) => k+(v <= 0), 0);
+// A column's histogram as the model takes it: on the log scale when it is logged.
+const termHistogram = (c, log) => histogram(log ? c.values.map(v => v > 0 ? Math.log(v) : NaN) : c.values,
+                                            {width: 120, height: 26, label: `${log ? 'log ' : ''}${c.name}: `});
+const box = (name, checked, label, text, disabled = false) =>
+  h('label', {class: 'opt'}, h('input', {type: 'checkbox', name, checked, disabled, 'aria-label': label}), text);
+const lowNote = (c, log) => {
+  const low = nonpositive(c);
+  return low ? h('span', {class: log ? 'col-meta warn' : 'col-meta'}, `${plural(low, 'value')} ≤ 0, dropped when logged`) : null;
+};
 
-// The X tab lists the exposures in model order, each with its log box; the Z
-// tab lists the confounders, each numeric one with its categorical box. Focus
-// stays on the box it was on.
+// The X tab lists the exposures in model order, each with its histogram and log
+// box; the Z tab lists the confounders, each numeric one with its log,
+// standardize and categorical boxes (a categorical one has no log or z-score).
+// Focus stays on the box it was on.
 function renderTerms() {
   const s = setup(), {exposures, confounders} = selection(s.roles, s.columns);
   const byName = new Map(s.columns.map(c => [c.name, c])), focused = document.activeElement?.name;
   const levels = new Map(setupPlan(s).terms.filter(t => t.levels !== undefined).map(t => [t.name, t]));
   $('x-list').replaceChildren(...exposures.map((name, k) => {
-    const c = byName.get(name), low = nonpositive(c);
+    const c = byName.get(name), log = s.logged.has(name);
     return h('li', {class: 'term', 'data-column': name}, h('span', {class: 'term-order'}, `X${k+1}`),
-      h('span', {class: 'term-name'}, h('span', {class: 'col-name'}, breakable(name)),
-        low ? h('span', {class: 'col-meta warn'}, `${plural(low, 'value')} ≤ 0, dropped when logged`) : null),
-      h('label', {class: 'opt'}, h('input', {type: 'checkbox', name: `log-${c.index}`, checked: s.logged.has(name),
-                                             'aria-label': `Log-transform ${name}`}), 'log'));
+      h('span', {class: 'term-name'}, h('span', {class: 'col-name'}, breakable(name)), lowNote(c, log)),
+      termHistogram(c, log),
+      h('span', {class: 'term-options'}, box(`log-${c.index}`, log, `Log-transform ${name}`, 'log')));
   }));
   // Columns with too many values to dummy-code do not offer the categorical box.
   $('z-list').replaceChildren(...confounders.map((name, k) => {
     const c = byName.get(name), blocked = c.numeric && blockedCategorical(c), coded = levels.get(name);
+    const categorical = c.numeric && s.categorical.has(name), log = c.numeric && !categorical && s.zLogged.has(name);
     const note = coded ? `${plural(coded.count, 'indicator')} vs ${coded.reference}` : c.numeric ? 'numeric, enters as it is' : '';
     return h('li', {class: 'term', 'data-column': name}, h('span', {class: 'term-order'}, `Z${k+1}`),
       h('span', {class: 'term-name'}, h('span', {class: 'col-name'}, breakable(name)),
-        h('span', {class: 'col-meta'}, c.numeric ? note : `text: ${note}`)),
-      c.numeric && !blocked ? h('label', {class: 'opt'}, h('input', {type: 'checkbox', name: `cat-${c.index}`,
-          checked: s.categorical.has(name),
-          'aria-label': `Treat ${name} as categorical${c.codes ? ` (suggested: ${c.distinct} integer codes)` : ''}`}),
-        'categorical', c.codes ? h('span', {class: 'suggest'}, '(suggested)') : null) : null);
+        h('span', {class: 'col-meta'}, c.numeric ? note : `text: ${note}`), c.numeric && !categorical ? lowNote(c, log) : null),
+      c.numeric && !categorical ? termHistogram(c, log) : h('span'),
+      h('span', {class: 'term-options'}, c.numeric ? [
+        box(`zlog-${c.index}`, log, `Log-transform ${name}`, 'log', categorical),
+        box(`zstd-${c.index}`, !categorical && s.zStandardized.has(name), `Standardize ${name}`, 'standardize', categorical),
+        blocked ? null : h('label', {class: 'opt'}, h('input', {type: 'checkbox', name: `cat-${c.index}`, checked: categorical,
+            'aria-label': `Treat ${name} as categorical${c.codes ? ` (suggested: ${c.distinct} integer codes)` : ''}`}),
+          'categorical', c.codes ? h('span', {class: 'suggest'}, '(suggested)') : null)] : null));
   }));
-  if (/^(log|cat)-\d+$/.test(focused)) form.elements[focused]?.focus();
+  if (/^(log|cat|zlog|zstd)-\d+$/.test(focused)) form.elements[focused]?.focus();
   $('x-empty').hidden = exposures.length > 0;
   $('z-empty').hidden = confounders.length > 0;
   for (const [id, label, k] of [['x', 'Chemical exposures (X)', exposures.length], ['z', 'Confounders (Z)', confounders.length]]) {
     $(`count-${id}`).textContent = k;
     $(`tab-${id}`).setAttribute('aria-label', `${label}: ${plural(k, 'column')}`);
   }
-  syncLogAll();
+  syncAllBoxes();
 }
 
-// Log-transform is checked when every X is logged, mixed when some are.
-function syncLogAll() {
-  const s = setup(), {exposures} = selection(s.roles, s.columns), logged = exposures.filter(name => s.logged.has(name)).length;
-  const box = $('log-all');
-  box.disabled = !exposures.length;
-  box.checked = exposures.length > 0 && logged === exposures.length;
-  box.indeterminate = logged > 0 && logged < exposures.length;
+// The numeric confounders that enter as they are: those a log or z-score applies to.
+function plainConfounders(s = setup()) {
+  return selection(s.roles, s.columns).confounders.filter(name =>
+    s.columns.find(c => c.name === name).numeric && !s.categorical.has(name));
+}
+
+// The boxes for every X or Z: checked when the option is on for all of them,
+// mixed when for some.
+function syncAllBoxes() {
+  const s = setup(), {exposures} = selection(s.roles, s.columns), plain = plainConfounders(s);
+  for (const [id, names, chosen] of [['log-all', exposures, s.logged], ['zlog-all', plain, s.zLogged],
+                                     ['zstd-all', plain, s.zStandardized]]) {
+    const on = names.filter(name => chosen.has(name)).length, e = $(id);
+    e.disabled = !names.length;
+    e.checked = names.length > 0 && on === names.length;
+    e.indeterminate = on > 0 && on < names.length;
+  }
 }
 
 // The outcome tab names the outcome (and event) columns; only a continuous
@@ -564,39 +608,42 @@ function onBulk(button) {
   onControls();
 }
 
-// Log-transform: every chemical exposure, or none.
-function onLogAll(box) {
-  const s = setup();
-  for (const name of selection(s.roles, s.columns).exposures) s.logged[box.checked ? 'add' : 'delete'](name);
+// The boxes for all: log every X, or log or standardize every numeric Z that
+// enters as it is; or none.
+function onAllBox(box) {
+  const s = setup(), [names, chosen] = {'log-all': [selection(s.roles, s.columns).exposures, s.logged],
+    'zlog-all': [plainConfounders(s), s.zLogged], 'zstd-all': [plainConfounders(s), s.zStandardized]}[box.id];
+  for (const name of names) chosen[box.checked ? 'add' : 'delete'](name);
   renderTerms();
   onControls();
 }
 
-// An X's log box or a Z's categorical box.
+// An X's log box, or a Z's log, standardize or categorical box.
 function onOption(input) {
   const [kind, j] = input.name.split('-'), s = setup(), name = s.columns[Number(j)].name;
-  const chosen = kind === 'log' ? s.logged : s.categorical;
+  const chosen = {log: s.logged, cat: s.categorical, zlog: s.zLogged, zstd: s.zStandardized}[kind];
   chosen[input.checked ? 'add' : 'delete'](name);
-  if (kind === 'cat') renderTerms(); else syncLogAll();
+  renderTerms();
   onControls();
 }
 
-// Only the latest choice counts: a file still being read when another is chosen
-// (or the choice is cleared) is dropped.
-let fileToken = 0;
+// Only the latest choice counts: a file (or the NHANES example) still being read
+// when another is chosen (or the choice is cleared) is dropped.
 async function onFile() {
   const file = field('file').files[0], token = ++fileToken, s = state.setups.csv;
   if (!file) return;
+  state.nhanesError = null;
+  showNhanesError();
   try {
     const text = await file.text();
     if (token !== fileToken) return;
     const table = parseCsv(text);
     if (!table.rows.length) throw new Error('the file has a header but no data rows');
     loadTable(s, table);
-    s.fileName = file.name;
+    Object.assign(s, {fileName: file.name, example: false});
   } catch (error) {
     if (token !== fileToken) return;
-    Object.assign(s, {table: null, columns: null, roles: null, fileName: ''});
+    Object.assign(s, {table: null, columns: null, roles: null, fileName: '', example: false});
     message(`${file.name}: ${error.message}`);
     if (source() === 'csv') renderSetup();
     return onControls();
@@ -695,7 +742,7 @@ async function run(bootstrap) {
 // the seconds it took. With a bootstrap to follow, the tables say it is running.
 async function fitStep(data, s, key, bootstrap) {
   // The file is named as it was when the fit started: another may be open by the time it ends.
-  const fileName = data.source === 'csv' ? setup().fileName : null;
+  const fileName = data.source === 'simulated' ? null : setup().fileName;
   const text = s.spline ? 'Fitting NeuralPLSI and SplinePLSI…' : 'Fitting NeuralPLSI…', started = performance.now();
   clock(text);
   announce(text);
@@ -876,7 +923,7 @@ function preprocessingJson() {
       'mean and sd are given. z: the column, or an indicator that is 1 where the column equals `equals` and 0 ' +
       'elsewhere (reference: the level without one). y likewise. Means and SDs (population SD) are over the rows ' +
       'used. Rows with a missing or non-finite value, or a value of zero or below in a logged column, were dropped.',
-    source: d.source, file: d.source === 'nhanes' ? '12940_2020_644_MOESM2_ESM.csv' : f.fileName, family: d.family,
+    source: d.source, file: f.fileName, family: d.family,
     intercept: f.settings.intercept, rows: {file: d.rows, used: d.n, dropped: d.dropped},
     x: d.transforms.x, z: d.transforms.z, y: d.transforms.y}, null, 2)+'\n';
 }
@@ -885,7 +932,7 @@ function render() {
   const results = $('results'), f = state.fit;
   if (!f) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
-  const label = {simulated: `Simulated, g = ${d.simulation?.g}`, nhanes: 'NHANES', csv: f.fileName}[d.source];
+  const label = {simulated: `Simulated, g = ${d.simulation?.g}`, nhanes: 'NHANES example', csv: f.fileName}[d.source];
   // The heading takes focus when a run that drew results ends (busy).
   const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {id: 'results-title', tabindex: '-1'}, 'Results'),
       h('span', {class: 'facts'}, h('bdi', {}, label), ` · ${d.family}`)),
@@ -968,15 +1015,15 @@ function markScrollable() {
 
 // ---- Wiring
 
-const ROW_OPTION = /^(log|cat)-\d+$/, SIMULATION = new Set(['n', 'simSeed', 'g', 'outcome']);
+const ROW_OPTION = /^(log|cat|zlog|zstd)-\d+$/, ALL_BOXES = new Set(['log-all', 'zlog-all', 'zstd-all']), SIMULATION = new Set(['n', 'simSeed', 'g', 'outcome']);
 const OPTION_BOXES = new Set(['standardize', 'logOutcome', 'standardizeOutcome']);
 // Controls with their own handler on input; change events of the others refresh the page.
-const handled = target => target.id === 'column-filter' || target.id === 'log-all' || target.name === 'outcomeType' ||
+const handled = target => target.id === 'column-filter' || ALL_BOXES.has(target.id) || target.name === 'outcomeType' ||
   target.name?.startsWith('role-') || ROW_OPTION.test(target.name) || SIMULATION.has(target.name) || OPTION_BOXES.has(target.name);
 form.addEventListener('input', event => {
   const target = event.target;
   if (target.id === 'column-filter') applyFilter();
-  else if (target.id === 'log-all') onLogAll(target);
+  else if (ALL_BOXES.has(target.id)) onAllBox(target);
   else if (target.name === 'outcomeType') onOutcomeType();
   else if (target.name?.startsWith('role-')) onRole(target);
   else if (ROW_OPTION.test(target.name)) onOption(target);
@@ -1004,6 +1051,7 @@ steps.addEventListener('click', event => {
   if (tab) showStep(tab.id.slice(5));
 });
 steps.addEventListener('keydown', tabKeys(STEPS, 'step-', showStep));
+$('nhanes-load').addEventListener('click', loadNhanes);
 $('nhanes-retry').addEventListener('click', loadNhanes);
 $('run').addEventListener('click', () => run(true));
 $('fit').addEventListener('click', () => run(false));

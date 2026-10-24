@@ -47,14 +47,29 @@
       <h2 id="data-title">Data source</h2>
       <div class="segmented" role="radiogroup" aria-label="Data source">
         <label><input type="radio" name="source" value="csv" checked><span>Your own data</span></label>
-        <label><input type="radio" name="source" value="nhanes"><span>NHANES example</span></label>
         <label><input type="radio" name="source" value="simulated"><span>Simulated</span></label>
       </div>
 
       <div data-panel="csv">
         <label class="file">CSV file<input name="file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
         <p class="help">The file is read on this device and never uploaded. It needs a header row; commas,
-          semicolons or tabs separate the fields. No file at hand? Try the NHANES example or simulated data.</p>
+          semicolons or tabs separate the fields.</p>
+        <div class="example">
+          <div class="example-row">
+            <span class="example-title">No file at hand?</span>
+            <button type="button" id="nhanes-load" class="small">Use the NHANES example</button>
+          </div>
+          <p class="help">Triglyceride of 800 NHANES participants against 8 chemical exposures (<i>X</i>:
+            α- and γ-tocopherol, retinyl stearate, retinol, two PCBs, a furan, trans-β-carotene), with age, sex and
+            race as confounders (<i>Z</i>). It opens as your data, with the columns set up as
+            <code>reproduce/nhanes.py</code> does: exposures logged (except retinol) and standardized, log
+            triglyceride standardized, sex and race coded as indicators; change any of them. It also sets the
+            activation to ELU and adds an intercept, as that script does. Data: supplementary material of Wang et
+            al. (2020), <a href="https://doi.org/10.1186/s12940-020-00644-4"><i>Environmental Health</i> 19:96</a>,
+            licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+          <div id="nhanes-error" class="load-error" role="alert" hidden><span id="nhanes-error-text"></span>
+            <button type="button" id="nhanes-retry" class="small">Retry</button></div>
+        </div>
         <details class="help" id="csv-format">
           <summary>Missing values and numbers</summary>
           <p>Missing values are empty fields and the strings pandas reads as missing, matched exactly (NA, not
@@ -71,20 +86,6 @@
             has thousands separators; if every comma value could be either (1,250), values with commas are text,
             and the column's notes say so. A text column cannot be a chemical exposure (X) or the outcome.</p>
         </details>
-      </div>
-
-      <div data-panel="nhanes" hidden>
-        <p class="help">Triglyceride of 800 NHANES participants against 8 chemical exposures (<i>X</i>:
-          α- and γ-tocopherol, retinyl stearate, retinol, two PCBs, a furan, trans-β-carotene), with age, sex and
-          race as confounders (<i>Z</i>). The columns below start as <code>reproduce/nhanes.py</code> sets them up:
-          exposures logged (except retinol) and standardized, log triglyceride standardized, sex and race coded as
-          indicators. Change any of them. Selecting it sets the activation to ELU and adds an intercept, as that
-          script does.</p>
-        <p class="help">Data: supplementary material of Wang et al. (2020),
-          <a href="https://doi.org/10.1186/s12940-020-00644-4"><i>Environmental Health</i> 19:96</a>,
-          licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
-        <div id="nhanes-error" class="load-error" role="alert" hidden><span id="nhanes-error-text"></span>
-          <button type="button" id="nhanes-retry" class="small">Retry</button></div>
       </div>
 
       <div data-panel="simulated" hidden>
@@ -170,15 +171,22 @@
           <ol id="x-list" class="terms" aria-label="Chemical exposures (X), in model order"></ol>
           <p id="x-empty" class="help">No chemical exposures yet: give columns the <b>X</b> role under Columns.</p>
           <p class="help">Environmental concentrations are usually right-skewed: unlogged, a few high values can
-            dominate the index. <b>Log-transform</b> logs every X; clear the box of an X to leave it unlogged. The log
+            dominate the index; each X's histogram shows its values as the model takes them, on the log scale when
+            it is logged. <b>Log-transform</b> logs every X; clear the box of an X to leave it unlogged. The log
             drops rows with a value of zero or below. Standardizing uses the mean and SD of the rows kept.</p>
         </div>
 
         <div role="tabpanel" id="panel-z" class="tab-panel" aria-labelledby="tab-z" hidden>
           <h3 class="panel-title">Confounders (Z)</h3>
+          <div class="options">
+            <label class="check"><input type="checkbox" id="zlog-all">Log-transform</label>
+            <label class="check"><input type="checkbox" id="zstd-all">Standardize (after the log)</label>
+          </div>
           <ol id="z-list" class="terms" aria-label="Confounders (Z), in model order"></ol>
           <p id="z-empty" class="help">No confounders yet: give columns the <b>Z</b> role under Columns.</p>
-          <p class="help">A numeric confounder of codes, such as race coded 1 to 5, can be marked
+          <p class="help">Each numeric confounder has its own <b>log</b> and <b>standardize</b> boxes, set apart from
+            the exposures'; the boxes above set them for every numeric confounder. A log drops rows with a value of zero
+            or below; standardizing uses the mean and SD of the rows kept. A numeric confounder of codes, such as race coded 1 to 5, can be marked
             <b>categorical</b>: it then becomes indicators against its lowest value. Columns with 2 to 10 integer
             codes, other than 0/1, are suggested. Text confounders are always categorical, against their first level
             (at most 20 levels).</p>

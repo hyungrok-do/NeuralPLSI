@@ -112,15 +112,21 @@ export function changeFamily(roles, columns, family) {
 // for the columns chosen so far, and either the prepared data (ready) or the
 // first reason the fit cannot run. Options as prepareTable: `log` (true, false
 // or the exposures to log), `standardize`, `categorical` (numeric confounders to
-// dummy-code) and, for a continuous outcome, `logOutcome` and `standardizeOutcome`.
+// dummy-code), `zLog` and `zStandardize` (numeric confounders to log and to
+// z-score) and, for a continuous outcome, `logOutcome` and `standardizeOutcome`.
 export function planCsv(table, columns, {family, roles, log = false, standardize = false, categorical = [],
-                                         logOutcome = false, standardizeOutcome = false}) {
+                                         zLog = [], zStandardize = [], logOutcome = false, standardizeOutcome = false}) {
   const byName = new Map(columns.map(c => [c.name, c])), cox = family === 'cox', continuous = family === 'continuous';
   const {outcome, event: chosenEvent, exposures, confounders} = selection(roles, columns);
   const event = cox ? chosenEvent : null, asLevels = new Set(categorical), logSet = new Set(log === true ? exposures : log || []);
   const logged = exposures.filter(name => logSet.has(name)), logY = continuous && logOutcome && outcome !== null;
+  // Logs and z-scores apply to numeric confounders that enter as they are.
+  const plain = name => byName.get(name).numeric && !asLevels.has(name);
+  const zLogged = confounders.filter(name => plain(name) && zLog.includes(name));
+  const zStandardized = confounders.filter(name => plain(name) && zStandardize.includes(name));
   const used = [outcome, event, ...exposures, ...confounders].filter(name => name !== null).map(name => byName.get(name));
-  const {keep, dropped} = completeRows(table, columns, used, [...logged, ...(logY ? [outcome] : [])].map(name => byName.get(name)));
+  const {keep, dropped} = completeRows(table, columns, used,
+    [...logged, ...zLogged, ...(logY ? [outcome] : [])].map(name => byName.get(name)));
   const terms = confounders.map(name => {
     const c = byName.get(name);
     if (c.numeric && !asLevels.has(name)) return {name, count: 1};
@@ -130,6 +136,7 @@ export function planCsv(table, columns, {family, roles, log = false, standardize
   const sum = (name, rows) => rows.reduce((s, r) => s+byName.get(name).values[r], 0);
   const plan = {family, outcome, event, exposures, confounders, p: exposures.length, terms,
                 q: terms.reduce((s, t) => s+t.count, 0), rows: table.rows.length, n: keep.length, dropped, logged, standardize,
+                zLogged, zStandardized,
                 logOutcome: logY, standardizeOutcome: continuous && standardizeOutcome && outcome !== null,
                 cases: null, events: null, reason: null, ready: false, data: null};
   const y = outcome === null ? null : byName.get(outcome).values;
@@ -148,7 +155,8 @@ export function planCsv(table, columns, {family, roles, log = false, standardize
   else {
     try {
       plan.data = prepareTable(table, {family, outcome, event, exposures, confounders, log: logged, standardize,
-                                       categorical: confounders.filter(name => asLevels.has(name)),
+                                       categorical: confounders.filter(name => asLevels.has(name)), zLog: zLogged,
+                                       zStandardize: zStandardized,
                                        logOutcome: plan.logOutcome, standardizeOutcome: plan.standardizeOutcome}, columns);
       plan.ready = true;
     } catch (error) {
@@ -187,5 +195,7 @@ export function planFacts(plan) {
   return {family: plan.family, cases: plan.cases, events: plan.events, p: plan.p, q: plan.q, rows: plan.rows, n: plan.n,
           dropped: plan.dropped, outcomeLabel: outcome === null ? null : plan.event === null ? outcome : `${outcome}, ${plan.event}`,
           xNote: plan.p ? transform : '',
-          zNote: text.map(t => `${t.name}: ${plural(t.count, 'indicator')}${t.reference !== null ? ` vs ${t.reference}` : ''}`).join('; ')};
+          zNote: [...text.map(t => `${t.name}: ${plural(t.count, 'indicator')}${t.reference !== null ? ` vs ${t.reference}` : ''}`),
+                  ...(plan.zLogged.length ? [`logged: ${plan.zLogged.join(', ')}`] : []),
+                  ...(plan.zStandardized.length ? [`standardized: ${plan.zStandardized.join(', ')}`] : [])].join('; ')};
 }

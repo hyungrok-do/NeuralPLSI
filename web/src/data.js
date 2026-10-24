@@ -324,13 +324,15 @@ export const confounderLevels = (table, column, rows) =>
 // and counted. `log` is true (every exposure), false, or the exposures to log;
 // `standardize` z-scores every exposure after its log. Text confounders, and
 // numeric ones listed in `categorical`, are dummy-coded against their first
-// level (the lowest number). A continuous outcome can be logged (`logOutcome`)
+// level (the lowest number). Numeric confounders that enter as they are can be
+// logged (`zLog`) and standardized (`zStandardize`), each its own list. A
+// continuous outcome can be logged (`logOutcome`)
 // and standardized (`standardizeOutcome`). Standardization uses the mean and
 // population SD of the retained rows. The result's `transforms` say how each
 // model column was made from the file. `columns` may pass describeColumns(table).
 export function prepareTable(table, {family, outcome, event, exposures, confounders, covariates = [], log = false,
-                                     standardize = false, categorical = [], logOutcome = false,
-                                     standardizeOutcome = false}, columns = describeColumns(table)) {
+                                     standardize = false, categorical = [], zLog = [], zStandardize = [],
+                                     logOutcome = false, standardizeOutcome = false}, columns = describeColumns(table)) {
   confounders ??= covariates;
   const byName = new Map(columns.map(c => [c.name, c]));
   const get = name => {
@@ -344,10 +346,14 @@ export function prepareTable(table, {family, outcome, event, exposures, confound
   for (const name of [outcome, ...(family === 'cox' ? [event] : []), ...exposures])
     if (!get(name).numeric) throw new Error(`Column ${name} contains text; it must be numeric`);
   const logged = new Set(log === true ? exposures : log || []), asLevels = new Set(categorical);
+  // Only numeric confounders that enter as they are have a log or a z-score.
+  const plain = name => get(name).numeric && !asLevels.has(name);
+  const zLogged = new Set(zLog.filter(plain)), zScaled = new Set(zStandardize.filter(plain));
   const continuous = family === 'continuous', logY = continuous && logOutcome, scaleY = continuous && standardizeOutcome;
   const n0 = table.rows.length;
   const {keep, dropped} = completeRows(table, columns, used.map(get),
-    [...exposures.filter(name => logged.has(name)), ...(logY ? [outcome] : [])].map(get));
+    [...exposures.filter(name => logged.has(name)), ...confounders.filter(name => zLogged.has(name)),
+     ...(logY ? [outcome] : [])].map(get));
   const n = keep.length;
   if (n < 2) throw new Error(`Only ${n} complete ${n === 1 ? 'row remains' : 'rows remain'}`);
   const p = exposures.length, x = new Float64Array(n*p), scaling = [], transforms = {x: [], z: [], y: []};
@@ -364,8 +370,12 @@ export function prepareTable(table, {family, outcome, event, exposures, confound
   for (const name of confounders) {
     const c = get(name), at = c.index;
     if (c.numeric && !asLevels.has(name)) {
-      transforms.z.push({name, column: name});
-      zColumns.push(keep.map(r => c.values[r]));
+      const takeLog = zLogged.has(name), scale = zScaled.has(name), values = c.values.map(v => takeLog ? Math.log(v) : v);
+      const {mean, sd} = zscore(values, keep);
+      if (scale && !(sd > 0)) throw new Error(`Confounder ${name} is constant in the complete rows`);
+      transforms.z.push(takeLog || scale ? {name: takeLog ? `log ${name}` : name, column: name, log: takeLog,
+                                            mean: scale ? mean : null, sd: scale ? sd : null} : {name, column: name});
+      zColumns.push(keep.map(r => scale ? (values[r]-mean)/sd : values[r]));
       continue;
     }
     const levels = confounderLevels(table, c, keep);
