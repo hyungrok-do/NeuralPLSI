@@ -7,7 +7,8 @@ Writes <input>/figures/inference.{png,pdf}, one figure with four panels:
   A  95% bootstrap CI coverage of each coordinate of beta and gamma
   B  mean bootstrap SE / empirical SD of each coordinate
   C  estimation accuracy: RMSE of each coordinate, and of g over |u| <= 2
-  D  pointwise coverage of the bootstrap band for g
+  D  the estimated g: its mean over the replicates, a band of +-1 empirical SD,
+     and the true g
 
 and inference.csv, the per-coordinate numbers shown in panels A-C, block
 averages (coordinate 'all') and the RMSE of the bagged estimate (the mean of
@@ -48,9 +49,8 @@ MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
 MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73',
                'NeuralPLSI-AdamGamma': '#CC79A7'}
 MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2, 'NeuralPLSI-AdamGamma': 3}
-# NeuralPLSI-AdamGamma shares the baseline's g, so its band coverage is dashed
-# on top of the baseline's line.
-MODEL_DASH = {'NeuralPLSI-AdamGamma': (0, (3, 2))}
+# NeuralPLSI-AdamGamma shares the baseline's g, so panel D leaves it out.
+SAME_G = {'NeuralPLSI-AdamGamma'}
 SIZE_MARKER = ['o', 's', '^', 'D']
 SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964
@@ -58,6 +58,7 @@ DENSE = 2.  # |u| <= 2 holds most of the index distribution (SD about 1.1)
 REF_LINE = dict(color='#333333', lw=1.0, ls=(0, (4, 2.5)))
 MC_SHADE = dict(color='#94a3b8', alpha=0.13, lw=0, zorder=0)
 SPARSE_SHADE = '#e2e8f0'
+TRUE_G = dict(color='black', lw=1.3, ls=(0, (4, 2.5)))
 
 plt.rcParams.update({
     'font.family': 'serif', 'mathtext.fontset': 'dejavuserif', 'font.size': 11,
@@ -169,12 +170,14 @@ def style(series, sizes):
 
 
 def legend_handles(series, sizes, *extras):
-    handles = [Line2D([0], [0], lw=1.5, mfc='white', mew=1.6, ms=5.5, ls=MODEL_DASH.get(s[0], '-'),
+    handles = [Line2D([0], [0], lw=1.5, mfc='white', mew=1.6, ms=5.5,
                       label=series_label(s, sizes), **style(s, sizes)) for s in series]
     available = {
         'target': Line2D([0], [0], **REF_LINE, label='target (0.95 coverage, 1.0 SE ratio)'),
         'mc': Patch(color='#94a3b8', alpha=0.3, label='Monte-Carlo range at exact nominal'),
         'sparse': Patch(color=SPARSE_SHADE, label=f'|u| > {DENSE:g} (sparse data)'),
+        'truth': Line2D([0], [0], **TRUE_G, label='true g'),
+        'sd': Patch(color='#64748b', alpha=0.25, label='mean of g-hat ± 1 SD over the replicates'),
     }
     return handles+[available[e] for e in extras]
 
@@ -265,30 +268,31 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
     return axes
 
 
-def draw_g_coverage(container, cells, series, sizes, reps):
+def draw_g_curves(container, cells, series, sizes):
     axes = container.subplots(3, 3, sharex=True, sharey=True)
     for i, outcome in enumerate(OUTCOMES):
         for j, shape in enumerate(SHAPES):
             ax = axes[i, j]
-            ax.axhspan(*mc_band(reps), **MC_SHADE)
-            ax.axhline(NOMINAL, zorder=1, **REF_LINE)
             for side in ((-3.2, -DENSE), (DENSE, 3.2)):
                 ax.axvspan(*side, color=SPARSE_SHADE, alpha=0.5, lw=0, zorder=0)
+            truth = None  # (grid, true g) of any drawn series
             for s in series:
                 cell = cells.get(s+(shape, outcome))
-                if cell is None:
+                if cell is None or s[0] in SAME_G:
                     continue
-                truth = cell['g_truth']
-                covered = (cell['g_lb'] <= truth) & (truth <= cell['g_ub'])
-                ax.plot(cell['grid'], covered.mean(axis=0), color=MODEL_COLOR[s[0]], lw=1.6, zorder=3,
-                        ls=MODEL_DASH.get(s[0], '-') if sizes.index(s[1]) == 0 else '--')
+                mean, sd = cell['g_pred'].mean(axis=0), cell['g_pred'].std(axis=0, ddof=1)
+                color, ls = MODEL_COLOR[s[0]], '-' if sizes.index(s[1]) == 0 else '--'
+                ax.fill_between(cell['grid'], mean-sd, mean+sd, color=color, alpha=0.16, lw=0, zorder=2)
+                ax.plot(cell['grid'], mean, color=color, lw=1.6, ls=ls, zorder=3)
+                truth = cell['grid'], cell['g_truth']
+            if truth is not None:
+                ax.plot(*truth, zorder=4, **TRUE_G)
             ax.set_xlim(-3, 3)
-            ax.set_ylim(0, 1.02)
             ax.grid(alpha=0.16, lw=0.7)
             if i == 0:
                 ax.set_title(SHAPE_LABEL[shape], pad=6)
             if j == 0:
-                ax.set_ylabel(f'{OUTCOME_LABEL[outcome]}\npointwise coverage')
+                ax.set_ylabel(f'{OUTCOME_LABEL[outcome]}\ng(u)')
             if i == 2:
                 ax.set_xlabel('index  $u = x^\\top\\beta$')
     return axes
@@ -304,19 +308,20 @@ def combined(cells, out):
               f'with its 95% Monte-Carlo interval over the {reps} replicates',
               'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
               f'Estimation accuracy: RMSE of each coordinate, and of g over |u| $\\leq$ {DENSE:g}',
-              'Pointwise coverage of the 95% bootstrap band for g(u)']
+              f'The estimated g: mean over the {reps} replicates ± 1 SD, against the true g '
+              '(NeuralPLSI-AdamGamma has the baseline\'s g and is not drawn)']
     draw_coordinates(panels[0], cells, series, sizes, 'cov', 'bootstrap CI coverage',
                      ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05, interval=True)
     draw_coordinates(panels[1], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
                      ref=1.0, xlim=(0.8, 1.2), step=0.1)
     draw_coordinates(panels[2], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
-    draw_g_coverage(panels[3], cells, series, sizes, reps)
+    draw_g_curves(panels[3], cells, series, sizes)
     for panel, letter, title in zip(panels, 'ABCD', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
     size_text = ', '.join(f'n = {n}' for n in sizes)
     fig.suptitle(f'Bootstrap inference in the simulations, {size_text}, '
                  f'{replicate_label(cells)} per setting', x=0.0, ha='left', fontsize=16)
-    handles = legend_handles(series, sizes, 'target', 'mc', 'sparse')
+    handles = legend_handles(series, sizes, 'target', 'mc', 'truth', 'sd', 'sparse')
     rows = 1 if len(series) < 3 else 2
     ncol = -(-len(handles)//rows)
     # Legends fill column by column; reorder so each row reads left to right.

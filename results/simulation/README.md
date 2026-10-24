@@ -18,11 +18,11 @@ The `source_sha256` recorded in every result row matches these commits.
 
 ## Files
 
-- `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green, NeuralPLSI-AdamGamma purple; in panel D its line is dashed because it lies on the green one):
+- `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green, NeuralPLSI-AdamGamma purple, which panel D leaves out because its g is the baseline's):
   - A: coverage of the 95% interval for each coordinate of β (8) and γ (3), labelled with its true value, drawn as its 95% Monte-Carlo (Wilson) interval over the 500 replicates with a tick at the estimate. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
   - B: mean bootstrap SE / empirical SD for each coordinate.
   - C: RMSE of each coordinate, and of g on |u| ≤ 2.
-  - D: pointwise coverage of the 95% band for g.
+  - D: the estimated g, its mean over the 500 replicates with a band of ±1 empirical SD, against the true g. The shading marks |u| > 2, which holds 7% of the index values.
 - `inference.csv`: the numbers in panels A-C for each coordinate, plus block averages (`coordinate` = `all`, used for the ranges below). It also has `rmse_bagged`, the RMSE of the bagged estimate (the mean of the bootstrap refits).
 - `summary_aggregated.csv`: bias (MAB), empirical SD, mean bootstrap SE and coverage for each β/γ block.
 - `summary_table.csv` / `.tex`: the same quantities for each coefficient.
@@ -50,9 +50,10 @@ exact 0.95 coverage is 0.931-0.969 for a single coefficient.
 - **g, RMSE on |u| ≤ 2.**
   - NeuralPLSI is lower in 7 of 9 settings: 24-44% lower for linear g, 10-17% lower for sigmoid continuous and binary, 9% lower for S-shape binary and 4% lower for sigmoid Cox.
   - NeuralPLSI is about equal for S-shape Cox (0.115 vs 0.114) and 11% higher for S-shape continuous (0.059 vs 0.053).
-- **g band, mean coverage on |u| ≤ 2.**
-  - NeuralPLSI: 0.94-0.97 in 8 settings. The weak spot is S-shape binary, at 0.92 on |u| ≤ 2: it dips to about 0.83 near u = 0 and falls to about 0.59 at |u| = 3.
-  - SplinePLSI: 0.92-0.97. It dips to about 0.85 at the steep part of the sigmoid for continuous and Cox, which is consistent with the bias of a 5-knot spline.
+- **g, bias and spread (panel D).** On |u| ≤ 2 both follow the true g closely.
+  - NeuralPLSI's largest pointwise bias is 0.006-0.038 for continuous outcomes, 0.012-0.083 for Cox and 0.026-0.129 for binary. Its spread (mean SD over the replicates) is 0.038-0.056, 0.047-0.100 and 0.077-0.171.
+  - SplinePLSI's largest bias is similar (0.007-0.037, 0.021-0.068 and 0.048-0.125) and its spread is about the same or larger (0.050-0.052, 0.079-0.099 and 0.150-0.206).
+  - Beyond |u| = 2 the binary fits have little information. For the binary S-shape, whose true g turns back down there, NeuralPLSI keeps rising (bias 1.2 at |u| = 3, SD 0.8) and SplinePLSI's spread widens (bias 0.7, SD 2.0).
 - **Prediction.** Test AUC and C-index agree to the third decimal. Test MSE for continuous outcomes is 1.008-1.011 for NeuralPLSI and 1.010-1.011 for SplinePLSI.
 - **Cost (median per replicate, 40 threads).**
   - Fit: 0.3-1.1 s for NeuralPLSI; 0.07-0.3 s for SplinePLSI.
@@ -89,9 +90,9 @@ compare it with the L-BFGS NeuralPLSI.
   same width centred on the estimate covers 0.944-0.955. β RMSE is 10-13%
   higher than with L-BFGS.
 - **g.** RMSE is 8-88% higher than with L-BFGS, most for linear g (1.47-1.88
-  times). The band over-covers for linear and sigmoid g (mean 0.97-0.99 on
-  |u| ≤ 2). For the S-shape it averages 0.95-0.97 but dips to 0.84-0.90 and
-  falls to 0.60-0.76 at |u| = 3.
+  times). On |u| ≤ 2 its largest bias is larger than L-BFGS's in 7 of 9
+  settings (up to 0.26 for the binary S-shape, against 0.13), and its spread
+  is larger in all 9.
 - **Prediction.** Test MSE is 1.014-1.021, against 1.008-1.011 for L-BFGS. AUC
   and C-index are within 0.002.
 - **Cost.** Fits take 0.24-0.28 s and the bootstrap 5-8 s with B = 1000.

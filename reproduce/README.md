@@ -139,7 +139,7 @@ python reproduce/table_simulation_comparison.py --input output/simulation --out 
 
 - `plot_inference.py` draws one figure, `inference.png` and `.pdf`, that
   compares the estimators: interval coverage (with its Monte-Carlo interval), SE calibration and RMSE for each
-  coordinate of beta and gamma, RMSE of g, and pointwise coverage of the g band.
+  coordinate of beta and gamma, RMSE of g, and the estimated g with a ±1 SD band against the true g.
   `inference.csv` has the numbers. Without `--out` it writes to
   `<input>/figures`.
 - `visualize_simulation.py` writes `summary_table.csv` and `.tex`,
