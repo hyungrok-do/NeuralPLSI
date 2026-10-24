@@ -15,6 +15,12 @@ generated; the results show the true β, γ and g while the simulated setup is
 the design. Each source keeps its own setup when the visitor switches between
 them; a new simulated draw keeps the setup, a new simulated outcome restarts it.
 
+The steps are tabs along the top, each a full-width page: Data (the source,
+then the column setup), Model, Run and Results; Next buttons lead from one to
+the next, and the arrow keys, Home and End move between the tabs. The bar stays
+in view with the progress of a run, Cancel and any error, and Results opens as
+soon as a fit's estimates are drawn.
+
 The main button, **Fit with bootstrap**, fits on all rows and then runs the
 bootstrap; the estimates show as soon as the fit ends, with the standard errors
 and intervals filled in when the bootstrap does. When the controls still match

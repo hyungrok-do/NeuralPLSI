@@ -106,6 +106,10 @@ const roleOf = column => `document.querySelector(${JSON.stringify(
 const option = (column, kind) => `document.querySelector(${JSON.stringify(
   `#${kind === 'log' ? 'x' : 'z'}-list li[data-column=${JSON.stringify(column)}] input[name^=${kind}-]`)})`;
 const tab = name => `document.getElementById('tab-${name}').click()`;
+// The steps of the analysis, each a page under its tab along the top.
+const step = name => `document.getElementById('step-${name}').click()`;
+const STEP_SHOWN = `[document.querySelector('.steps [aria-selected=true]').id, [...document.querySelectorAll('.page')]
+  .filter(e => !e.hidden).map(e => e.id).join()]`;
 const check = name => `document.forms.controls.elements[${JSON.stringify(name)}].click()`;
 const checked = name => `document.forms.controls.elements[${JSON.stringify(name)}].checked`;
 // The position shown in each X row.
@@ -307,7 +311,12 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         [...document.querySelectorAll('.segmented span')].map(e => e.textContent)]`),
         ['csv', true, ['Your own data', 'NHANES example', 'Simulated']]);
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Open a CSV file.']);
+      // The steps are tabs along the top; Data shows first.
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.steps [role=tab]')].map(e => e.textContent)`),
+                       ['1Data', '2Model', '3Run', '4Results']);
+      assert.deepEqual(await page.evaluate(STEP_SHOWN), ['step-data', 'page-data']);
       await page.evaluate(choose('simulated'));
+      await page.evaluate(step('run'));
       // The module arrives 4 s after it is first asked for; nothing has asked yet.
       assert.equal(await page.evaluate('nplsiDemo.pool.compiled'), null);
       await page.evaluate(`void (nplsiDemo.pool.compiled = new Promise(resolve => setTimeout(() =>
@@ -360,9 +369,13 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(`document.getElementById('run').focus()`);
       await press(page, 'Enter');
       assert.equal(await page.evaluate(ACTIVE), 'cancel');
-      // The fit's results show first, with the bootstrap running.
+      // The fit's results show first, on their page, with the bootstrap running.
       await page.until('nplsiDemo.state.fit && nplsiDemo.state.booting');
       assert.equal(await page.evaluate(`document.querySelector('.results .tables td.na').textContent`), 'bootstrap running…');
+      assert.deepEqual(await page.evaluate(STEP_SHOWN), ['step-results', 'page-results']);
+      // The progress and Cancel stay in view under the tabs.
+      assert.equal(await page.evaluate(`document.getElementById('progress').closest('.topbar') !== null &&
+        getComputedStyle(document.querySelector('.topbar')).position`), 'sticky');
       await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
       assert.equal(await page.evaluate('document.getElementById("message").hidden'), true);
       // Focus moves to the Results heading.
@@ -394,13 +407,15 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         for (const [name, ratio] of Object.entries(ratios)) assert.ok(ratio >= 4.5, `${name} in ${value}: ${ratio}`);
         console.log(`# contrast in ${value}: ${Object.entries(ratios).map(([name, ratio]) => `${name} ${ratio}`).join(', ')}`);
         // The Run card with its Cancel button shown.
+        await page.evaluate(step('run'));
         await page.evaluate(`document.getElementById('progress').hidden = false`);
-        await screenshot(page, `run-buttons-${value}`, '#controls > section:last-child');
+        await screenshot(page, `run-buttons-${value}`, '.topbar, #page-run');
         await page.evaluate(`document.getElementById('progress').hidden = true`);
       }
     });
 
     await t.test('screenshots, no horizontal scrolling and result tables that scroll on a phone', async () => {
+      await page.evaluate(step('results'));
       for (const value of ['light', 'dark']) {
         await scheme(page, value);
         await screenshot(page, `desktop-${value}`);
@@ -426,18 +441,42 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.send('Emulation.setDeviceMetricsOverride', DESKTOP);
     });
 
+    await t.test('the step tabs and Next buttons', async () => {
+      await page.evaluate(`document.getElementById('step-results').focus()`);
+      const visited = [];
+      for (const key of ['Home', 'ArrowRight', 'ArrowRight', 'End', 'ArrowRight']) {
+        await press(page, key);
+        visited.push(await page.evaluate(`[document.activeElement.id, ...${STEP_SHOWN}]`));
+      }
+      assert.deepEqual(visited, [['step-data', 'step-data', 'page-data'], ['step-model', 'step-model', 'page-model'],
+        ['step-run', 'step-run', 'page-run'], ['step-results', 'step-results', 'page-results'],
+        ['step-data', 'step-data', 'page-data']]);
+      await page.evaluate(click('[data-goto=model]'));
+      assert.deepEqual(await page.evaluate(`[document.activeElement.id, ...${STEP_SHOWN}]`), ['step-model', 'step-model', 'page-model']);
+      await page.evaluate(click('[data-goto=run]'));
+      assert.deepEqual(await page.evaluate(STEP_SHOWN), ['step-run', 'page-run']);
+      // On a 360 px phone the four tabs fit without scrolling.
+      await page.send('Emulation.setDeviceMetricsOverride', {...PHONE, width: 360});
+      await sleep(300);
+      assert.ok(await page.evaluate(`(e => e.scrollWidth <= e.clientWidth)(document.querySelector('.steps'))`), 'the step tabs scroll on a phone');
+      await screenshot(page, 'phone-steps', '.topbar');
+      await page.send('Emulation.setDeviceMetricsOverride', DESKTOP);
+      await sleep(200);
+    });
+
     await t.test('the simulated data in the column setup: tabs, log boxes, a new draw and the truth', async () => {
+      await page.evaluate(step('data'));
       // The tabs, with the keyboard: arrows, Home and End move along them and show their panel.
       await page.evaluate(`document.getElementById('tab-columns').focus()`);
       const visited = [];
       for (const key of ['ArrowRight', 'ArrowRight', 'End', 'ArrowRight', 'ArrowLeft', 'Home']) {
         await press(page, key);
-        visited.push(await page.evaluate(`[document.activeElement.id, [...document.querySelectorAll('[role=tabpanel]')]
+        visited.push(await page.evaluate(`[document.activeElement.id, [...document.querySelectorAll('#setup [role=tabpanel]')]
           .filter(e => !e.hidden).map(e => e.id).join()]`));
       }
       assert.deepEqual(visited, [['tab-x', 'panel-x'], ['tab-z', 'panel-z'], ['tab-outcome', 'panel-outcome'],
         ['tab-columns', 'panel-columns'], ['tab-outcome', 'panel-outcome'], ['tab-columns', 'panel-columns']]);
-      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('[role=tab]')].map(e => [e.tabIndex, e.getAttribute('aria-label')])`),
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#setup [role=tab]')].map(e => [e.tabIndex, e.getAttribute('aria-label')])`),
         [[0, null], [-1, 'Chemical exposures (X): 8 columns'], [-1, 'Confounders (Z): 3 columns'], [-1, null]]);
       assert.equal(await page.evaluate(`document.getElementById('outcome-chosen').textContent`), 'Time: time · event: event');
       // Log-transform: off, mixed after one log box, then every X; simulated exposures can be negative.
@@ -535,6 +574,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     });
 
     await t.test('a messy CSV: column types, exclusive roles, select all, Cox event and the summary', async () => {
+      await page.evaluate(step('data'));
       const messy = messyCsv(), file = join(profile, 'messy.csv');
       writeFileSync(file, messy.text);
       await upload(page, file);
@@ -655,14 +695,14 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
         await screenshot(page, `csv-desktop-${value}`);
       }
       await scheme(page, 'light');
-      await screenshot(page, 'csv-step-desktop-light', '#controls');
+      await screenshot(page, 'csv-step-desktop-light', '#page-data');
       await page.send('Emulation.setDeviceMetricsOverride', PHONE);
       await sleep(300);
       assert.ok(await page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'the page scrolls sideways');
       assert.ok(await page.evaluate(`(() => { const wrap = document.querySelector('.role-wrap');
         return wrap.scrollWidth <= wrap.clientWidth; })()`), 'the column table scrolls sideways on a phone');
       await screenshot(page, 'csv-phone-light');
-      await screenshot(page, 'csv-step-phone-light', '#controls > section:first-child, #controls > section:last-child');
+      await screenshot(page, 'csv-step-phone-light', '#page-data');
       await page.send('Emulation.setDeviceMetricsOverride', DESKTOP);
       await sleep(200);
 
@@ -676,6 +716,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     });
 
     await t.test('missing-value strings, decimal commas, bidi controls in a name, and a file chosen while another is read', async () => {
+      await page.evaluate(step('data'));
       // Copied from a spreadsheet: tab-separated, thousands separators in income and decimal commas in rate.
       const rlo = String.fromCharCode(0x202e), evil = `evil${rlo}SCV.exe`, rows = [['id', 'smoke', 'edu', 'income', 'rate', 'pb', evil, 'y'].join('\t')];
       for (let i = 0; i < 60; ++i)
@@ -814,6 +855,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
     });
 
     await t.test('the NHANES file as a user CSV, set up as reproduce/nhanes.py, gives the NHANES example', async () => {
+      await page.evaluate(step('data'));
       await upload(page, join(root, 'NHANES', '12940_2020_644_MOESM2_ESM.csv'));
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.outcomeType.value,
         document.querySelectorAll('#column-table input[value=ignore]:checked').length,
@@ -853,7 +895,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       for (const name of ['x', 'z', 'outcome']) {
         await page.evaluate(tab(name));
         await page.evaluate('document.activeElement.blur()');
-        await screenshot(page, `csv-step-nhanes-tab-${name}-desktop-light`, '#controls > section:first-child');
+        await screenshot(page, `csv-step-nhanes-tab-${name}-desktop-light`, '#page-data');
       }
       await page.evaluate(tab('columns'));
 
@@ -864,7 +906,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(showLastRows);
       for (const value of ['light', 'dark']) {
         await scheme(page, value);
-        await screenshot(page, `csv-step-nhanes-desktop-${value}`, '#controls > section:first-child');
+        await screenshot(page, `csv-step-nhanes-desktop-${value}`, '#page-data');
       }
       for (const width of [360, 390]) {
         await page.send('Emulation.setDeviceMetricsOverride', {...PHONE, width});
@@ -876,7 +918,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(showLastRows);
       for (const value of ['light', 'dark']) {
         await scheme(page, value);
-        await screenshot(page, `csv-step-nhanes-phone-${value}`, '#controls > section:first-child');
+        await screenshot(page, `csv-step-nhanes-phone-${value}`, '#page-data');
       }
       await scheme(page, 'light');
       // Cox on a 360 px phone: short role headers, names broken only at their <wbr>s, notes
@@ -891,7 +933,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.evaluate(`document.activeElement.blur(); document.querySelector('.role-wrap').scrollTop = 0`);
       for (const value of ['light', 'dark']) {
         await scheme(page, value);
-        await screenshot(page, `csv-step-nhanes-phone-cox-360-${value}`, '#controls > section:first-child');
+        await screenshot(page, `csv-step-nhanes-phone-cox-360-${value}`, '#page-data');
       }
       await scheme(page, 'light');
       await page.evaluate(setValue('outcomeType', 'continuous'));

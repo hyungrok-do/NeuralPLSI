@@ -80,15 +80,39 @@ h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
   background: var(--raised); color: var(--ink-2); font-size: 0.8rem;
 }
 
-.intro, .layout, .footer { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+.intro, .pages, .footer, .steps, .status-area { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
 .intro { padding-top: 28px; padding-bottom: 8px; }
 .intro p { max-width: 72ch; color: var(--ink-2); margin: 0.6rem 0 0; }
 .intro .local { color: var(--ink); }
-.layout { display: grid; gap: 16px; padding-top: 16px; padding-bottom: 24px; }
-@media (min-width: 980px) {
-  .layout { grid-template-columns: 360px minmax(0, 1fr); align-items: start; }
+/* The steps of the analysis are tabs along the top, each a full-width page. The
+   bar stays in view with the progress of a run and its messages. */
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--page); border-bottom: 1px solid var(--border); margin-top: 12px; }
+.steps { display: flex; gap: 4px; overflow-x: auto; }
+.steps [role="tab"] {
+  display: inline-flex; align-items: center; gap: 8px; padding: 12px 14px 10px; border: 0; border-radius: 0;
+  border-bottom: 2px solid transparent; background: none; color: var(--ink-2); font-size: 0.95rem; white-space: nowrap;
 }
-.controls { display: grid; gap: 16px; min-width: 0; }
+.steps [role="tab"][aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.steps [role="tab"][aria-selected="true"] .step { background: var(--accent); color: var(--primary-ink); }
+@media (max-width: 480px) {
+  .steps { gap: 0; padding: 0 8px; }
+  .steps [role="tab"] { flex: 1 1 auto; justify-content: center; gap: 5px; padding: 11px 4px 9px; font-size: 0.9rem; }
+  .steps .step { width: 1.3rem; height: 1.3rem; }
+}
+.status-area:has(> :not([hidden])) { padding-bottom: 10px; }
+.status-area .progress { margin-top: 8px; }
+.pages { padding-top: 16px; padding-bottom: 24px; }
+.page { display: grid; gap: 16px; min-width: 0; align-items: start; }
+.page[hidden] { display: none; }
+.next { display: flex; justify-content: flex-end; }
+@media (min-width: 980px) {
+  .page-data { grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); }
+  .page-data .next { grid-column: 1 / -1; }
+  .page-data:has(#setup[hidden]) .source-card { grid-column: 1 / -1; max-width: 720px; }
+  .page-model .card, .page-run .card { max-width: 860px; }
+  .page-model .fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .page-model .next { max-width: 860px; }
+}
 .results { display: grid; gap: 16px; min-width: 0; }
 .footer { color: var(--muted); font-size: 0.85rem; padding-bottom: 32px; }
 
@@ -211,10 +235,10 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 .segmented input:focus-visible + span { outline: 2px solid var(--focus); }
 
 /* The column setup: the outcome type, then a tab for the column roles, the X, the Z and the outcome. */
-.setup { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.setup .role-wrap { max-height: 36rem; }
 .tabs { display: flex; gap: 2px; margin-top: 12px; border-bottom: 1px solid var(--border); }
 .tabs [role="tab"] {
-  flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  flex: 1 1 0; max-width: 11rem; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 7px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 8px 8px 0 0;
   background: none; color: var(--ink-2); font-size: 0.88rem;
 }

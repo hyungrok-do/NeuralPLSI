@@ -316,14 +316,35 @@ function selectTab(name, focus = false) {
   if (focus) $(`tab-${name}`).focus();
 }
 
-// Left and right arrows, Home and End move between the tabs, as in any tab list.
-function onTabKey(event) {
-  const at = TABS.indexOf(event.target.id.slice(4)), last = TABS.length-1;
-  const next = {ArrowLeft: at ? at-1 : last, ArrowRight: at === last ? 0 : at+1, Home: 0, End: last}[event.key];
-  if (next === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
-  event.preventDefault();
-  selectTab(TABS[next], true);
+// The steps of the analysis, each a page under its tab along the top. Results
+// are drawn to the width they have, so they are redrawn when their page shows.
+const STEPS = ['data', 'model', 'run', 'results'];
+function showStep(name, focus = false) {
+  for (const t of STEPS) {
+    const tab = $(`step-${t}`), on = t === name;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $(`page-${t}`).hidden = !on;
+  }
+  if (focus) $(`step-${name}`).focus();
+  // A page opened from below the top starts at its top, under the tab bar.
+  const top = document.querySelector('main').getBoundingClientRect().top+scrollY-document.querySelector('.topbar').offsetHeight;
+  if (scrollY > top) scrollTo(0, top);
+  if (name === 'results') {
+    drawCharts();
+    markScrollable();
+  }
 }
+
+// Left and right arrows, Home and End move between the tabs of a tab list
+// (`names`, with ids `prefix`+name), as in any tab list.
+const tabKeys = (names, prefix, select) => event => {
+  const at = names.indexOf(event.target.id.slice(prefix.length)), last = names.length-1;
+  const next = {ArrowLeft: at ? at-1 : last, ArrowRight: at === last ? 0 : at+1, Home: 0, End: last}[event.key];
+  if (at < 0 || next === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
+  event.preventDefault();
+  select(names[next], true);
+};
 
 // The setup of the source shown: hidden until it has a table.
 function renderSetup() {
@@ -642,6 +663,8 @@ async function run(bootstrap) {
   const key = controlsKey(), from = $(bootstrap ? 'run' : 'fit');
   let step = bootstrap && state.fit?.key === key ? 'bootstrap' : 'fit', rendered = false;
   busy(true, {from});
+  // A bootstrap of the fit shown runs with its results in view.
+  if (step === 'bootstrap') showStep('results');
   try {
     let done = '';
     if (step === 'fit') {
@@ -682,6 +705,7 @@ async function fitStep(data, s, key, bootstrap) {
   state.fit = {data, settings: s, key, fileName, neural, spline};
   state.boot = null;
   state.booting = bootstrap;
+  showStep('results');
   render();
   return (performance.now()-started)/1000;
 }
@@ -904,7 +928,8 @@ function render() {
 
 function drawCharts() {
   const f = state.fit;
-  if (!f) return;
+  // Nothing to draw before the results of a fit are built.
+  if (!f || !$('link-chart')) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
   const series = models.map(([kind, name, color]) => {
     const m = f[kind], ci = state.boot?.[kind] ? interval(kind, ...gColumns(kind)) : null;
@@ -967,11 +992,18 @@ form.addEventListener('change', event => {
 });
 form.addEventListener('submit', event => event.preventDefault());
 form.addEventListener('click', event => {
-  const bulk = event.target.closest('[data-bulk]'), tab = event.target.closest('[role=tab]');
+  const bulk = event.target.closest('[data-bulk]'), tab = event.target.closest('[role=tab]'), next = event.target.closest('[data-goto]');
   if (bulk) onBulk(bulk);
   if (tab) selectTab(tab.id.slice(4));
+  if (next) showStep(next.dataset.goto, true);
 });
-document.querySelector('[role=tablist]').addEventListener('keydown', onTabKey);
+document.querySelector('#setup [role=tablist]').addEventListener('keydown', tabKeys(TABS, 'tab-', selectTab));
+const steps = document.querySelector('.steps');
+steps.addEventListener('click', event => {
+  const tab = event.target.closest('[role=tab]');
+  if (tab) showStep(tab.id.slice(5));
+});
+steps.addEventListener('keydown', tabKeys(STEPS, 'step-', showStep));
 $('nhanes-retry').addEventListener('click', loadNhanes);
 $('run').addEventListener('click', () => run(true));
 $('fit').addEventListener('click', () => run(false));
@@ -979,6 +1011,7 @@ $('cancel').addEventListener('click', () => pool.cancel());
 $('column-table').addEventListener('keydown', onRoleKey);
 let resize = 0;
 addEventListener('resize', () => { clearTimeout(resize); resize = setTimeout(() => { drawCharts(); markScrollable(); }, 150); });
+showStep('data');
 onSource();
 if ('serviceWorker' in navigator && location.protocol !== 'file:')
   navigator.serviceWorker.register('sw.js').catch(() => {});

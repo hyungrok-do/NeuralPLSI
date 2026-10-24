@@ -22,10 +22,29 @@
     Workers in your browser. Data you open are not uploaded.</p>
 </header>
 
-<main class="layout">
+<div class="topbar">
+  <nav class="steps" role="tablist" aria-label="Analysis steps">
+    <button type="button" role="tab" id="step-data" aria-controls="page-data" aria-selected="true"><span class="step">1</span>Data</button>
+    <button type="button" role="tab" id="step-model" aria-controls="page-model" aria-selected="false" tabindex="-1"><span class="step">2</span>Model</button>
+    <button type="button" role="tab" id="step-run" aria-controls="page-run" aria-selected="false" tabindex="-1"><span class="step">3</span>Run</button>
+    <button type="button" role="tab" id="step-results" aria-controls="page-results" aria-selected="false" tabindex="-1"><span class="step">4</span>Results</button>
+  </nav>
+  <div class="status-area">
+    <div id="progress" class="progress" hidden>
+      <progress></progress>
+      <div class="progress-row"><span id="progress-text"></span>
+        <button type="button" id="cancel" class="danger">Cancel</button></div>
+    </div>
+    <p id="message" class="message" role="alert" hidden></p>
+  </div>
+</div>
+<p id="announce" class="sr-only" role="status"></p>
+
+<main class="pages">
   <form id="controls" class="controls" novalidate>
-    <section class="card" aria-labelledby="data-title">
-      <h2 id="data-title"><span class="step">1</span>Data</h2>
+    <section role="tabpanel" id="page-data" class="page page-data" aria-labelledby="step-data">
+    <div class="card source-card">
+      <h2 id="data-title">Data source</h2>
       <div class="segmented" role="radiogroup" aria-label="Data source">
         <label><input type="radio" name="source" value="csv" checked><span>Your own data</span></label>
         <label><input type="radio" name="source" value="nhanes"><span>NHANES example</span></label>
@@ -84,7 +103,10 @@
         </div>
       </div>
 
-      <div id="setup" class="setup" hidden>
+    </div>
+
+    <div id="setup" class="card setup" hidden>
+        <h2>Columns and preprocessing</h2>
         <div class="fields">
           <label class="wide">Outcome type
             <select name="outcomeType"><option value="continuous">continuous</option><option value="binary">binary (0/1)</option><option value="cox">survival time (Cox)</option></select></label>
@@ -175,11 +197,13 @@
           </div>
           <p id="outcome-fixed" class="help" hidden></p>
         </div>
-      </div>
+    </div>
+    <div class="next"><button type="button" class="primary" data-goto="model">Next: Model</button></div>
     </section>
 
-    <section class="card" aria-labelledby="model-title">
-      <h2 id="model-title"><span class="step">2</span>Model</h2>
+    <section role="tabpanel" id="page-model" class="page page-model" aria-labelledby="step-model" hidden>
+    <div class="card">
+      <h2 id="model-title">Model</h2>
       <div class="fields">
         <label>Family<select name="family" disabled aria-describedby="family-help"><option value="continuous">continuous</option><option value="binary">binary</option><option value="cox">Cox</option></select></label>
         <label>Activation
@@ -206,10 +230,13 @@
         <p><b>SplinePLSI</b> (Wang et al., 2020) replaces the network with a cubic B-spline with 5 knots and is
           fitted on the same data and bootstrap resamples, for comparison.</p>
       </details>
+    </div>
+    <div class="next"><button type="button" class="primary" data-goto="run">Next: Run</button></div>
     </section>
 
-    <section class="card" aria-labelledby="run-title">
-      <h2 id="run-title"><span class="step">3</span>Run</h2>
+    <section role="tabpanel" id="page-run" class="page page-run" aria-labelledby="step-run" hidden>
+    <div class="card">
+      <h2 id="run-title">Run</h2>
       <dl id="data-summary" class="summary"></dl>
       <p id="fit-status" class="status" role="status"></p>
       <div class="run-row">
@@ -223,20 +250,17 @@
       <p class="help">Fit with bootstrap fits the model on all rows, then refits it on <i>B</i> bootstrap resamples
         (rows drawn with replacement, each refit from a fresh initialization): standard errors are the SD of the
         draws and intervals their 2.5% and 97.5% quantiles. Replicates run in parallel, one per worker. When the
-        setup has not changed since the last fit, it bootstraps that fit.</p>
-      <div id="progress" class="progress" hidden>
-        <progress></progress>
-        <div class="progress-row"><span id="progress-text"></span>
-          <button type="button" id="cancel" class="danger">Cancel</button></div>
-      </div>
-      <p id="message" class="message" role="alert" hidden></p>
-      <p id="announce" class="sr-only" role="status"></p>
+        setup has not changed since the last fit, it bootstraps that fit. The results open when the fit ends;
+        the standard errors fill in when the bootstrap does.</p>
+    </div>
     </section>
   </form>
 
-  <section id="results" class="results">
-    <div class="card empty"><p>Open a CSV file, or choose the NHANES example or simulated data, then press
-      <b>Fit with bootstrap</b>. Estimates, plots and downloads appear here.</p></div>
+  <section role="tabpanel" id="page-results" class="page" aria-labelledby="step-results" hidden>
+    <div id="results" class="results">
+      <div class="card empty"><p>Choose data under <b>Data</b>, then press <b>Fit with bootstrap</b> under
+        <b>Run</b>. Estimates, plots and downloads appear here.</p></div>
+    </div>
   </section>
 </main>
 
