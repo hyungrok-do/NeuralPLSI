@@ -3,19 +3,18 @@
 Usage:
     python reproduce/plot_inference.py --input output/simulation
 
-Writes <input>/figures/inference.{png,pdf}, one figure with five panels:
+Writes <input>/figures/inference.{png,pdf}, one figure with four panels:
   A  bias of each coordinate of beta and gamma, in units of its empirical SD,
      with its 95% Monte-Carlo interval
   B  95% bootstrap CI coverage of each coordinate, with its 95% Monte-Carlo
      (Wilson) interval
   C  mean bootstrap SE / empirical SD of each coordinate
-  D  estimation accuracy: RMSE of each coordinate, and of g over |u| <= 2
-  E  the estimated g: its mean over the replicates, a band of +-1 empirical SD,
+  D  the estimated g: its mean over the replicates, a band of +-1 empirical SD,
      and the true g
 
-and inference.csv, the per-coordinate numbers shown in panels A-D, block
-averages (coordinate 'all') and the RMSE of the bagged estimate (the mean of
-the bootstrap refits).
+and inference.csv, the per-coordinate numbers shown in panels A-C, block
+averages (coordinate 'all'), and the RMSE of each coordinate, of g over
+|u| <= 2 and of the bagged estimate (the mean of the bootstrap refits).
 
 Each estimator (and sample size, when several are present) is one series.
 The shaded bands in panels A and B are the Monte-Carlo ranges of one
@@ -57,7 +56,6 @@ MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2, 'NeuralPLSI-Ada
 # NeuralPLSI-AdamGamma shares the baseline's g, so panel D leaves it out.
 SAME_G = {'NeuralPLSI-AdamGamma'}
 SIZE_MARKER = ['o', 's', '^', 'D']
-SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964
 DENSE = 2.  # |u| <= 2 holds most of the index distribution (SD about 1.1)
 BIAS_LIMIT = 0.5  # panel A's range, in empirical SDs
@@ -200,12 +198,11 @@ def save(fig, out, name):
     print(f'wrote {out/name}.{{png,pdf}}')
 
 
-def coordinate_rows(cells, with_g):
+def coordinate_rows(cells):
     """(block, coordinate, axis label) for each row of panels A-C."""
     summary = {par: coordinate_summary(next(iter(cells.values())), par) for par in ('beta', 'gamma')}
-    rows = [(par, j, rf'$\{par}_{{{j+1}}} = {truth:.2g}$')
+    return [(par, j, rf'$\{par}_{{{j+1}}} = {truth:.2g}$')
             for par in ('beta', 'gamma') for j, truth in enumerate(summary[par]['truth'])]
-    return rows+([('g', None, SYMBOL['g'])] if with_g else [])
 
 
 def setting_axes(container, xlabel):
@@ -227,13 +224,13 @@ def setting_axes(container, xlabel):
     return axes
 
 
-def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
-                     ref=None, xlim=None, band=None, log=False, step=None, interval=None, clip=None):
+def draw_coordinates(container, cells, series, sizes, key, xlabel,
+                     ref=None, xlim=None, band=None, step=None, interval=None, clip=None):
     """One row per coordinate, a forest plot: a marker at each series' value and,
     with interval, its 95% Monte-Carlo interval over the replicates: 'wilson' for
     a proportion, or the name of the key holding the half-width. With clip, the
     axis is (-clip, clip) and values beyond it are arrows at the edge with their value."""
-    rows = coordinate_rows(cells, with_g)
+    rows = coordinate_rows(cells)
     yy = np.arange(len(rows))
     offsets = dict(zip(series, np.linspace(-0.22, 0.22, len(series)) if len(series) > 1 else [0.]))
     axes = setting_axes(container, xlabel)
@@ -251,9 +248,8 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
             if cell is None:
                 continue
             summary = {par: coordinate_summary(cell, par) for par in ('beta', 'gamma')}
-            v = [block_summary(cell, 'g')['rmse'] if par == 'g' else summary[par][key][j]
-                 for par, j, _ in rows]
-            v, y = np.asarray(v, dtype=float), yy+offsets[s]
+            v = np.array([summary[par][key][j] for par, j, _ in rows])
+            y = yy+offsets[s]
             if interval == 'wilson':
                 low, high = wilson(v, len(cell['beta_est']))
             elif interval:
@@ -273,15 +269,11 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
                         zorder=4, clip_on=False)
                 ax.annotate(f'{value:.2g}', (edge, at), xytext=(-5 if value > 0 else 5, 0), textcoords='offset points',
                             ha='right' if value > 0 else 'left', va='center', fontsize=8.5, color=MODEL_COLOR[s[0]])
-        ax.grid(axis='x', which='both' if log else 'major', alpha=0.16, lw=0.7)
+        ax.grid(axis='x', alpha=0.16, lw=0.7)
         ax.grid(axis='y', alpha=0.08, lw=0.7)
         ax.set_axisbelow(True)
-    first = axes[0][2]  # scale, ticks and limits carry over to the shared axes
-    if log:  # limits first: settings without results leave empty axes
-        positive = [v for v in shown if v > 0]
-        first.set_xlim(min(positive)/1.5, max(positive)*1.5)
-        first.set_xscale('log')
-    elif step is not None:
+    first = axes[0][2]  # ticks and limits carry over to the shared axes
+    if step is not None:
         first.xaxis.set_major_locator(MultipleLocator(step))
     if clip is not None:
         first.set_xlim(-clip*1.04, clip*1.04)
@@ -329,14 +321,13 @@ def combined(cells, out):
     series = sorted({(model, n) for model, n, _, _ in cells}, key=lambda s: (s[1], MODEL_ORDER[s[0]]))
     sizes = sorted({n for _, n in series})
     reps = min(len(c['beta_est']) for c in cells.values())
-    fig = plt.figure(figsize=(15, 35), layout='constrained')
-    panels = fig.subfigures(5, 1, height_ratios=[5.6, 5.6, 5.6, 6.0, 9.0], hspace=0.03)
+    fig = plt.figure(figsize=(15, 29), layout='constrained')
+    panels = fig.subfigures(4, 1, height_ratios=[5.6, 5.6, 5.6, 9.0], hspace=0.03)
     titles = ['Bias of each coordinate of $\\beta$ and $\\gamma$, in units of its empirical SD, '
               f'with its 95% Monte-Carlo interval over the {reps} replicates',
               'Coverage of the 95% bootstrap CI for each coordinate, '
               'with its 95% Monte-Carlo (Wilson) interval',
               'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
-              f'Estimation accuracy: RMSE of each coordinate, and of g over |u| $\\leq$ {DENSE:g}',
               f'The estimated g: mean over the {reps} replicates ± 1 SD, against the true g '
               '(NeuralPLSI-AdamGamma has the baseline\'s g and is not drawn)']
     zero = Z/np.sqrt(reps)
@@ -346,9 +337,8 @@ def combined(cells, out):
                      ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05, interval='wilson')
     draw_coordinates(panels[2], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
                      ref=1.0, xlim=(0.8, 1.2), step=0.2)
-    draw_coordinates(panels[3], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
-    draw_g_curves(panels[4], cells, series, sizes)
-    for panel, letter, title in zip(panels, 'ABCDE', titles):
+    draw_g_curves(panels[3], cells, series, sizes)
+    for panel, letter, title in zip(panels, 'ABCD', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
     size_text = ', '.join(f'n = {n}' for n in sizes)
     fig.suptitle(f'Bootstrap inference in the simulations, {size_text}, '

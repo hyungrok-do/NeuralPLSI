@@ -139,9 +139,8 @@ python reproduce/table_simulation_comparison.py --input output/simulation --out 
 
 - `plot_inference.py` draws one figure, `inference.png` and `.pdf`, that
   compares the estimators: forest plots of the bias (in empirical SDs) and the interval coverage, each with its
-  Monte-Carlo interval, then SE calibration and RMSE for each
-  coordinate of beta and gamma, RMSE of g, and the estimated g with a ±1 SD band against the true g.
-  `inference.csv` has the numbers. Without `--out` it writes to
+  Monte-Carlo interval, then SE calibration for each coordinate of beta and gamma, and the estimated g with a
+  ±1 SD band against the true g. `inference.csv` has the numbers, and the RMSE of each coordinate and of g. Without `--out` it writes to
   `<input>/figures`.
 - `visualize_simulation.py` writes `summary_table.csv` and `.tex`,
   `summary_aggregated.csv` and per-setting tables in `tables/`, and, without
