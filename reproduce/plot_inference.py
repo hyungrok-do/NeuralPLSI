@@ -3,20 +3,25 @@
 Usage:
     python reproduce/plot_inference.py --input output/simulation
 
-Writes <input>/figures/inference.{png,pdf}, one figure with four panels:
-  A  95% bootstrap CI coverage of each coordinate of beta and gamma
-  B  mean bootstrap SE / empirical SD of each coordinate
-  C  estimation accuracy: RMSE of each coordinate, and of g over |u| <= 2
-  D  the estimated g: its mean over the replicates, a band of +-1 empirical SD,
+Writes <input>/figures/inference.{png,pdf}, one figure with five panels:
+  A  bias of each coordinate of beta and gamma, in units of its empirical SD,
+     with its 95% Monte-Carlo interval
+  B  95% bootstrap CI coverage of each coordinate, with its 95% Monte-Carlo
+     (Wilson) interval
+  C  mean bootstrap SE / empirical SD of each coordinate
+  D  estimation accuracy: RMSE of each coordinate, and of g over |u| <= 2
+  E  the estimated g: its mean over the replicates, a band of +-1 empirical SD,
      and the true g
 
-and inference.csv, the per-coordinate numbers shown in panels A-C, block
+and inference.csv, the per-coordinate numbers shown in panels A-D, block
 averages (coordinate 'all') and the RMSE of the bagged estimate (the mean of
 the bootstrap refits).
 
 Each estimator (and sample size, when several are present) is one series.
-The shaded band in panel A is the Monte-Carlo range of one coordinate's
-coverage at exact 0.95. Monte-Carlo error for block coverage is computed
+The shaded bands in panels A and B are the Monte-Carlo ranges of one
+coordinate's bias at exactly zero and coverage at exactly 0.95. Panel A is
+clipped at +-BIAS_LIMIT SDs; a value beyond it is an arrow at the edge,
+labelled with the value. Monte-Carlo error for block coverage is computed
 across replicates: each replicate contributes its mean coverage over the
 block's coordinates, because coordinates within one fit are dependent.
 """
@@ -55,6 +60,7 @@ SIZE_MARKER = ['o', 's', '^', 'D']
 SYMBOL = {'beta': r'$\beta$', 'gamma': r'$\gamma$', 'g': r'$g$'}
 NOMINAL, Z = 0.95, 1.959964
 DENSE = 2.  # |u| <= 2 holds most of the index distribution (SD about 1.1)
+BIAS_LIMIT = 0.5  # panel A's range, in empirical SDs
 REF_LINE = dict(color='#333333', lw=1.0, ls=(0, (4, 2.5)))
 MC_SHADE = dict(color='#94a3b8', alpha=0.13, lw=0, zorder=0)
 SPARSE_SHADE = '#e2e8f0'
@@ -102,7 +108,8 @@ def block_summary(cell, par):
     c = cell[f'{par}_cov'].mean(axis=1)
     truth = cell[f'{par}_est']-cell[f'{par}_bias']
     sd = cell[f'{par}_est'].std(axis=0, ddof=1)
-    return dict(cov=c.mean(), mc=Z*c.std(ddof=1)/np.sqrt(len(c)),
+    bias = cell[f'{par}_bias'].mean(axis=0)
+    return dict(bias=np.abs(bias).mean(), std_bias=np.abs(bias/sd).mean(), cov=c.mean(), mc=Z*c.std(ddof=1)/np.sqrt(len(c)),
                 ratio=(cell[f'{par}_se'].mean(axis=0)/sd).mean(),
                 rmse=np.sqrt(np.mean(cell[f'{par}_bias']**2)),
                 rmse_bagged=np.sqrt(np.mean((cell[f'{par}_bootstrap_mean']-truth)**2)))
@@ -112,7 +119,11 @@ def coordinate_summary(cell, par):
     hit = cell[f'{par}_cov']
     truth = cell[f'{par}_est'][0]-cell[f'{par}_bias'][0]  # the true coefficients are fixed
     sd = cell[f'{par}_est'].std(axis=0, ddof=1)
-    return dict(truth=truth, cov=hit.mean(axis=0), mc=Z*hit.std(axis=0, ddof=1)/np.sqrt(len(hit)),
+    bias = cell[f'{par}_bias'].mean(axis=0)
+    # The Monte-Carlo SE of the mean bias is sd/sqrt(R): Z/sqrt(R) in SD units.
+    return dict(truth=truth, bias=bias, bias_mc=Z*sd/np.sqrt(len(hit)), std_bias=bias/sd,
+                std_bias_mc=np.full(len(sd), Z/np.sqrt(len(hit))),
+                cov=hit.mean(axis=0), mc=Z*hit.std(axis=0, ddof=1)/np.sqrt(len(hit)),
                 ratio=cell[f'{par}_se'].mean(axis=0)/sd,
                 rmse=np.sqrt(np.mean(cell[f'{par}_bias']**2, axis=0)),
                 rmse_bagged=np.sqrt(np.mean((cell[f'{par}_bootstrap_mean']-truth)**2, axis=0)))
@@ -120,11 +131,11 @@ def coordinate_summary(cell, par):
 
 def write_table(cells, out):
     path = out/'inference.csv'
-    keys = ('cov', 'mc', 'ratio', 'rmse', 'rmse_bagged')
+    keys = ('bias', 'bias_mc', 'std_bias', 'cov', 'mc', 'ratio', 'rmse', 'rmse_bagged')
     with open(path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['model', 'n', 'g_fn', 'outcome', 'block', 'coordinate', 'truth', 'coverage',
-                         'coverage_mc', 'se_sd_ratio', 'rmse', 'rmse_bagged', 'n_reps'])
+        writer.writerow(['model', 'n', 'g_fn', 'outcome', 'block', 'coordinate', 'truth', 'bias', 'bias_mc',
+                         'std_bias', 'coverage', 'coverage_mc', 'se_sd_ratio', 'rmse', 'rmse_bagged', 'n_reps'])
         for (model, n, shape, outcome), cell in sorted(cells.items()):
             setting = [MODEL_LABEL[model], n, shape, outcome]
             reps = len(cell['beta_est'])
@@ -173,7 +184,7 @@ def legend_handles(series, sizes, *extras):
     handles = [Line2D([0], [0], lw=1.5, mfc='white', mew=1.6, ms=5.5,
                       label=series_label(s, sizes), **style(s, sizes)) for s in series]
     available = {
-        'target': Line2D([0], [0], **REF_LINE, label='target (0.95 coverage, 1.0 SE ratio)'),
+        'target': Line2D([0], [0], **REF_LINE, label='target (no bias, 0.95 coverage, 1.0 SE ratio)'),
         'mc': Patch(color='#94a3b8', alpha=0.3, label='Monte-Carlo range at exact nominal'),
         'sparse': Patch(color=SPARSE_SHADE, label=f'|u| > {DENSE:g} (sparse data)'),
         'truth': Line2D([0], [0], **TRUE_G, label='true g'),
@@ -217,9 +228,11 @@ def setting_axes(container, xlabel):
 
 
 def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
-                     ref=None, xlim=None, band=None, log=False, step=None, interval=False):
-    """One row per coordinate. interval=True draws coverage as its 95% Monte-Carlo
-    (Wilson) interval over the replicates, with a tick at the estimate."""
+                     ref=None, xlim=None, band=None, log=False, step=None, interval=None, clip=None):
+    """One row per coordinate, a forest plot: a marker at each series' value and,
+    with interval, its 95% Monte-Carlo interval over the replicates: 'wilson' for
+    a proportion, or the name of the key holding the half-width. With clip, the
+    axis is (-clip, clip) and values beyond it are arrows at the edge with their value."""
     rows = coordinate_rows(cells, with_g)
     yy = np.arange(len(rows))
     offsets = dict(zip(series, np.linspace(-0.22, 0.22, len(series)) if len(series) > 1 else [0.]))
@@ -240,14 +253,26 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
             summary = {par: coordinate_summary(cell, par) for par in ('beta', 'gamma')}
             v = [block_summary(cell, 'g')['rmse'] if par == 'g' else summary[par][key][j]
                  for par, j, _ in rows]
-            if interval:
+            v, y = np.asarray(v, dtype=float), yy+offsets[s]
+            if interval == 'wilson':
                 low, high = wilson(v, len(cell['beta_est']))
-                ax.hlines(yy+offsets[s], low, high, color=MODEL_COLOR[s[0]], lw=1.8, zorder=3)
-                ax.plot(v, yy+offsets[s], ls='', marker='|', ms=6, mew=1.6, color=MODEL_COLOR[s[0]], zorder=4)
+            elif interval:
+                half = np.array([summary[par][interval][j] for par, j, _ in rows])
+                low, high = v-half, v+half
+            if interval:
+                if clip is not None:
+                    low, high = np.clip(low, -clip, clip), np.clip(high, -clip, clip)
+                ax.hlines(y, low, high, color=MODEL_COLOR[s[0]], lw=1.5, zorder=3)
                 shown += list(low)+list(high)
-            else:
-                shown += v
-                ax.plot(v, yy+offsets[s], ls='', ms=4.5, mfc='white', mew=1.4, zorder=3, **style(s, sizes))
+            inside = np.abs(v) <= clip if clip is not None else np.ones(len(v), bool)
+            shown += list(v[inside])
+            ax.plot(v[inside], y[inside], ls='', ms=4.5, mfc='white', mew=1.4, zorder=4, **style(s, sizes))
+            for value, at in zip(v[~inside], y[~inside]):
+                edge = np.sign(value)*clip
+                ax.plot(edge, at, ls='', marker='>' if value > 0 else '<', ms=6, color=MODEL_COLOR[s[0]],
+                        zorder=4, clip_on=False)
+                ax.annotate(f'{value:.2g}', (edge, at), xytext=(-5 if value > 0 else 5, 0), textcoords='offset points',
+                            ha='right' if value > 0 else 'left', va='center', fontsize=8.5, color=MODEL_COLOR[s[0]])
         ax.grid(axis='x', which='both' if log else 'major', alpha=0.16, lw=0.7)
         ax.grid(axis='y', alpha=0.08, lw=0.7)
         ax.set_axisbelow(True)
@@ -258,7 +283,9 @@ def draw_coordinates(container, cells, series, sizes, key, xlabel, with_g=False,
         first.set_xscale('log')
     elif step is not None:
         first.xaxis.set_major_locator(MultipleLocator(step))
-    if xlim is not None:  # widened to keep every estimate visible
+    if clip is not None:
+        first.set_xlim(-clip*1.04, clip*1.04)
+    elif xlim is not None:  # widened to keep every estimate visible
         low, high = np.nanmin(shown), np.nanmax(shown)
         pad = .03*(max(high, xlim[1])-min(low, xlim[0]))
         first.set_xlim(min(xlim[0], low-pad), max(xlim[1], high+pad))
@@ -302,21 +329,26 @@ def combined(cells, out):
     series = sorted({(model, n) for model, n, _, _ in cells}, key=lambda s: (s[1], MODEL_ORDER[s[0]]))
     sizes = sorted({n for _, n in series})
     reps = min(len(c['beta_est']) for c in cells.values())
-    fig = plt.figure(figsize=(15, 29), layout='constrained')
-    panels = fig.subfigures(4, 1, height_ratios=[5.6, 5.6, 6.0, 9.0], hspace=0.03)
-    titles = ['Coverage of the 95% bootstrap CI for each coordinate of $\\beta$ and $\\gamma$, '
+    fig = plt.figure(figsize=(15, 35), layout='constrained')
+    panels = fig.subfigures(5, 1, height_ratios=[5.6, 5.6, 5.6, 6.0, 9.0], hspace=0.03)
+    titles = ['Bias of each coordinate of $\\beta$ and $\\gamma$, in units of its empirical SD, '
               f'with its 95% Monte-Carlo interval over the {reps} replicates',
+              'Coverage of the 95% bootstrap CI for each coordinate, '
+              'with its 95% Monte-Carlo (Wilson) interval',
               'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
               f'Estimation accuracy: RMSE of each coordinate, and of g over |u| $\\leq$ {DENSE:g}',
               f'The estimated g: mean over the {reps} replicates ± 1 SD, against the true g '
               '(NeuralPLSI-AdamGamma has the baseline\'s g and is not drawn)']
-    draw_coordinates(panels[0], cells, series, sizes, 'cov', 'bootstrap CI coverage',
-                     ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05, interval=True)
-    draw_coordinates(panels[1], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
-                     ref=1.0, xlim=(0.8, 1.2), step=0.1)
-    draw_coordinates(panels[2], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
-    draw_g_curves(panels[3], cells, series, sizes)
-    for panel, letter, title in zip(panels, 'ABCD', titles):
+    zero = Z/np.sqrt(reps)
+    draw_coordinates(panels[0], cells, series, sizes, 'std_bias', 'mean bias / empirical SD',
+                     ref=0.0, band=(-zero, zero), step=0.5, interval='std_bias_mc', clip=BIAS_LIMIT)
+    draw_coordinates(panels[1], cells, series, sizes, 'cov', 'bootstrap CI coverage',
+                     ref=NOMINAL, xlim=(0.88, 1.0), band=mc_band(reps), step=0.05, interval='wilson')
+    draw_coordinates(panels[2], cells, series, sizes, 'ratio', 'mean bootstrap SE / empirical SD',
+                     ref=1.0, xlim=(0.8, 1.2), step=0.2)
+    draw_coordinates(panels[3], cells, series, sizes, 'rmse', 'RMSE (log scale)', with_g=True, log=True)
+    draw_g_curves(panels[4], cells, series, sizes)
+    for panel, letter, title in zip(panels, 'ABCDE', titles):
         panel.suptitle(rf'$\mathbf{{{letter}}}$   {title}', x=0.0, ha='left', fontsize=14)
     size_text = ', '.join(f'n = {n}' for n in sizes)
     fig.suptitle(f'Bootstrap inference in the simulations, {size_text}, '
