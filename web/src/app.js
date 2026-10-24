@@ -873,10 +873,13 @@ function render() {
       state.boot ? h('span', {}, h('i', {class: 'key band', style: `background:${models[0][2]}`}), '95% bootstrap band') : null,
       d.truth ? h('span', {}, h('i', {class: 'key dashed'}), 'Truth') : null),
     h('div', {class: 'chart', id: 'link-chart'}));
-  const fCard = h('div', {class: 'card'}, h('h3', {}, 'Chemical exposure weights β'),
+  // The estimates of β and of γ, with their 95% intervals once the bootstrap has run.
+  const forest = (title, id) => h('div', {class: 'card'}, h('h3', {}, title),
     h('div', {class: 'legend'}, models.map(([, name, color]) => h('span', {}, h('i', {class: 'swatch', style: `background:${color}`}), name)),
       state.boot ? h('span', {}, 'lines: 95% intervals') : null, d.truth ? h('span', {}, h('i', {class: 'key diamond'}), 'Truth') : null),
-    h('div', {class: 'chart', id: 'forest-chart'}));
+    h('div', {class: 'chart', id}));
+  const fCard = h('div', {class: 'forests'}, forest('Chemical exposure weights β', 'forest-chart'),
+    d.q ? forest('Confounder effects γ', 'gamma-chart') : null);
   const downloads = h('div', {class: 'card'}, h('h3', {}, 'Downloads'), h('div', {class: 'downloads'},
     h('button', {type: 'button', class: 'small', onclick: () => download('estimates.csv', estimatesCsv())}, 'Estimates (CSV)'),
     models.filter(([k]) => state.boot?.[k]).map(([k, name]) => h('button', {type: 'button', class: 'small',
@@ -918,6 +921,12 @@ function drawCharts() {
     series: models.map(([kind, name, color]) => {
       const ci = interval(kind, 0, d.p);
       return {name, color, estimate: f[kind].beta, lo: ci?.lo, hi: ci?.hi};
+    })});
+  if (d.q) forestChart($('gamma-chart'), {rows: d.names.z.map((name, j) => ({name, truth: d.truth?.gamma[j]})),
+    label: 'Confounder effects gamma with 95% bootstrap intervals', symbol: 'γ',
+    series: models.map(([kind, name, color]) => {
+      const ci = interval(kind, d.p, d.q);
+      return {name, color, estimate: f[kind].gamma, lo: ci?.lo, hi: ci?.hi};
     })});
 }
 

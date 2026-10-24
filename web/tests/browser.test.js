@@ -378,6 +378,10 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       console.log(`# pooled bootstrap on ${result.workers} workers equals nplsi_bootstrap and splsi_bootstrap`);
       assert.ok(await page.evaluate('document.querySelectorAll("#link-chart path.band").length === 2'));
       assert.ok(await page.evaluate('document.querySelectorAll("#forest-chart line.whisker").length === 16'));
+      // γ too: three confounders, two models, each with its estimate, interval and truth.
+      assert.deepEqual(await page.evaluate(`['line.whisker', 'circle.dot', 'path.truth-mark', 'text.row-label'].map(s =>
+        document.querySelectorAll('#gamma-chart '+s).length).concat(document.querySelector('#gamma-chart svg').getAttribute('aria-label'))`),
+        [6, 6, 3, 3, 'Confounder effects gamma with 95% bootstrap intervals']);
       // The setup is the design, so the results show the truth.
       assert.deepEqual(await page.evaluate(`[nplsiDemo.state.fit.data.truth.g, nplsiDemo.state.fit.data.names.x.join(),
         document.querySelector('.results .tables thead tr:not(.group) th:nth-child(2)').textContent]`), ['sigmoid', 'x1,x2,x3,x4,x5,x6,x7,x8', 'Truth']);

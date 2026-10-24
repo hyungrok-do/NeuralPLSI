@@ -22,7 +22,7 @@ the fit shown, it bootstraps that fit instead of fitting again. **Single fit**
 gives the estimates alone.
 
 Results: β and γ with bootstrap SEs and 95% percentile intervals, g(u) with
-pointwise bands, a forest plot of β, fit diagnostics, and downloads of the
+pointwise bands, forest plots of β and γ with their intervals, fit diagnostics, and downloads of the
 estimates, the bootstrap draws and the fitted model (`.nplsi`, read by
 `NeuralPLSI.load` in Python, `load_model()` in R and `nplsi_load` in C++). For
 NHANES and CSV data a preprocessing file (`neuralplsi-preprocessing.json`) goes

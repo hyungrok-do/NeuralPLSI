@@ -143,7 +143,9 @@ export function linkChart(host, {series, truth, index, indexLabel}) {
 }
 
 // rows: [{name, truth?}], series: [{name, color, estimate[], lo?[], hi?[]}].
-export function forestChart(host, {rows, series}) {
+// One row per coefficient: each model's estimate with its 95% interval, and the
+// truth when known. `label` names the chart for screen readers, `symbol` its axis.
+export function forestChart(host, {rows, series, label = 'Chemical exposure weights beta with 95% bootstrap intervals', symbol = 'β'}) {
   host.replaceChildren();
   const W = Math.max(280, host.clientWidth), rowH = series.length > 1 ? 34 : 28;
   const longest = Math.max(...rows.map(r => r.name.length));
@@ -152,7 +154,7 @@ export function forestChart(host, {rows, series}) {
   const xs = pad(extent([[0], ...series.flatMap(s => [s.estimate, s.lo, s.hi]), rows.map(r => r.truth)]));
   const x = scale(xs[0], xs[1], m.left, W-m.right);
   const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img',
-                         'aria-label': 'Chemical exposure weights beta with 95% bootstrap intervals'}, host);
+                         'aria-label': label}, host);
   const xt = niceTicks(xs[0], xs[1], Math.max(3, Math.round((W-m.left)/80)));
   xAxis(svg, xt.values, x, m.top, rows.length*rowH, xt.decimals);
   el('line', {x1: x(0), x2: x(0), y1: m.top, y2: m.top+rows.length*rowH, class: 'axis'}, svg);
@@ -180,5 +182,5 @@ export function forestChart(host, {rows, series}) {
     });
     hit.addEventListener('pointerleave', () => tip.hide());
   });
-  el('text', {x: (m.left+W-m.right)/2, y: H-2, class: 'axis-title', 'text-anchor': 'middle'}, svg).textContent = 'β';
+  el('text', {x: (m.left+W-m.right)/2, y: H-2, class: 'axis-title', 'text-anchor': 'middle'}, svg).textContent = symbol;
 }

@@ -273,7 +273,7 @@ button.small { padding: 4px 10px; font-size: 0.84rem; }
 .results-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
 .facts { color: var(--ink-2); font-size: 0.86rem; margin: 0.25rem 0 0; }
 .stale { margin: 10px 0 0; font-size: 0.86rem; padding: 6px 10px; border-radius: 8px; background: var(--raised); }
-.figures { display: grid; gap: 16px; }
+.figures, .forests { display: grid; gap: 16px; align-content: start; }
 @media (min-width: 1240px) { .figures { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.82rem; color: var(--ink-2); margin: 0 0 6px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
