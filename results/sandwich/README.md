@@ -1,4 +1,4 @@
-# Sandwich standard errors for NeuralPLSI
+# Sandwich standard errors for NeuralPLSI and SplinePLSI
 
 A full-parameter sandwich SE for β and γ, tested against the truth in
 simulation. It needs no refitting: one Hessian and one score covariance at the
@@ -96,6 +96,39 @@ affect β and γ.
 300-1,000 CPU-seconds for a 1,000-refit bootstrap. A converged fit takes about
 2-7 s on one thread, against 0.5-2 s with the package's stopping rule.
 
+## SplinePLSI
+
+`spline_sandwich.py` does the same for SplinePLSI with its knots held at their
+fitted values, as for a regression spline: about 18 parameters (β in the tangent
+plane, γ and 7 spline coefficients), with the engine's objective (RSS +
+α|w|² for continuous outcomes, negative log-likelihood + α|w|²/2 for binary
+ones); its basis and objective match the engine's exactly. The fit's knots sit
+at quantiles of x'β and move with β, so with them fixed the fit is not quite a
+stationary point (median gradient norm 4.8, on the objective's sum-over-rows
+scale); a few Newton steps on the fixed-knot objective make it one (gradient
+5e-13), move β by about 0.001 and leave the SEs and coverage as they are. The
+Hessian is positive definite in every fit.
+
+500 datasets per setting with the seeds and fit seeds of the main simulation;
+SE/SD / coverage as fitted, with the main run's SplinePLSI bootstrap (B = 999 or
+1,000) on the same datasets:
+
+| setting | β sandwich | γ sandwich | β bootstrap | γ bootstrap |
+|---|---|---|---|---|
+| continuous, linear | 1.01 / 0.954 | 0.98 / 0.948 | 1.03 / 0.957 | 0.98 / 0.942 |
+| continuous, sigmoid | 1.01 / 0.949 | 0.97 / 0.944 | 1.02 / 0.956 | 0.98 / 0.943 |
+| continuous, threshold | 0.98 / 0.941 | 0.97 / 0.944 | 1.02 / 0.959 | 0.98 / 0.945 |
+| binary, linear | 1.04 / 0.947 | 1.00 / 0.949 | 1.14 / 0.969 | 1.01 / 0.939 |
+| binary, sigmoid | 1.01 / 0.948 | 1.01 / 0.951 | 1.02 / 0.948 | 1.01 / 0.931 |
+| binary, threshold | 1.06 / 0.954 | 1.01 / 0.957 | 1.34 / 0.977 | 1.05 / 0.958 |
+
+The sandwich is valid in every setting: β covers 0.941-0.954 and γ
+0.944-0.957, with SE/SD 0.98-1.06. Where the spline's bootstrap is too wide
+(binary outcomes, linear and threshold g, SE/SD 1.14 and 1.34), the sandwich is
+not (1.04 and 1.06). The bootstrap column is from the main run's fits, computed
+on BigPurple; SplinePLSI works in double precision, but those fits were not
+checked to be identical to these.
+
 ## Not yet done
 
 - **A matched comparison with the bootstrap.** The bootstrap figures above are
@@ -118,6 +151,7 @@ NEURALPLSI_LIBRARY=/tmp/libneuralplsi_converged.so python reproduce/sandwich/mon
 python reproduce/sandwich/monte_carlo.py output/sandwich/current.jsonl 200
 python reproduce/sandwich/monte_carlo.py output/sandwich/adam.jsonl 200 adam
 python reproduce/sandwich/monte_carlo.py output/sandwich/adamgamma.jsonl 200 adam_exact_gamma
+python reproduce/sandwich/spline_monte_carlo.py output/sandwich/spline.jsonl 500
 python reproduce/sandwich/summarize.py
 ```
 

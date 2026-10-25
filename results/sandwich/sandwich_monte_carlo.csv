@@ -47,3 +47,27 @@ adamgamma,"AdamW, then the exact gamma fit",binary,sigmoid,beta,200,2.02949,0.75
 adamgamma,"AdamW, then the exact gamma fit",binary,sigmoid,gamma,200,2.98486,2.28688,3.54183,0.958333,0.95,0.965,0.0507597,-0.0349664,1,0.641165,21.1596
 adamgamma,"AdamW, then the exact gamma fit",binary,threshold,beta,200,0.741074,0.648741,0.823848,0.755625,0.715,0.8,0.059337,-0.0447511,1,0.588488,18.8615
 adamgamma,"AdamW, then the exact gamma fit",binary,threshold,gamma,200,1.05213,1.02191,1.073,0.951667,0.935,0.965,0.059337,-0.0447511,1,0.588488,18.8615
+spline,"SplinePLSI, as fitted",continuous,linear,beta,500,1.0115,0.968697,1.0401,0.954,0.944,0.968,5.29514,3.60127,0,0.278244,0.129769
+spline,"SplinePLSI, as fitted",continuous,linear,gamma,500,0.976009,0.952322,0.999776,0.948,0.942,0.954,5.29514,3.60127,0,0.278244,0.129769
+spline,"SplinePLSI, as fitted",continuous,sigmoid,beta,500,1.00514,0.961068,1.05681,0.949,0.934,0.964,14.9681,3.61492,0,0.260926,0.111477
+spline,"SplinePLSI, as fitted",continuous,sigmoid,gamma,500,0.974652,0.951049,0.999874,0.944,0.934,0.952,14.9681,3.61492,0,0.260926,0.111477
+spline,"SplinePLSI, as fitted",continuous,threshold,beta,500,0.975825,0.942049,0.994843,0.94075,0.924,0.95,44.3538,3.53995,0,0.331602,0.10754
+spline,"SplinePLSI, as fitted",continuous,threshold,gamma,500,0.971877,0.943464,0.99882,0.944,0.938,0.952,44.3538,3.53995,0,0.331602,0.10754
+spline,"SplinePLSI, as fitted",binary,linear,beta,500,1.04015,0.984809,1.10903,0.94725,0.928,0.958,1.18017,0.0457049,0,0.671976,0.10227
+spline,"SplinePLSI, as fitted",binary,linear,gamma,500,1.0026,0.970173,1.02577,0.948667,0.942,0.954,1.18017,0.0457049,0,0.671976,0.10227
+spline,"SplinePLSI, as fitted",binary,sigmoid,beta,500,1.0147,0.969558,1.04418,0.9485,0.936,0.968,1.94907,0.0741006,0,0.642984,0.114511
+spline,"SplinePLSI, as fitted",binary,sigmoid,gamma,500,1.01494,0.984608,1.07039,0.950667,0.942,0.962,1.94907,0.0741006,0,0.642984,0.114511
+spline,"SplinePLSI, as fitted",binary,threshold,beta,500,1.06126,1.02576,1.1175,0.954,0.946,0.962,3.80022,0.0964908,0,0.977912,0.130207
+spline,"SplinePLSI, as fitted",binary,threshold,gamma,500,1.00649,0.985043,1.03467,0.956667,0.952,0.966,3.80022,0.0964908,0,0.977912,0.130207
+spline_polished,"SplinePLSI, polished",continuous,linear,beta,500,1.01066,0.965065,1.03862,0.952,0.94,0.968,9.51869e-13,3.60127,0,0.278244,0.129769
+spline_polished,"SplinePLSI, polished",continuous,linear,gamma,500,0.976112,0.952452,0.99981,0.947333,0.94,0.954,9.51869e-13,3.60127,0,0.278244,0.129769
+spline_polished,"SplinePLSI, polished",continuous,sigmoid,beta,500,1.00684,0.959589,1.05851,0.94875,0.938,0.964,7.25867e-13,3.61492,0,0.260926,0.111477
+spline_polished,"SplinePLSI, polished",continuous,sigmoid,gamma,500,0.974748,0.951051,1.00001,0.944,0.934,0.952,7.25867e-13,3.61492,0,0.260926,0.111477
+spline_polished,"SplinePLSI, polished",continuous,threshold,beta,500,0.994804,0.967065,1.01588,0.945,0.94,0.954,4.95711e-13,3.53995,0,0.331602,0.10754
+spline_polished,"SplinePLSI, polished",continuous,threshold,gamma,500,0.971769,0.94325,0.998533,0.944,0.938,0.952,4.95711e-13,3.53995,0,0.331602,0.10754
+spline_polished,"SplinePLSI, polished",binary,linear,beta,500,1.03936,0.984286,1.10698,0.94725,0.932,0.96,1.0209e-13,0.0457049,0,0.671976,0.10227
+spline_polished,"SplinePLSI, polished",binary,linear,gamma,500,1.00251,0.969939,1.02587,0.948,0.942,0.952,1.0209e-13,0.0457049,0,0.671976,0.10227
+spline_polished,"SplinePLSI, polished",binary,sigmoid,beta,500,1.01423,0.967777,1.04457,0.94725,0.93,0.962,1.11513e-13,0.0741006,0,0.642984,0.114511
+spline_polished,"SplinePLSI, polished",binary,sigmoid,gamma,500,1.01507,0.984742,1.07053,0.950667,0.942,0.962,1.11513e-13,0.0741006,0,0.642984,0.114511
+spline_polished,"SplinePLSI, polished",binary,threshold,beta,500,1.06306,1.02239,1.11428,0.95325,0.944,0.96,2.31103e-13,0.0964908,0,0.977912,0.130207
+spline_polished,"SplinePLSI, polished",binary,threshold,gamma,500,1.00645,0.984967,1.03422,0.957333,0.952,0.966,2.31103e-13,0.0964908,0,0.977912,0.130207
