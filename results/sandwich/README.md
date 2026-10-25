@@ -135,7 +135,7 @@ checked to be identical to these.
   from the main run, whose fits were computed on BigPurple and differ from these
   (with the package's stopping rule, fits on two machines stop at different
   points). `study.slurm` runs the sandwich and a B = 500 cold-start bootstrap on
-  the same fits, for the converged and package-rule arms (job 28774270, running).
+  the same fits, for the converged and package-rule arms (job 28777130).
 - Cox outcomes (score residuals).
 
 ## Files and how to reproduce
