@@ -88,7 +88,9 @@ class Objective:
         Hinv = torch.linalg.inv(H)
         V = Hinv @ C @ Hinv/n
         k = self.p-1
-        vbeta = self.T @ V[:k, :k] @ self.T.T
+        # phi moves the raw weights w[:p] = b + T d; the unit-length beta moves by
+        # T d / |b|. L-BFGS keeps |b| = 1, AdamW does not (about 0.5).
+        vbeta = self.T @ V[:k, :k] @ self.T.T/(self.b @ self.b)
         vgamma = V[k:k+self.q, k:k+self.q]
         gnorm = jacrev(Q)(phi).norm().item()
         return (np.sqrt(np.diag(vbeta.numpy())), np.sqrt(np.diag(vgamma.numpy())),

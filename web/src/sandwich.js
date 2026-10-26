@@ -134,7 +134,10 @@ export function neuralSandwich({p, q, intercept, weights, n, gradient, scoreSum,
     let s = 0; for (let l = 0; l < k; ++l) s += X[l*m+a]*CA[l*kept+c];
     V[a*kept+c] = s/(n*n);
   }
-  const step = Array.from({length: kept}, (_, j) => X[column(j)*m+kept]);
+  // H moves the raw weights w[:p] = b + T d; the unit-length beta moves by
+  // T d / |b|. The engine's L-BFGS keeps |b| = 1; AdamW does not.
+  for (let a = 0; a < kept; ++a) for (let c = 0; c < kept; ++c) V[a*kept+c] /= (a < t ? norm : 1)*(c < t ? norm : 1);
+  const step = Array.from({length: kept}, (_, j) => X[column(j)*m+kept]/(j < t ? norm : 1));
   return {...summarize(T, p, q, intercept, V, kept, step), gradientNorm: Math.hypot(...g),
           eigenvalue: smallestEigenvalue(H, factors, k)};
 }

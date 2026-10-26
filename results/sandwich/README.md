@@ -52,12 +52,12 @@ SE/SD / coverage, from `sandwich_monte_carlo.csv`:
 
 | setting | converged L-BFGS β | γ | package rule β | γ | AdamW β | γ | AdamW + exact γ β | γ |
 |---|---|---|---|---|---|---|---|---|
-| continuous, linear | 1.02 / 0.951 | 0.96 / 0.940 | 1.03 / 0.952 | 0.96 / 0.940 | 0.56 / 0.649 | 0.89 / 0.812 | 0.50 / 0.654 | 0.98 / 0.942 |
-| continuous, sigmoid | 1.11 / 0.956 | 0.97 / 0.943 | 1.09 / 0.958 | 0.97 / 0.942 | 0.52 / 0.646 | 0.80 / 0.780 | 0.53 / 0.644 | 1.04 / 0.945 |
-| continuous, threshold | 1.13 / 0.956 | 0.99 / 0.942 | 1.42 / 0.962 | 1.04 / 0.940 | 0.70 / 0.644 | 0.88 / 0.788 | 0.54 / 0.642 | 0.97 / 0.940 |
-| binary, linear | 1.00 / 0.955 | 1.05 / 0.960 | 1.05 / 0.956 | 1.05 / 0.962 | 0.63 / 0.696 | 1.02 / 0.847 | 0.55 / 0.689 | 1.05 / 0.965 |
-| binary, sigmoid | 1.04 / 0.955 | 1.06 / 0.960 | 1.07 / 0.955 | 1.06 / 0.965 | 0.54 / 0.681 | 0.90 / 0.803 | 2.03 / 0.682 | 2.98 / 0.958 |
-| binary, threshold | 1.09 / 0.946 | 1.02 / 0.963 | 1.19 / 0.947 | 1.03 / 0.965 | 1.26 / 0.762 | 1.08 / 0.843 | 0.74 / 0.756 | 1.05 / 0.952 |
+| continuous, linear | 1.02 / 0.951 | 0.96 / 0.940 | 1.03 / 0.952 | 0.96 / 0.940 | 1.11 / 0.931 | 0.89 / 0.812 | 0.98 / 0.927 | 0.98 / 0.942 |
+| continuous, sigmoid | 1.11 / 0.956 | 0.97 / 0.943 | 1.09 / 0.958 | 0.97 / 0.942 | 1.05 / 0.931 | 0.80 / 0.780 | 1.08 / 0.934 | 1.04 / 0.945 |
+| continuous, threshold | 1.13 / 0.956 | 0.99 / 0.942 | 1.42 / 0.962 | 1.04 / 0.940 | 1.35 / 0.929 | 0.88 / 0.788 | 1.05 / 0.923 | 0.97 / 0.940 |
+| binary, linear | 1.00 / 0.955 | 1.05 / 0.960 | 1.05 / 0.956 | 1.05 / 0.962 | 1.16 / 0.933 | 1.02 / 0.847 | 1.02 / 0.926 | 1.05 / 0.965 |
+| binary, sigmoid | 1.04 / 0.955 | 1.06 / 0.960 | 1.07 / 0.955 | 1.06 / 0.965 | 1.04 / 0.943 | 0.90 / 0.803 | 3.90 / 0.943 | 2.98 / 0.958 |
+| binary, threshold | 1.09 / 0.946 | 1.02 / 0.963 | 1.19 / 0.947 | 1.03 / 0.965 | 2.29 / 0.948 | 1.08 / 0.843 | 1.34 / 0.949 | 1.05 / 0.952 |
 
 - **Converged L-BFGS: valid.** β covers 0.946-0.956 and γ 0.940-0.963 in every
   setting; 65 of the 66 coordinates are inside the Monte-Carlo range, and one (a γ
@@ -70,17 +70,18 @@ SE/SD / coverage, from `sandwich_monte_carlo.csv`:
   threshold g.** β SE/SD rises to 1.42 (continuous) and 1.19 (binary) for
   threshold g, where these fits stop furthest from a minimum (median gradient
   norm 9e-4 to 4e-3, against 1e-5 to 2e-4 converged).
-- **AdamW: invalid.** β covers 0.64-0.76 and γ 0.78-0.85, with SE/SD about 0.5-0.7
-  for β. Early stopping halts AdamW far from any minimum: the median gradient
-  norm is 0.04-0.31 and the Hessian is indefinite in every fit (median smallest
-  eigenvalue -0.03 to -0.27). The sandwich describes variation around a minimum,
-  which these fits never reach. The bootstrap of the same estimators (main run)
-  covers 0.94-0.98.
-- **AdamW + exact γ: valid for γ only.** γ, fitted exactly with the network
-  fixed, covers 0.940-0.965 with SE/SD near 1 (except binary sigmoid, where the
-  indefinite Hessian inflates the SEs); β, left where AdamW stopped, covers
-  0.64-0.76 as before. So within one fit the sandwich works for the parameters at
-  a minimum and fails for those that are not.
+- **AdamW: β nearly valid, γ not.** β covers 0.929-0.948; γ covers 0.78-0.85.
+  (An earlier version of this file reported β coverage of 0.64-0.76: `sandwich.py`
+  gave the variance of AdamW's raw β weights, whose length AdamW leaves at
+  0.45-0.61, not that of the unit-length β; L-BFGS keeps the length at 1, so its
+  columns were unaffected. The AdamW columns are corrected here by each fit's
+  length and will be rerun with the fixed code.) Early stopping halts AdamW
+  short of a minimum: the median gradient norm is 0.04-0.31 and the Hessian is
+  indefinite in every fit, so a few fits have very large SEs, which inflate the
+  mean SE/SD shown; with the median SE, β's SE/SD is 0.91-1.00.
+- **AdamW + exact γ: γ valid, β as AdamW.** γ, fitted exactly with the network
+  fixed, covers 0.940-0.965; β, left where AdamW stopped, covers 0.923-0.949
+  (median SE/SD 0.91-0.99).
 
 This explains the July attempts (`AUDIT_2026-07-29.md`, sections 3f-3g), whose
 sandwich SEs under-covered (β SE/SD 0.74-0.97): they were computed at
@@ -194,11 +195,9 @@ SE / SD and coverage:
   which barely move β and γ. What decides validity is how far β̂ and γ̂ are from
   the stationary point (about the β and γ part of the Newton step H⁻¹∇Q, in SE
   units), not the gradient norm over all 1,164 weights.
-- So what breaks the sandwich for typical training (the AdamW baseline above,
-  β coverage 0.64-0.76) is how it ends, not minibatches as such: early stopping
-  on a 20% validation split, about 10 times larger final gradients (0.04-0.31),
-  80% of the rows and decoupled weight decay. Which of these matters most is not
-  separated here.
+- The AdamW baseline above, with early stopping on a 20% validation split, ends
+  further from the stationary point (final gradients 0.04-0.31): its γ
+  under-covers (0.78-0.85) and its β slightly (0.93-0.95).
 
 ## Not yet done
 
