@@ -13,11 +13,17 @@
 
 \method{print}{plsi}(x, digits = max(3L, getOption("digits") - 3L), ...)
 
-\method{summary}{plsi}(object, ...)
+\method{summary}{plsi}(object, inference = c("auto", "bootstrap", "sandwich"), ...)
 
 \method{print}{summary.plsi}(x, digits = max(3L, getOption("digits") - 3L), ...)
 
-\method{confint}{plsi}(object, parm, level = NULL, ...)
+\method{confint}{plsi}(
+  object,
+  parm,
+  level = NULL,
+  inference = c("auto", "bootstrap", "sandwich"),
+  ...
+)
 }
 \arguments{
 \item{object, x}{A \code{neuralplsi} or \code{splineplsi} fit, or its summary.}
@@ -26,9 +32,12 @@
 
 \item{digits}{Significant digits to print.}
 
+\item{inference}{\code{"bootstrap"}, \code{"sandwich"}, or \code{"auto"}: the
+bootstrap if it has run, otherwise the sandwich.}
+
 \item{parm}{Coefficient names or indices; all by default.}
 
-\item{level}{Confidence level; by default that of the bootstrap.}
+\item{level}{Confidence level; by default that of the inference used.}
 }
 \value{
 \code{coef()}: a named numeric vector. \code{summary()}: an object of
@@ -39,7 +48,9 @@
 \description{
 \code{coef()} returns \eqn{\beta}, \eqn{\gamma} and, if fitted, the
 intercept, labelled by the column names of \code{x} and \code{z}.
-\code{summary()} tabulates them with bootstrap standard errors and percentile
-intervals once \code{\link{plsi_bootstrap}} has run. \code{confint()} returns
-those intervals; another \code{level} is computed from the stored draws.
+\code{summary()} tabulates them with standard errors and intervals once
+\code{\link{plsi_bootstrap}} (percentile intervals) or
+\code{\link{plsi_sandwich}} (Wald intervals) has run. \code{confint()}
+returns those intervals; for the bootstrap, another \code{level} is computed
+from the stored draws, and for the sandwich from the SEs.
 }

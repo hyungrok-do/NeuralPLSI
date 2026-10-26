@@ -17,7 +17,8 @@ from ._version import __version__
 
 ACTIVATIONS = {'ELU': 0, 'LeakyReLU': 1, 'ReLU': 2, 'Tanh': 3}
 FAMILIES = {'continuous': 0, 'binary': 1, 'cox': 2}
-OPTIMIZERS = {'lbfgs': 0, 'adam': 1, 'adam_exact_gamma': 2}
+OPTIMIZERS = {'lbfgs': 0, 'adam_exact_gamma': 2, 'adam_frozen': 3}
+SANDWICH_METHODS = {'full': 0, 'frozen': 1}
 RNG_PROTOCOL = 'splitmix64_v1'
 BOOTSTRAP_RNG_PROTOCOL = 'splitmix64_bootstrap_v1'
 
@@ -129,6 +130,7 @@ def library():
         'nplsi_bootstrap': ([pointer, fp, fp, fp, integer, integer, seed, integer,
                              fp, integer, ctypes.c_double, integer, dp, dp, ip], integer),
         'nplsi_bootstrap_workers': ([integer, integer], integer),
+        'nplsi_sandwich': ([pointer, fp, fp, fp, integer, integer, integer, dp, dp], integer),
         'nplsi_bootstrap_indices': ([integer, seed, integer, ip], integer),
         'nplsi_bootstrap_summary': ([dp, integer, integer, ctypes.c_double, integer, dp], integer),
         'nplsi_state_size': ([pointer], size),
@@ -206,6 +208,9 @@ class NativeModel:
         checked(self._library.nplsi_get_config(self._handle, self.config, self.hyper, diagnostics))
         self.fit_diagnostics = dict(iterations=int(diagnostics[0]), gamma_iterations=int(diagnostics[1]),
                                    objective=float(diagnostics[2]), best_epoch=int(diagnostics[3]))
+        if self.config[10] == OPTIMIZERS['adam_frozen']:
+            # The frozen correction's Newton iterations.
+            self.fit_diagnostics['correction_iterations'] = self.fit_diagnostics.pop('gamma_iterations')
 
     @classmethod
     def _from_handle(cls, handle):
@@ -315,6 +320,22 @@ class NativeModel:
             seed_value(random_state), jobs, grid, len(grid), float(ci),
             method, draws, summary, workers))
         return draws, summary, int(workers[0])
+
+    def sandwich(self, X, Z, y, method='full', n_jobs='auto'):
+        """Sandwich SEs (beta, gamma, intercept) and diagnostics, in one native call."""
+        from .base import validate_data
+        family = next(k for k, v in FAMILIES.items() if v == self.config[5])
+        if method not in SANDWICH_METHODS:
+            raise ValueError("method must be 'full' or 'frozen'")
+        jobs, _ = bootstrap_options(2, 0, .95, n_jobs, 'linear')
+        X, Z, y = [np.ascontiguousarray(a) for a in validate_data(X, Z, y, family, dtype=np.float32)]
+        if X.shape[1] != self.config[0] or Z.shape[1] != self.config[1]:
+            raise ValueError('Sandwich dimensions differ from the native model')
+        se = np.empty(int(self.config[0])+int(self.config[1])+int(self.config[4]), dtype=np.float64)
+        diagnostics = np.empty(4, dtype=np.float64)
+        checked(self._library.nplsi_sandwich(self._handle, X, Z, y, len(X), SANDWICH_METHODS[method],
+                                             jobs, se, diagnostics))
+        return se, diagnostics
 
     def g_function(self, grid):
         grid = np.ascontiguousarray(np.asarray(grid, dtype=np.float32).reshape(-1))

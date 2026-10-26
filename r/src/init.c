@@ -228,6 +228,23 @@ static SEXP r_bootstrap(SEXP pointer, SEXP x, SEXP z, SEXP y, SEXP B, SEXP seed,
     return result;
 }
 
+static SEXP r_sandwich(SEXP pointer, SEXP x, SEXP z, SEXP y, SEXP method, SEXP jobs) {
+    void* handle = handle_of(pointer);
+    int32_t config[NPLSI_CONFIG_SIZE];
+    float hyper[NPLSI_HYPER_SIZE];
+    double diagnostics[4];
+    check(nplsi_get_config(handle, config, hyper, diagnostics));
+    const float *xs = rows_float(x, "x"), *zs = rows_float(z, "z"), *ys = rows_float(y, "y");
+    const char* names[] = {"se", "diagnostics"};
+    SEXP result = PROTECT(named_list(2, names));
+    SET_VECTOR_ELT(result, 0, Rf_allocVector(REALSXP, config[0] + config[1] + config[4]));
+    SET_VECTOR_ELT(result, 1, Rf_allocVector(REALSXP, 4));
+    check(nplsi_sandwich(handle, xs, zs, ys, Rf_nrows(x), Rf_asInteger(method), Rf_asInteger(jobs),
+                         REAL(VECTOR_ELT(result, 0)), REAL(VECTOR_ELT(result, 1))));
+    UNPROTECT(1);
+    return result;
+}
+
 static SEXP r_bootstrap_summary(SEXP draws, SEXP level, SEXP method) {
     int D = Rf_nrows(draws), B = Rf_ncols(draws);
     SEXP summary = PROTECT(Rf_allocMatrix(REALSXP, D, 4));
@@ -319,6 +336,7 @@ static const R_CallMethodDef methods[] = {
     {"C_link", (DL_FUNC) &r_link, 2},
     {"C_bootstrap", (DL_FUNC) &r_bootstrap, 10},
     {"C_bootstrap_summary", (DL_FUNC) &r_bootstrap_summary, 3},
+    {"C_sandwich", (DL_FUNC) &r_sandwich, 6},
     {"C_bootstrap_indices", (DL_FUNC) &r_bootstrap_indices, 3},
     {"C_save", (DL_FUNC) &r_save, 2},
     {"C_load", (DL_FUNC) &r_load, 1},

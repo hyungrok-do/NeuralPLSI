@@ -11,9 +11,10 @@ extern "C" {
            parameter_count, max_iter, linear_init, optimizer, batch_size, patience.
    family: continuous=0, binary=1, Cox=2.
    activation: ELU=0, LeakyReLU=1, ReLU=2, Tanh=3.
-   optimizer: full-batch L-BFGS=0, minibatch AdamW baseline=1, the AdamW
-   baseline followed by the exact gamma fit of L-BFGS=2. max_iter counts
-   L-BFGS iterations or AdamW epochs; batch_size and patience apply to AdamW.
+   optimizer: full-batch L-BFGS=0; minibatch AdamW followed by the exact gamma
+   fit=2; minibatch AdamW followed by the frozen correction=3 (1, the plain
+   AdamW baseline, is no longer available). max_iter counts L-BFGS iterations
+   or AdamW epochs; batch_size and patience apply to AdamW.
    Hyper: penalty (L2 on the link network; decoupled weight decay for AdamW),
           index_sign, learning_rate (AdamW). */
 #define NEURALPLSI_VERSION "0.1.0"
@@ -25,10 +26,13 @@ const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
 /* Every fit starts from a fresh initialization drawn from seed. L-BFGS runs
-   on all rows and then fits gamma exactly. The AdamW baseline is typical
-   neural-network training: minibatches on 80% of rows, early stopping on the
-   other 20%, the best checkpoint restored and no further gamma fit; optimizer 2
-   then fits gamma (and the intercept) exactly on all rows. */
+   on all rows to convergence (relative decrease below 1e-9 over 20 iterations)
+   and then fits gamma exactly. AdamW is typical neural-network training:
+   minibatches on 80% of rows, early stopping on the other 20%, the best
+   checkpoint restored. Optimizer 2 then fits gamma (and the intercept) exactly
+   on all rows; optimizer 3 takes the frozen correction: Newton steps on beta
+   (in the tangent plane of the unit sphere), gamma and the intercept, with the
+   network held fixed, on all rows, to convergence. */
 int nplsi_fit(void* handle, const float* x, const float* z, const float* y,
               int n, uint64_t seed);
 /* Prediction mode: 0=linear predictor, 1=probability, 2=partial hazard,
@@ -37,7 +41,8 @@ int nplsi_predict(void* handle, const float* x, const float* z, int n,
                   int batch_size, int mode, float* result);
 int nplsi_link(void* handle, const float* grid, int n, float* result);
 int nplsi_coefficients(void* handle, float* beta, float* gamma, float* intercept);
-/* diagnostics: L-BFGS iterations or AdamW epochs, gamma Newton iterations,
+/* diagnostics: L-BFGS iterations or AdamW epochs, gamma Newton iterations
+   (optimizer 3: the frozen correction's Newton iterations),
    objective (L-BFGS: penalized objective; AdamW: best validation loss) and
    the AdamW epoch whose checkpoint was restored (0 for L-BFGS). */
 int nplsi_get_config(void* handle, int32_t* config, float* hyper, double* diagnostics);
@@ -77,6 +82,17 @@ void* nplsi_load(const char* path);
    their outer products (d x d, row-major), for the caller to center and add up.
    hessian: columns [begin, end) of Q's Hessian, (end-begin) x d row-major, by
    central differences of the exact gradient (step 1e-6 max(1, |w_j|)). */
+/* Sandwich standard errors of beta, gamma and the intercept at the model's
+   weights, on the rows given (those it was fitted on); continuous and binary
+   outcomes. method 0 (full): over every weight of the network, H^-1 C H^-1 /
+   n^2 for the penalized objective, with the Hessian dense (networks of at most
+   8000 weights; its columns use n_jobs threads, as nplsi_bootstrap). method 1
+   (frozen): over beta, gamma and the intercept with the network held fixed
+   (any network size). se: p + q + intercept. diagnostics: the largest beta and
+   the largest gamma/intercept component of the Newton step H^-1 grad Q in SE
+   units, the Hessian's eigenvalue nearest zero and the gradient norm. */
+int nplsi_sandwich(void* handle, const float* x, const float* z, const float* y, int n,
+                   int method, int n_jobs, double* se, double* diagnostics);
 int nplsi_sandwich_gradient(void* handle, const float* x, const float* z, const float* y, int n,
                             double* objective, double* gradient);
 int nplsi_sandwich_scores(void* handle, const float* x, const float* z, const float* y, int n,

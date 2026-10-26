@@ -24,14 +24,19 @@ class NeuralPLSI(_SummaryMixin):
     the link fixed, gamma and the optional intercept are then fitted exactly by
     deterministic Newton iterations, with g(X @ beta) as an offset.
 
-    optimizer='adam' is a baseline for typical neural-network training, not a
-    recommended estimator: AdamW (learning_rate, decoupled weight_decay on the
-    link network) on minibatches of batch_size rows from a random 80% of the
-    data, for at most max_iter epochs, stopping after patience epochs without
-    improvement in the loss on the other 20% and restoring the best
-    checkpoint. Gamma is not refitted. optimizer='adam_exact_gamma' is the same
-    AdamW fit followed by the exact gamma fit of L-BFGS on all rows, an
-    ablation that separates the two parts of typical training.
+    L-BFGS runs to convergence: until the objective falls by less than a
+    relative 1e-9 over 20 iterations, so that the fit is the minimizer the
+    sandwich describes.
+
+    The other two optimizers train like typical neural networks: AdamW
+    (learning_rate, decoupled weight_decay on the link network) on minibatches
+    of batch_size rows from a random 80% of the data, for at most max_iter
+    epochs, stopping after patience epochs without improvement in the loss on
+    the other 20% and restoring the best checkpoint. Then, on all rows,
+    optimizer='adam_exact_gamma' fits gamma (and the intercept) exactly, and
+    optimizer='adam_frozen' takes the frozen correction: Newton steps on beta
+    (in the tangent plane of the unit sphere), gamma and the intercept with the
+    network held fixed, to convergence, from their 10 or so derivatives alone.
     """
     def __init__(self, family='continuous', max_iter=5000, weight_decay=1e-3,
                  hidden_units=32, n_hidden_layers=2,
@@ -47,7 +52,7 @@ class NeuralPLSI(_SummaryMixin):
         if activation not in ACTIVATIONS:
             raise ValueError('Supported activations: ELU, LeakyReLU, ReLU and Tanh')
         if optimizer not in OPTIMIZERS:
-            raise ValueError("optimizer must be 'lbfgs', 'adam' or 'adam_exact_gamma'")
+            raise ValueError("optimizer must be 'lbfgs', 'adam_exact_gamma' or 'adam_frozen'")
         for name, value, minimum in [('max_iter', max_iter, 0), ('hidden_units', hidden_units, 1),
                                       ('n_hidden_layers', n_hidden_layers, 1),
                                       ('batch_size', batch_size, 1), ('patience', patience, 1)]:
@@ -154,6 +159,50 @@ class NeuralPLSI(_SummaryMixin):
             batch_size=int(c[11]), patience=int(c[12]), learning_rate=float(h[2]))
         model.net = net
         return model
+
+    def inference_sandwich(self, X, Z, y, method='auto', ci=0.95, n_jobs='auto'):
+        """Sandwich standard errors and Wald intervals for beta and gamma, without refitting.
+
+        The variance of the minimizer of the fit's objective, H^-1 C H^-1 / n^2,
+        at the fitted weights on the rows given (the rows the model was fitted
+        on); continuous and binary outcomes. method='full' takes H and C over
+        every weight of the network (a dense Hessian, for networks of at most
+        8,000 weights; n_jobs threads); method='frozen' over beta, gamma and the
+        intercept with the network held fixed (any size; slightly narrower, as it
+        leaves out the network's estimation). 'auto' is 'frozen' for
+        optimizer='adam_frozen' and 'full' otherwise. Valid at a minimizer:
+        diagnostics report the remaining Newton step in SE units (well below 1
+        at a converged fit) and the Hessian's eigenvalue nearest zero.
+        """
+        from statistics import NormalDist
+        if method == 'auto':
+            method = 'frozen' if self.optimizer == 'adam_frozen' else 'full'
+        if not 0 < ci < 1:
+            raise ValueError('ci must lie strictly between zero and one')
+        X, Z, y = validate_data(X, Z, y, self.family, dtype=np.float32)
+        if self.net is None:
+            self.fit(X, Z, y)
+        self._ensure_dimensions(X, Z)
+        self._clear_inference()
+        se, diagnostics = self.net.sandwich(X, Z, y, method=method, n_jobs=n_jobs)
+        z = NormalDist().inv_cdf((1+ci)/2)
+        out = dict(beta_hat=self.beta, gamma_hat=self.gamma, ci=ci, method=method,
+                   newton_beta=float(diagnostics[0]), newton_gamma=float(diagnostics[1]),
+                   min_eigenvalue=float(diagnostics[2]), gradient_norm=float(diagnostics[3]))
+        blocks = [('beta', self.beta), ('gamma', self.gamma)]
+        if self.add_intercept:
+            blocks.append(('intercept', np.atleast_1d(self.intercept_val)))
+            out['intercept_hat'] = self.intercept_val
+        position = 0
+        for block, estimate in blocks:
+            count = len(estimate)
+            values = dict(se=se[position:position+count])
+            values['lb'], values['ub'] = estimate-z*values['se'], estimate+z*values['se']
+            for name, value in values.items():
+                out[block+'_'+name] = value
+                setattr(self, block+'_'+name, value)
+            position += count
+        return out
 
     def inference_bootstrap(self, X, Z, y, n_samples=200, random_state=0, ci=0.95,
                             g_grid=None, n_jobs='auto', quantile_method='linear'):

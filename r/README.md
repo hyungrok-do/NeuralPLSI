@@ -1,7 +1,7 @@
 # neuralplsi (R)
 
 Neural-network partial-linear single-index models, `g(x'beta) + z'gamma`, for
-continuous, binary and right-censored outcomes, with bootstrap inference. The
+continuous, binary and right-censored outcomes, with bootstrap or sandwich inference. The
 package wraps the C++ engine in `core/`, the same one the Python package uses:
 on the same machine, R and Python give identical fits, bootstrap draws and
 NeuralPLSI predictions, and read each other's model files. SplinePLSI
@@ -154,6 +154,26 @@ initialization with seed `seed + 1337 + b` (protocol
 `splitmix64_bootstrap_v1`). The draws do not depend on `n_jobs` or `B`, and
 NeuralPLSI and SplinePLSI see the same resamples for the same seed. `n_jobs =
 -1` uses all available CPUs, capped by `SLURM_CPUS_PER_TASK` and cgroup quotas.
+
+
+## Sandwich
+
+`plsi_sandwich()` gives standard errors and Wald intervals for NeuralPLSI fits
+of continuous and binary outcomes without refitting: the variance of the
+minimizer of the fitted objective, computed by the engine in double precision.
+`method = "full"` covers every weight of the network (a dense Hessian, for
+networks of at most 8000 weights); `method = "frozen"` covers beta, gamma and
+the intercept with the network held fixed (any size, slightly narrower);
+`"auto"` picks `"frozen"` for `optimizer = "adam_frozen"` and `"full"`
+otherwise. `summary()` and `confint()` then use it (with `inference =
+"sandwich"` when a bootstrap is also attached). The result reports the
+remaining Newton step in SE units and the Hessian's eigenvalue nearest zero:
+the formula describes a minimizer, which a converged L-BFGS fit is.
+
+```r
+fit <- plsi_sandwich(fit, n_jobs = -1)
+summary(fit, inference = "sandwich")
+```
 
 ## Saving and sharing models
 

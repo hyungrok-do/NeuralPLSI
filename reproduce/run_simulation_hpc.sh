@@ -6,11 +6,11 @@ id=${SLURM_ARRAY_TASK_ID:?Set SLURM_ARRAY_TASK_ID (0-35)}
 [[ "$id" =~ ^[0-9]+$ ]] && (( id <= 35 )) || { echo 'Array ID must be 0-35' >&2; exit 2; }
 g_values=(sigmoid threshold linear)
 outcomes=(continuous binary cox)
-# 0-8 NeuralPLSI, 9-17 SplinePLSI, 18-26 the minibatch AdamW baseline,
-# 27-35 the baseline followed by the exact gamma fit.
+# 0-8 NeuralPLSI (L-BFGS), 9-17 SplinePLSI, 18-26 AdamW followed by the frozen
+# correction, 27-35 AdamW followed by the exact gamma fit.
 model=NeuralPLSI
 (( id < 9 )) || model=PLSI
-(( id < 18 )) || model=NeuralPLSI-Adam
+(( id < 18 )) || model=NeuralPLSI-AdamFrozen
 (( id < 27 )) || model=NeuralPLSI-AdamGamma
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 project=${NPLSI_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}

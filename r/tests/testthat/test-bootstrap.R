@@ -59,7 +59,7 @@ test_that("summary, confint and plot use the bootstrap", {
   fit <- small_fit(data, "continuous")
   expect_error(confint(fit), "run plsi_bootstrap")
   expect_identical(colnames(summary(fit)$coefficients), "Estimate")
-  expect_output(print(summary(fit)), "No bootstrap")
+  expect_output(print(summary(fit)), "No inference")
   fit <- plsi_bootstrap(fit, B = 20, seed = 1, n_jobs = 2, level = 0.9)
   table <- summary(fit)$coefficients
   expect_identical(colnames(table), c("Estimate", "Std. Error", "5 %", "95 %"))

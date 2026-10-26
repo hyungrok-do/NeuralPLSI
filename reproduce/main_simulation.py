@@ -67,15 +67,15 @@ def parse_models(arg):
     """Parse model names from CLI into canonical keys."""
     alias = {'plsi': 'PLSI', 'splineplsi': 'PLSI',
              'neuralplsi': 'NeuralPLSI', 'nplsi': 'NeuralPLSI',
-             'neuralplsi-adam': 'NeuralPLSI-Adam', 'neuralplsi-adamgamma': 'NeuralPLSI-AdamGamma'}
+             'neuralplsi-adamgamma': 'NeuralPLSI-AdamGamma', 'neuralplsi-adamfrozen': 'NeuralPLSI-AdamFrozen'}
     if len(arg) == 1 and arg[0].lower() in ('all', 'both'):
         return ['PLSI', 'NeuralPLSI']
     out = []
     for m in arg:
         key = alias.get(m.strip().lower())
         if key is None:
-            raise ValueError(f"Unknown model: {m}. Use PLSI, NeuralPLSI, NeuralPLSI-Adam, "
-                             "NeuralPLSI-AdamGamma, or all.")
+            raise ValueError(f"Unknown model: {m}. Use PLSI, NeuralPLSI, NeuralPLSI-AdamGamma, "
+                             "NeuralPLSI-AdamFrozen, or all.")
         if key not in out:
             out.append(key)
     return out
@@ -92,18 +92,19 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
     return os.path.join(base, name)
 
 
-MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI, 'NeuralPLSI-Adam': NeuralPLSI,
-             'NeuralPLSI-AdamGamma': NeuralPLSI}
-# NeuralPLSI-Adam is a baseline for typical neural-network training: minibatch
-# AdamW with early stopping on a 20% validation split, and no gamma refit.
-# NeuralPLSI-AdamGamma is the same fit followed by the exact gamma fit of L-BFGS.
+MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI, 'NeuralPLSI-AdamGamma': NeuralPLSI,
+             'NeuralPLSI-AdamFrozen': NeuralPLSI}
+# NeuralPLSI is L-BFGS to convergence. The AdamW models train like typical
+# neural networks (minibatches, early stopping on a 20% validation split), then
+# NeuralPLSI-AdamGamma fits gamma exactly and NeuralPLSI-AdamFrozen takes the
+# frozen correction of beta and gamma, on all rows.
 ADAM = dict(max_iter=200, batch_size=64, learning_rate=1e-3, weight_decay=1e-4, patience=10)
 NEURAL_OPTIONS = {'NeuralPLSI': {},
-                  'NeuralPLSI-Adam': dict(optimizer='adam', **ADAM),
-                  'NeuralPLSI-AdamGamma': dict(optimizer='adam_exact_gamma', **ADAM)}
-TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_exact_gamma_v1',
-                   'NeuralPLSI-Adam': 'minibatch_adamw_early_stopping_v1',
-                   'NeuralPLSI-AdamGamma': 'minibatch_adamw_early_stopping_exact_gamma_v1'}
+                  'NeuralPLSI-AdamGamma': dict(optimizer='adam_exact_gamma', **ADAM),
+                  'NeuralPLSI-AdamFrozen': dict(optimizer='adam_frozen', **ADAM)}
+TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_converged_exact_gamma_v2',
+                   'NeuralPLSI-AdamGamma': 'minibatch_adamw_early_stopping_exact_gamma_v1',
+                   'NeuralPLSI-AdamFrozen': 'minibatch_adamw_early_stopping_frozen_correction_v1'}
 
 
 def bootstrap_jobs(n_jobs, n_samples):

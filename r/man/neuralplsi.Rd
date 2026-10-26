@@ -16,7 +16,7 @@ neuralplsi(
   max_iter = 5000,
   add_intercept = FALSE,
   initial = FALSE,
-  optimizer = c("lbfgs", "adam", "adam_exact_gamma"),
+  optimizer = c("lbfgs", "adam_exact_gamma", "adam_frozen"),
   batch_size = 64,
   learning_rate = 0.001,
   patience = 10,
@@ -50,8 +50,9 @@ indicators.}
 
 \item{initial}{Start from a linear, logistic or Cox regression fit.}
 
-\item{optimizer}{\code{"lbfgs"}, the \code{"adam"} baseline, or
-\code{"adam_exact_gamma"}, the baseline followed by the exact \eqn{\gamma} fit.}
+\item{optimizer}{\code{"lbfgs"}, \code{"adam_exact_gamma"} (AdamW, then the
+exact \eqn{\gamma} fit) or \code{"adam_frozen"} (AdamW, then the frozen
+correction).}
 
 \item{batch_size, learning_rate, patience}{AdamW settings.}
 
@@ -72,16 +73,19 @@ Python package. The defaults are those of Python's \code{NeuralPLSI}.
 Each fit uses all rows and minimizes the outcome loss (mean squared error,
 binary cross-entropy, or the negative Breslow partial likelihood divided by
 the number of events) plus \eqn{g(0)^2} and \code{weight_decay}/2 times the
-squared link-network weights, by full-batch L-BFGS. \eqn{\beta} has unit
-length and \eqn{\beta_1 \ge 0}. With \eqn{\beta} and \eqn{g} fixed,
-\eqn{\gamma} and the optional intercept are then fitted exactly.
+squared link-network weights, by full-batch L-BFGS run to convergence (until
+the objective falls by less than a relative \eqn{10^{-9}} over 20
+iterations). \eqn{\beta} has unit length and \eqn{\beta_1 \ge 0}. With
+\eqn{\beta} and \eqn{g} fixed, \eqn{\gamma} and the optional intercept are
+then fitted exactly.
 
-\code{optimizer = "adam"} is a baseline for typical neural-network training,
-not a recommended estimator: AdamW on minibatches of \code{batch_size} rows
-of a random 80\% of the data, for at most \code{max_iter} epochs, stopping
-after \code{patience} epochs without improvement on the other 20\%.
-\code{optimizer = "adam_exact_gamma"} is the same AdamW fit followed by the
-exact \eqn{\gamma} fit of L-BFGS on all rows, an ablation of the two.
+The other two optimizers train like typical neural networks: AdamW on
+minibatches of \code{batch_size} rows of a random 80\% of the data, for at
+most \code{max_iter} epochs, stopping after \code{patience} epochs without
+improvement on the other 20\%. Then, on all rows, \code{"adam_exact_gamma"}
+fits \eqn{\gamma} (and the intercept) exactly, and \code{"adam_frozen"}
+takes the frozen correction: Newton steps on \eqn{\beta}, \eqn{\gamma} and
+the intercept with the network held fixed, to convergence.
 
 Data are converted to float32 (round to nearest, as numpy's
 \code{astype(float32)}), so a fit equals the Python fit of the same data
@@ -100,6 +104,6 @@ fit
 head(predict(fit))
 }
 \seealso{
-\code{\link{plsi_bootstrap}}, \code{\link{predict.plsi}},
+\code{\link{plsi_bootstrap}}, \code{\link{plsi_sandwich}}, \code{\link{predict.plsi}},
   \code{\link{save_model}}, \code{\link{splineplsi}}
 }

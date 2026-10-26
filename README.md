@@ -6,10 +6,14 @@ NeuralPLSI fits partial-linear single-index models for environmental mixtures:
 
 The exposures `X` enter through a single index `X'beta`, whose weights `beta`
 give the relative contribution of each exposure, and a nonlinear link `g`,
-here a small neural network fitted by full-batch L-BFGS. The covariates `Z`
-enter linearly. Outcomes can be continuous, binary or time-to-event (Cox). A
-pairs bootstrap gives standard errors and percentile intervals for `beta` and
-`gamma` and pointwise bands for `g`. SplinePLSI, the B-spline model of Wang et
+here a small neural network. It is fitted by full-batch L-BFGS to convergence,
+or, for data or networks too large for that, by minibatch AdamW followed by an
+exact correction on all rows (the exact `gamma` fit, or the frozen correction of
+`beta` and `gamma`). The covariates `Z` enter linearly. Outcomes can be
+continuous, binary or time-to-event (Cox). A pairs bootstrap gives standard
+errors and percentile intervals for `beta` and `gamma` and pointwise bands for
+`g`; for continuous and binary outcomes, the sandwich gives standard errors from
+the fit alone ([`results/sandwich`](results/sandwich/README.md)). SplinePLSI, the B-spline model of Wang et
 al. (2020), is included as the comparator. Paper: Do, Wang, Liu and Lee,
 [Neural Network-based Partial-Linear Single-Index Models for Environmental
 Mixtures Analysis](https://arxiv.org/abs/2512.11593), arXiv:2512.11593 (2025).
@@ -18,7 +22,7 @@ Mixtures Analysis](https://arxiv.org/abs/2512.11593), arXiv:2512.11593 (2025).
 
 | Path | Contents |
 |---|---|
-| [`core/`](core/README.md) | The C++17 engine and its plain C API: both models, the bootstrap and model files. |
+| [`core/`](core/README.md) | The C++17 engine and its plain C API: both models, the bootstrap, the sandwich and model files. |
 | [`python/`](python/README.md) | The Python package `neuralplsi`, a ctypes binding, with its tests and a tutorial. |
 | [`r/`](r/README.md) | The R package `neuralplsi`, a `.Call` binding. |
 | [`web/`](web/README.md) | A browser demo: the engine compiled to WebAssembly. |

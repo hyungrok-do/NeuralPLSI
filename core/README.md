@@ -23,7 +23,7 @@ the spline coefficients and add `Z gamma`.
 | Path | Contents |
 |---|---|
 | `include/neuralplsi.h` | The C API. Every function, array layout and code is documented there. |
-| `src/neuralplsi.cpp` | NeuralPLSI, the AdamW baseline, the bootstrap, worker counts and the state format. |
+| `src/neuralplsi.cpp` | NeuralPLSI, its three optimizers, the bootstrap, the sandwich, worker counts and the state format. |
 | `src/spline.cpp` | SplinePLSI. Its bootstrap reuses the NeuralPLSI resampling, worker and summary routines. |
 | `examples/native_neuralplsi.cpp` | A C++ program that fits, bootstraps and saves a model. |
 | `CMakeLists.txt` | Builds the shared library and the example, and registers the example as a test. |
@@ -88,7 +88,8 @@ A model is created from two arrays:
 - `config`, 13 `int32`: `p, q, width, hidden_layers, intercept, family,
   activation, parameter_count, max_iter, linear_init, optimizer, batch_size,
   patience`. family: continuous 0, binary 1, Cox 2. activation: ELU 0,
-  LeakyReLU 1, ReLU 2, Tanh 3. optimizer: L-BFGS 0, AdamW baseline 1, AdamW baseline then exact gamma 2.
+  LeakyReLU 1, ReLU 2, Tanh 3. optimizer: L-BFGS 0, AdamW then the exact gamma fit 2, AdamW then the
+  frozen correction 3 (1, the plain AdamW baseline, was removed).
   `parameter_count = p + q + 1 + 2*width + (hidden_layers-1)*(width^2 + width) + width + 1 + intercept`.
   `batch_size` and `patience` must be at least 1 even for L-BFGS.
 - `hyper`, 3 `float`: penalty, index sign (1 for a new model), AdamW learning
@@ -101,7 +102,8 @@ A model is created from two arrays:
 | `nplsi_predict`, `nplsi_link`, `nplsi_coefficients` | Linear predictor, probability, partial hazard or `g(X beta)`; `g` on a grid; beta, gamma, intercept. |
 | `nplsi_get_config`, `nplsi_get_weights`, `nplsi_set_weights`, `nplsi_canonicalize` | Settings, the four fit diagnostics and the raw parameter vector. |
 | `nplsi_bootstrap`, `nplsi_bootstrap_workers`, `nplsi_bootstrap_indices`, `nplsi_bootstrap_summary` | The threaded pairs bootstrap and its parts. |
-| `nplsi_sandwich_gradient`, `nplsi_sandwich_scores`, `nplsi_sandwich_hessian` | The parts of the sandwich (continuous and binary outcomes), in double precision: the objective's gradient, the rows' score sums and outer products, and Hessian columns by central differences. |
+| `nplsi_sandwich` | Sandwich SEs of beta, gamma and the intercept, with the Newton-step diagnostic (continuous and binary outcomes): `full` over every weight (dense Hessian, at most 8,000 weights, threaded columns) or `frozen` over beta, gamma and the intercept with the network fixed (any size). |
+| `nplsi_sandwich_gradient`, `nplsi_sandwich_scores`, `nplsi_sandwich_hessian` | The full sandwich's parts, in double precision: the objective's gradient, the rows' score sums and outer products, and Hessian columns by central differences (the web demo splits the columns across workers). |
 | `nplsi_state_size`, `nplsi_export_state`, `nplsi_import_state`, `nplsi_save`, `nplsi_load` | Model state, in memory or in a file. |
 | `nplsi_loss_grad`, `nplsi_outcome` | Unpenalized loss and gradients, for independent checks. |
 | `splsi_fit`, `splsi_profile`, `splsi_basis`, `splsi_bootstrap`, `splsi_error` | SplinePLSI. |
@@ -137,9 +139,13 @@ the skip weight, but not beta, gamma or the intercept. The loss does not depend
 on the length of beta, so beta is renormalized to unit length after every step
 instead of being penalized.
 
-Training stops once the objective decreases by less than a relative 1e-5 over
-10 iterations, when the gradient vanishes, or after `max_iter` iterations (5000
-in the Python and R packages; `max_iter=0` performs initialization only). With
+Training runs to convergence: it stops once the objective decreases by less
+than a relative 1e-9 over 20 iterations, when the gradient vanishes, or after
+`max_iter` iterations (5000 in the Python and R packages; `max_iter=0` performs
+initialization only). The fit is then the minimizer the sandwich describes
+(`results/sandwich`). The earlier rule, 1e-5 over 10, stopped 2-5 times sooner
+and changed beta and g RMSE by under 2%, but left threshold-g fits far enough
+from the minimum that their sandwich SEs were too wide. With
 beta and the link fixed, gamma and the optional intercept are then fitted
 exactly, with `g(x'beta)` as a fixed offset: least squares, logistic regression
 or the Breslow Cox partial likelihood, by double-precision damped Newton
@@ -165,28 +171,34 @@ against a sampling SD of 0.01-0.06. On 60 simulated datasets per setting, beta
 RMSE matched SplinePLSI for continuous and Cox outcomes and was lower for binary
 ones. The penalty replaces checkpoint selection as the regularizer. Its value,
 1e-3, was chosen once from {3e-4, 1e-3, 3e-3, 1e-2} on those simulations and is
-fixed, like the spline's five knots. Stopping at 1e-7 over 20 iterations took
-2-4 times longer and changed beta and g RMSE by under 2%.
+fixed, like the spline's five knots.
 
-### AdamW baseline
+### AdamW
 
-`optimizer=1` is a baseline for typical neural-network training, kept to show
-how bootstrap inference behaves without the steps above. It is not a
-recommended estimator. AdamW (PyTorch's defaults: betas 0.9 and 0.999, eps 1e-8;
-learning rate `hyper[2]`; decoupled weight decay `hyper[0]` on the link
+Optimizers 2 and 3 train like typical neural networks, for data or networks too
+large for full-batch L-BFGS. AdamW (PyTorch's defaults: betas 0.9 and 0.999, eps
+1e-8; learning rate `hyper[2]`; decoupled weight decay `hyper[0]` on the link
 network) updates all parameters jointly on minibatches of `batch_size` rows
 from a random 80% of the data. Training stops after `patience` epochs without
 improvement in the loss on the other 20%, or after `max_iter` epochs, and
-restores the best checkpoint. Gamma is not refitted. The simulations run it as
-`NeuralPLSI-Adam`, with at most 200 epochs, batch size 64, weight decay 1e-4
-and patience 10.
+restores the best checkpoint. The simulations use at most 200 epochs, batch
+size 64, weight decay 1e-4 and patience 10. Then, on all rows:
 
-`optimizer=2` runs the same AdamW fit and then the exact gamma fit of L-BFGS:
-Newton iterations for gamma and the optional intercept on all rows, with the
-link and index fixed. It is an ablation that separates the two parts of the
-baseline, early stopping on gamma and minibatch training of beta and g. The
-diagnostics then report the gamma iterations; the objective stays the best
-validation loss. The simulations run it as `NeuralPLSI-AdamGamma`.
+- `optimizer=2` (`NeuralPLSI-AdamGamma`) fits gamma and the optional intercept
+  exactly, as L-BFGS does, with the link and index fixed.
+- `optimizer=3` (`NeuralPLSI-AdamFrozen`) takes the frozen correction: damped
+  Newton steps on beta (in the tangent plane of the unit sphere), gamma and the
+  intercept with every network weight fixed, until a step moves no coordinate
+  by more than 1e-8. These ~10 coordinates enter each row's linear predictor
+  only through the index u and the linear terms, so the gradient and Hessian
+  are exact from g(u), g'(u) and g''(u) (one forward pass carrying two
+  derivatives in u) and the loss's derivatives in the linear predictor (for
+  Cox, by cumulative sums over the risk sets): about three network passes per
+  step at any network size. beta ends at unit length.
+
+The diagnostics report the gamma iterations or the frozen correction's Newton
+iterations; the objective stays the best validation loss. With `max_iter=0`
+both only initialize.
 
 ## SplinePLSI
 
@@ -232,7 +244,7 @@ its configuration and is unchanged. Refitting the source state on the resampled
 rows reproduces a draw exactly:
 `NativeModel.from_bytes(source).fit(x[rows], z[rows], y[rows], random_state=seed+1337+b)`
 in Python, checked in `python/tests/test_native_bootstrap.py` (L-BFGS) and
-`python/tests/test_adam_baseline.py` (AdamW).
+`python/tests/test_adam.py` (AdamW).
 
 Warm starts from the original fit were removed: refits inherited its optimizer
 error, and at n = 2,000 the bootstrap SE of beta was only 0.69-0.82 of its
@@ -259,7 +271,7 @@ Native random numbers come from an explicit SplitMix64 generator with unbiased
 bounded draws, so they are the same with every C++ standard library.
 
 - `splitmix64_v1` initializes the network. L-BFGS draws only the initial
-  weights; the AdamW baseline also draws its validation split and minibatch
+  weights; AdamW also draws its validation split and minibatch
   order, each from its own stream keyed by the fit seed.
 - `splitmix64_bootstrap_v1` resamples: replicate `b` uses a stream keyed by
   `seed + b`, separate from the initialization streams, and fits with
@@ -382,11 +394,12 @@ architecture, the bootstrap output and the worker count.
   likelihood cannot identify them. For Cox outcomes the link's output bias
   receives only the gradient of its identifying `g(0)` anchor, avoiding
   numerical drift.
-- Each fit trains on all rows by full-batch L-BFGS until the penalized
-  objective stops decreasing. The 80/20 validation split, minibatch AdamW and
-  checkpoint selection were removed from the estimator (AdamW remains only as
-  the baseline). Gamma is then fitted exactly by Newton iterations with the
-  index and link frozen. Bootstrap refits use the same procedure.
+- The default fit trains on all rows by full-batch L-BFGS until the penalized
+  objective converges. Gamma is then fitted exactly by Newton iterations with
+  the index and link frozen. Minibatch AdamW with an 80/20 validation split and
+  checkpoint selection is available only with a correction on all rows (the
+  exact gamma fit or the frozen correction). Bootstrap refits use the same
+  procedure as the original fit.
 - Spline coefficients and knots correspond to the returned index: the final
   linear part is exactly the profile fit at that index. Profiling and the final
   fit use the same penalized objective. Serial and threaded bootstrap draws are

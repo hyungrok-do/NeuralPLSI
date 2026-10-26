@@ -11,7 +11,7 @@
 #SBATCH --exclude=cn-00[08-10]
 
 # IDs 0-8: NeuralPLSI. Submit --array=0-17 to include SplinePLSI, 18-26 for the
-# minibatch AdamW baseline, or 27-35 for the baseline with the exact gamma fit.
+# AdamW with the frozen correction, or 27-35 for AdamW with the exact gamma fit.
 set -euo pipefail
 cd "${NPLSI_PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the repository root}}"
 bash reproduce/run_simulation_hpc.sh 2000

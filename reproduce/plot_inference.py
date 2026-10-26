@@ -47,13 +47,14 @@ SHAPES = ['linear', 'sigmoid', 'threshold']
 OUTCOMES = ['continuous', 'binary', 'cox']
 SHAPE_LABEL = {'linear': 'Linear', 'sigmoid': 'Sigmoid', 'threshold': 'Threshold'}
 OUTCOME_LABEL = {'continuous': 'Continuous', 'binary': 'Binary', 'cox': 'Cox'}
-MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI', 'PLSI': 'SplinePLSI',
-               'NeuralPLSI-Adam': 'NeuralPLSI, minibatch AdamW with early stopping',
-               'NeuralPLSI-AdamGamma': 'the same AdamW fit, then the exact γ fit'}
-MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-Adam': '#009E73',
+MODEL_LABEL = {'NeuralPLSI': 'NeuralPLSI (L-BFGS)', 'PLSI': 'SplinePLSI',
+               'NeuralPLSI-AdamFrozen': 'NeuralPLSI, AdamW, then the frozen correction',
+               'NeuralPLSI-AdamGamma': 'NeuralPLSI, the same AdamW fit, then the exact γ fit'}
+MODEL_COLOR = {'NeuralPLSI': '#0072B2', 'PLSI': '#D55E00', 'NeuralPLSI-AdamFrozen': '#009E73',
                'NeuralPLSI-AdamGamma': '#CC79A7'}
-MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-Adam': 2, 'NeuralPLSI-AdamGamma': 3}
-# NeuralPLSI-AdamGamma shares the baseline's g, so panel D leaves it out.
+MODEL_ORDER = {'NeuralPLSI': 0, 'PLSI': 1, 'NeuralPLSI-AdamFrozen': 2, 'NeuralPLSI-AdamGamma': 3}
+# Neither AdamW correction changes the network, so the two share g: panel D
+# draws it once, for NeuralPLSI-AdamFrozen.
 SAME_G = {'NeuralPLSI-AdamGamma'}
 SIZE_MARKER = ['o', 's', '^', 'D']
 NOMINAL, Z = 0.95, 1.959964
@@ -329,7 +330,7 @@ def combined(cells, out):
               'with its 95% Monte-Carlo (Wilson) interval',
               'SE calibration for each coordinate: below 1.0 means the intervals are too narrow',
               f'The estimated g: mean over the {reps} replicates ± 1 SD, against the true g '
-              '(NeuralPLSI-AdamGamma has the baseline\'s g and is not drawn)']
+              '(NeuralPLSI-AdamGamma has the same g as NeuralPLSI-AdamFrozen and is not drawn)']
     zero = Z/np.sqrt(reps)
     draw_coordinates(panels[0], cells, series, sizes, 'std_bias', 'mean bias / empirical SD',
                      ref=0.0, band=(-zero, zero), step=0.5, interval='std_bias_mc', clip=BIAS_LIMIT)

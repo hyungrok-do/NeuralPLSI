@@ -7,16 +7,19 @@
 #' Each fit uses all rows and minimizes the outcome loss (mean squared error,
 #' binary cross-entropy, or the negative Breslow partial likelihood divided by
 #' the number of events) plus \eqn{g(0)^2} and \code{weight_decay}/2 times the
-#' squared link-network weights, by full-batch L-BFGS. \eqn{\beta} has unit
-#' length and \eqn{\beta_1 \ge 0}. With \eqn{\beta} and \eqn{g} fixed,
-#' \eqn{\gamma} and the optional intercept are then fitted exactly.
+#' squared link-network weights, by full-batch L-BFGS run to convergence (until
+#' the objective falls by less than a relative \eqn{10^{-9}} over 20
+#' iterations). \eqn{\beta} has unit length and \eqn{\beta_1 \ge 0}. With
+#' \eqn{\beta} and \eqn{g} fixed, \eqn{\gamma} and the optional intercept are
+#' then fitted exactly.
 #'
-#' \code{optimizer = "adam"} is a baseline for typical neural-network training,
-#' not a recommended estimator: AdamW on minibatches of \code{batch_size} rows
-#' of a random 80\% of the data, for at most \code{max_iter} epochs, stopping
-#' after \code{patience} epochs without improvement on the other 20\%.
-#' \code{optimizer = "adam_exact_gamma"} is the same AdamW fit followed by the
-#' exact \eqn{\gamma} fit of L-BFGS on all rows, an ablation of the two.
+#' The other two optimizers train like typical neural networks: AdamW on
+#' minibatches of \code{batch_size} rows of a random 80\% of the data, for at
+#' most \code{max_iter} epochs, stopping after \code{patience} epochs without
+#' improvement on the other 20\%. Then, on all rows, \code{"adam_exact_gamma"}
+#' fits \eqn{\gamma} (and the intercept) exactly, and \code{"adam_frozen"}
+#' takes the frozen correction: Newton steps on \eqn{\beta}, \eqn{\gamma} and
+#' the intercept with the network held fixed, to convergence.
 #'
 #' Data are converted to float32 (round to nearest, as numpy's
 #' \code{astype(float32)}), so a fit equals the Python fit of the same data
@@ -39,15 +42,16 @@
 #' @param add_intercept Fit an intercept (not for Cox outcomes). \code{x} and
 #'   \code{z} then cannot have a column named \code{(Intercept)}.
 #' @param initial Start from a linear, logistic or Cox regression fit.
-#' @param optimizer \code{"lbfgs"}, the \code{"adam"} baseline, or
-#'   \code{"adam_exact_gamma"}, the baseline followed by the exact \eqn{\gamma} fit.
+#' @param optimizer \code{"lbfgs"}, \code{"adam_exact_gamma"} (AdamW, then the
+#'   exact \eqn{\gamma} fit) or \code{"adam_frozen"} (AdamW, then the frozen
+#'   correction).
 #' @param batch_size,learning_rate,patience AdamW settings.
 #' @param seed Integer seed in \eqn{[0, 2^{53}]} for the initialization.
 #' @return An object of class \code{c("neuralplsi", "plsi")}: a list with
 #'   \code{coefficients}, \code{beta}, \code{gamma}, \code{intercept},
 #'   \code{family}, \code{settings}, \code{diagnostics}, \code{data},
 #'   \code{seed}, \code{call}, and the engine \code{state}.
-#' @seealso \code{\link{plsi_bootstrap}}, \code{\link{predict.plsi}},
+#' @seealso \code{\link{plsi_bootstrap}}, \code{\link{plsi_sandwich}}, \code{\link{predict.plsi}},
 #'   \code{\link{save_model}}, \code{\link{splineplsi}}
 #' @examples
 #' set.seed(1)
@@ -63,7 +67,7 @@ neuralplsi <- function(x, z, y, family = c("continuous", "binary", "cox"),
                        hidden_units = 32, n_hidden_layers = 2,
                        activation = c("ELU", "LeakyReLU", "ReLU", "Tanh"),
                        weight_decay = 1e-3, max_iter = 5000, add_intercept = FALSE,
-                       initial = FALSE, optimizer = c("lbfgs", "adam", "adam_exact_gamma"),
+                       initial = FALSE, optimizer = c("lbfgs", "adam_exact_gamma", "adam_frozen"),
                        batch_size = 64, learning_rate = 1e-3, patience = 10, seed = 0) {
   call <- match.call()
   family <- match.arg(family)
@@ -121,10 +125,12 @@ neuralplsi_object <- function(pointer, xnames = NULL, znames = NULL) {
                    activation = names(activations)[config[7L] + 1L],
                    weight_decay = info$hyper[1L], max_iter = config[9L],
                    add_intercept = config[5L] == 1L, initial = config[10L] == 1L,
-                   optimizer = names(optimizers)[config[11L] + 1L], batch_size = config[12L],
+                   optimizer = names(optimizers)[match(config[11L], optimizers)], batch_size = config[12L],
                    learning_rate = info$hyper[3L], patience = config[13L])
   diagnostics <- stats::setNames(as.list(info$diagnostics),
-                                 c("iterations", "gamma_iterations", "objective", "best_epoch"))
+                                 c("iterations", if (config[11L] == optimizers[["adam_frozen"]])
+                                   "correction_iterations" else "gamma_iterations",
+                                   "objective", "best_epoch"))
   structure(list(coefficients = coefficients, beta = beta, gamma = gamma, intercept = intercept,
                  family = names(families)[config[6L] + 1L], settings = settings,
                  diagnostics = diagnostics, data = NULL, seed = NULL, call = NULL,

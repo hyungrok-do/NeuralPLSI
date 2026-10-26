@@ -11,20 +11,19 @@ from neuralplsi.simulation import simulate_data
 
 
 def baseline(family, **options):
-    settings = dict(optimizer='adam', max_iter=60, batch_size=16, patience=3, hidden_units=4,
+    settings = dict(optimizer='adam_exact_gamma', max_iter=60, batch_size=16, patience=3, hidden_units=4,
                     n_hidden_layers=1, add_intercept=family != 'cox')
     settings.update(options)
     return NeuralPLSI(family=family, **settings)
 
 
-class AdamBaselineTest(unittest.TestCase):
-    def test_early_stopping_restores_the_best_epoch_without_a_gamma_fit(self):
+class AdamTest(unittest.TestCase):
+    def test_early_stopping_restores_the_best_epoch(self):
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
                 x, z, y, *_ = simulate_data(150, outcome=family, seed=8)
                 stopped = baseline(family).fit(x, z, y, random_state=2)
                 d = stopped.fit_diagnostics
-                self.assertEqual(d['gamma_iterations'], 0)
                 self.assertTrue(0 < d['best_epoch'] <= d['iterations'] <= 60)
                 if d['iterations'] < 60:
                     self.assertEqual(d['iterations']-d['best_epoch'], 3)
@@ -57,11 +56,11 @@ class AdamBaselineTest(unittest.TestCase):
         np.testing.assert_array_equal(restored.predict(x, z), model.predict(x, z))
         np.testing.assert_array_equal(pickle.loads(pickle.dumps(model)).predict(x, z), model.predict(x, z))
 
-    def test_bootstrap_refits_use_the_same_baseline_procedure(self):
-        for family in ('continuous', 'binary', 'cox'):
-            with self.subTest(family=family):
+    def test_bootstrap_refits_use_the_same_procedure(self):
+        for family, optimizer in (('continuous', 'adam_exact_gamma'), ('binary', 'adam_frozen'), ('cox', 'adam_frozen')):
+            with self.subTest(family=family, optimizer=optimizer):
                 x, z, y, *_ = simulate_data(120, outcome=family, seed=5)
-                model = baseline(family).fit(x, z, y, random_state=4)
+                model = baseline(family, optimizer=optimizer).fit(x, z, y, random_state=4)
                 before = model.net.to_bytes()
                 a = model.inference_bootstrap(x, z, y, n_samples=3, random_state=9, n_jobs=1, g_grid=[-1., 0., 1.])
                 b = model.inference_bootstrap(x, z, y, n_samples=3, random_state=9, n_jobs=3, g_grid=[-1., 0., 1.])
@@ -71,28 +70,32 @@ class AdamBaselineTest(unittest.TestCase):
                     rows = bootstrap_indices(len(x), 9, r)
                     fitted = NativeModel.from_bytes(before)
                     fitted.fit(x[rows], z[rows], y[rows], random_state=9+1337+r)
-                    self.assertEqual(fitted.fit_diagnostics['gamma_iterations'], 0)
                     beta, gamma, _ = fitted.coefficients()
                     np.testing.assert_array_equal(a['beta_samples'][r], beta)
                     np.testing.assert_array_equal(a['gamma_samples'][r], gamma)
 
-    def test_exact_gamma_option_refits_only_gamma_on_all_rows(self):
+    def test_exact_gamma_and_frozen_correction_share_the_adamw_fit(self):
         grid = np.linspace(-2, 2, 9)
         for family in ('continuous', 'binary', 'cox'):
             with self.subTest(family=family):
                 x, z, y, *_ = simulate_data(200, outcome=family, seed=4)
                 x, z, y = (a.astype('float32') for a in (x, z, y))
-                base = baseline(family).fit(x, z, y, random_state=2)
-                exact = baseline(family, optimizer='adam_exact_gamma').fit(x, z, y, random_state=2)
-                # The AdamW fit is shared: beta, the link and the selected epoch are identical.
-                np.testing.assert_array_equal(exact.beta, base.beta)
-                np.testing.assert_array_equal(exact.g_function(grid), base.g_function(grid))
-                d, e = base.fit_diagnostics, exact.fit_diagnostics
+                exact = baseline(family).fit(x, z, y, random_state=2)
+                frozen = baseline(family, optimizer='adam_frozen').fit(x, z, y, random_state=2)
+                # The AdamW fit is shared, and neither correction changes the link network.
+                np.testing.assert_array_equal(exact.g_function(grid), frozen.g_function(grid))
+                d, e = frozen.fit_diagnostics, exact.fit_diagnostics
                 self.assertEqual((e['iterations'], e['best_epoch'], e['objective']),
                                  (d['iterations'], d['best_epoch'], d['objective']))
-                self.assertEqual(d['gamma_iterations'], 0)
                 self.assertGreater(e['gamma_iterations'], 0)
-                self.assertFalse(np.array_equal(exact.gamma, base.gamma))
+                # The frozen correction moves beta, which the exact gamma fit leaves alone.
+                self.assertGreater(d['correction_iterations'], 0)
+                self.assertFalse(np.allclose(frozen.beta, exact.beta, atol=1e-4))
+                self.assertAlmostEqual(float(np.linalg.norm(frozen.net.weights[:x.shape[1]])), 1., places=5)
+                if family != 'cox':
+                    # Corrected to convergence: no Newton step remains.
+                    after = frozen.inference_sandwich(x, z, y, method='frozen')
+                    self.assertLess(max(after['newton_beta'], after['newton_gamma']), 1e-3)
                 # Gamma and the intercept are the exact fit on all rows, given the index and link.
                 g = exact.predict_gxb(x).astype(float)
                 coefficients = np.append(exact.gamma, exact.intercept_val if family != 'cox' else [])
@@ -115,10 +118,46 @@ class AdamBaselineTest(unittest.TestCase):
                     np.testing.assert_array_equal(draws['gamma_samples'][r], fitted.coefficients()[1])
 
     def test_invalid_settings(self):
-        for options in (dict(optimizer='sgd'), dict(optimizer='adam_gamma'), dict(learning_rate=0.), dict(patience=0), dict(batch_size=0)):
+        for options in (dict(optimizer='sgd'), dict(optimizer='adam'), dict(optimizer='adam_gamma'), dict(learning_rate=0.), dict(patience=0), dict(batch_size=0)):
             with self.subTest(**options):
                 with self.assertRaises(ValueError):
                     baseline('continuous', **options)
+
+
+class SandwichTest(unittest.TestCase):
+    def test_full_and_frozen_sandwich(self):
+        from statistics import NormalDist
+        for family in ('continuous', 'binary'):
+            with self.subTest(family=family):
+                x, z, y, *_ = simulate_data(300, outcome=family, seed=6)
+                model = NeuralPLSI(family=family, hidden_units=4, n_hidden_layers=1, add_intercept=True).fit(x, z, y, random_state=1)
+                full = model.inference_sandwich(x, z, y, ci=.9, n_jobs=1)
+                self.assertEqual(full['method'], 'full')
+                for block in ('beta', 'gamma', 'intercept'):
+                    se = full[block+'_se']
+                    self.assertTrue(np.all(np.isfinite(se)) and np.all(se > 0))
+                    estimate = np.atleast_1d(full[block+'_hat'])
+                    np.testing.assert_allclose(full[block+'_lb'], estimate-NormalDist().inv_cdf(.95)*se)
+                np.testing.assert_array_equal(model.beta_se, full['beta_se'])
+                # Threads split the Hessian's columns without changing it.
+                np.testing.assert_array_equal(model.inference_sandwich(x, z, y, ci=.9, n_jobs=3)['beta_se'], full['beta_se'])
+                # At a converged L-BFGS fit, almost no Newton step remains.
+                self.assertLess(full['newton_beta'], .05)
+                frozen = model.inference_sandwich(x, z, y, method='frozen')
+                self.assertTrue(np.all(frozen['beta_se'] > 0))
+                corrected = baseline(family, optimizer='adam_frozen').fit(x, z, y, random_state=2)
+                self.assertEqual(corrected.inference_sandwich(x, z, y)['method'], 'frozen')
+
+    def test_sandwich_refuses_cox_and_large_networks(self):
+        x, z, y, *_ = simulate_data(100, outcome='cox', seed=6)
+        model = baseline('cox').fit(x, z, y, random_state=1)
+        with self.assertRaisesRegex(RuntimeError, 'continuous and binary'):
+            model.inference_sandwich(x, z, y)
+        x, z, y, *_ = simulate_data(100, outcome='continuous', seed=6)
+        model = NeuralPLSI(hidden_units=100, n_hidden_layers=2, max_iter=1).fit(x, z, y)  # 10,413 weights
+        with self.assertRaisesRegex(RuntimeError, 'at most 8000'):
+            model.inference_sandwich(x, z, y)
+        self.assertTrue(np.all(model.inference_sandwich(x, z, y, method='frozen')['beta_se'] > 0))
 
 
 if __name__ == '__main__':

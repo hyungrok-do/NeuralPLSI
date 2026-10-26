@@ -5,7 +5,7 @@ beta = np.array([1, 0.7, -0.5, 0.5, 0.3, -0.1, 0, 0])
 beta = beta / np.linalg.norm(beta)
 gamma = np.array([1, -0.5, 0.5])
 
-def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3, seed=0, x_dist='normal'):
+def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3, seed=0, x_dist='normal', rho=0.3):
     # Preserve the historical RandomState draws without changing caller RNG state.
     rng = np.random.RandomState(seed)
 
@@ -19,7 +19,8 @@ def simulate_data(n, outcome='continuous', g_type='sigmoid', censoring_rate=0.3,
     g_fn = g_dict[g_type]
 
     p = len(beta)
-    Sigma = np.full((p, p), 0.3)
+    # Equicorrelated exposures; rho = 0.3 is the design of every reported study.
+    Sigma = np.full((p, p), float(rho))
     np.fill_diagonal(Sigma, 1)
 
     U = multivariate_normal.rvs(mean=np.zeros(p), cov=Sigma, size=n, random_state=rng)

@@ -128,6 +128,22 @@ number of draws: for the same `random_state`, the first B draws of a longer run
 are identical. For the same `random_state`, both estimators are refitted on the
 same resampled rows.
 
+`inference_sandwich(X, Z, y, method='auto', ci=0.95, n_jobs='auto')` gives
+standard errors and Wald intervals for beta, gamma and the intercept without
+refitting: the variance of the minimizer of the fit's objective, `H^-1 C H^-1 /
+n^2`, computed by the engine in double precision on the rows given (those the
+model was fitted on), for continuous and binary outcomes. `method='full'` takes
+the Hessian and score covariance over every weight of the network (dense, for
+networks of at most 8,000 weights; `n_jobs` threads); `method='frozen'` over
+beta, gamma and the intercept with the network held fixed (any size, slightly
+narrower). `'auto'` is `'frozen'` for `optimizer='adam_frozen'` and `'full'`
+otherwise. It returns the SEs and interval endpoints (`beta_se`, `beta_lb`,
+`beta_ub`, ...) and, since the formula describes a minimizer, how far the fit
+is from one: the largest beta and gamma components of the remaining Newton step
+in SE units (`newton_beta`, `newton_gamma`; well below 1 at a converged fit) and
+the Hessian's eigenvalue nearest zero (`min_eigenvalue`). `summary()` then
+shows these SEs. `results/sandwich` has its coverage in simulation.
+
 `save` writes the network weights, settings and index orientation to a text
 file that round-trips float32 exactly; bootstrap results are not saved with it.
 Fitted models can also be pickled.
@@ -147,11 +163,12 @@ optimizer='lbfgs', batch_size=64, learning_rate=1e-3, patience=10)`
 | `max_iter` | L-BFGS iterations (AdamW epochs); 0 only initializes. |
 | `add_intercept` | Intercept for continuous and binary outcomes. Cox models reject it. |
 | `initial` | Start from a linear, logistic or Cox regression fitted to all rows. |
-| `optimizer` | `'lbfgs'` (the estimator), `'adam'`, the minibatch AdamW baseline, with `batch_size`, `learning_rate` and `patience`, or `'adam_exact_gamma'`, the same AdamW fit followed by the exact gamma fit of L-BFGS. The baseline is for comparison and is not recommended. |
+| `optimizer` | `'lbfgs'` (the default: full-batch L-BFGS to convergence), or minibatch AdamW with early stopping (`batch_size`, `learning_rate`, `patience`) followed on all rows by `'adam_exact_gamma'`, the exact gamma fit, or `'adam_frozen'`, the frozen correction of beta, gamma and the intercept. |
 
-Each fit uses all rows: L-BFGS minimizes the outcome loss plus a `g(0)^2` anchor
-and the penalty until the objective stops decreasing, then gamma (and the
-intercept) are fitted exactly by Newton iterations. `fit(X, Z, y, random_state=0)`
+Each L-BFGS fit uses all rows: it minimizes the outcome loss plus a `g(0)^2`
+anchor and the penalty until the objective converges (a relative decrease below
+1e-9 over 20 iterations), then gamma (and the intercept) are fitted exactly by
+Newton iterations. `fit(X, Z, y, random_state=0)`
 seeds the initialization (an integer in `[0, 2**64)`). `device='cpu'` (or its
 alias `'auto'`), `backend='cpp'` and `num_workers=0` are accepted for
 compatibility and are the only supported values.
@@ -216,7 +233,7 @@ squares for continuous outcomes, a zero full-data gamma gradient for binary and
 Cox). They check bootstrap orientation, serial and threaded reproducibility,
 that each draw equals an explicit refit of its resampled rows, native summaries
 against NumPy percentiles, Cox risk sets with ties, prediction chunk boundaries,
-serialization, the AdamW baseline, the spline fit and bootstrap, `Z=None`, the
+serialization, the AdamW optimizers and the sandwich, the spline fit and bootstrap, `Z=None`, the
 library search and that the installed version, the package version and the
 engine version agree. One test blocks Python refits, random number generation,
 process and thread creation and percentile functions, and asserts that exactly

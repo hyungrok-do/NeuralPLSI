@@ -2,7 +2,7 @@
 
 Usage: python reproduce/sandwich/summarize_matched.py [--input output/sandwich/matched] [--out results/sandwich]
 
-Writes matched_comparison.csv: per arm, setting and block, the median SE over
+Writes matched_comparison.csv: per setting and block, the median SE over
 the datasets divided by the empirical SD (averaged over coordinates) for the
 sandwich and the bootstrap, the coverage of the sandwich's Wald interval and of
 the bootstrap's percentile interval (over coordinates and datasets), the
@@ -23,15 +23,14 @@ def main(argv=None):
     parser.add_argument('--out', default='results/sandwich')
     args = parser.parse_args(argv)
     table = []
-    for arm in ('converged', 'current'):
-        for outcome in ('continuous', 'binary'):
+    for outcome in ('continuous', 'binary'):
             for g in ('linear', 'sigmoid', 'threshold'):
-                rows = [json.loads(line) for line in open(Path(args.input)/f'{arm}_{outcome}_{g}.jsonl')]
+                rows = [json.loads(line) for line in open(Path(args.input)/f'{outcome}_{g}.jsonl')]
                 for block, truth in (('beta', TRUE_BETA), ('gamma', TRUE_GAMMA)):
                     est = np.array([r[block] for r in rows]); sd = est.std(axis=0, ddof=1)
                     sw, bs = np.array([r['sandwich_'+block] for r in rows]), np.array([r['boot_se_'+block] for r in rows])
                     lb, ub = np.array([r['boot_lb_'+block] for r in rows]), np.array([r['boot_ub_'+block] for r in rows])
-                    table.append(dict(arm=arm, outcome=outcome, g_fn=g, block=block, datasets=len(rows),
+                    table.append(dict(outcome=outcome, g_fn=g, block=block, datasets=len(rows),
                         se_sd_sandwich=(np.median(sw, axis=0)/sd).mean(), se_sd_bootstrap=(np.median(bs, axis=0)/sd).mean(),
                         coverage_sandwich=(np.abs(est-truth) <= Z*sw).mean(), coverage_bootstrap=((lb <= truth) & (truth <= ub)).mean(),
                         width_ratio=np.median(2*Z*sw)/np.median(ub-lb), se_ratio_per_fit=np.median(sw/bs),

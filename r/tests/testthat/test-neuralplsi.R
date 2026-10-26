@@ -37,7 +37,7 @@ test_that("defaults match the Python NeuralPLSI class", {
     learning_rate = 0.0010000000474974513, patience = 10L))
 })
 
-test_that("intercepts, data frames, vectors and the AdamW baseline work", {
+test_that("intercepts, data frames, vectors and the AdamW optimizers work", {
   data <- simulate("binary")
   fit <- small_fit(data, "binary", add_intercept = TRUE)
   expect_identical(names(coef(fit))[6], "(Intercept)")
@@ -48,15 +48,17 @@ test_that("intercepts, data frames, vectors and the AdamW baseline work", {
   single <- neuralplsi(data$x[, 1], NULL, data$y, family = "binary", hidden_units = 4, max_iter = 50)
   expect_identical(names(coef(single)), "x1")
   expect_equal(unname(coef(single)), 1, tolerance = 1e-5)
-  adam <- small_fit(data, "binary", optimizer = "adam", max_iter = 20, batch_size = 32)
-  expect_identical(adam$settings$optimizer, "adam")
-  expect_lte(adam$diagnostics$best_epoch, 20)
+  frozen <- small_fit(data, "binary", optimizer = "adam_frozen", max_iter = 20, batch_size = 32)
+  expect_identical(frozen$settings$optimizer, "adam_frozen")
+  expect_lte(frozen$diagnostics$best_epoch, 20)
+  expect_gt(frozen$diagnostics$correction_iterations, 0)
+  expect_output(print(frozen), "then the frozen correction")
   exact <- small_fit(data, "binary", optimizer = "adam_exact_gamma", max_iter = 20, batch_size = 32)
-  expect_identical(exact$beta, adam$beta)
-  expect_identical(exact$diagnostics$best_epoch, adam$diagnostics$best_epoch)
-  expect_identical(adam$diagnostics$gamma_iterations, 0)
+  # The AdamW fit is shared; the exact gamma fit leaves beta alone, the frozen correction moves it.
+  expect_identical(exact$diagnostics$best_epoch, frozen$diagnostics$best_epoch)
   expect_gt(exact$diagnostics$gamma_iterations, 0)
-  expect_false(identical(exact$gamma, adam$gamma))
+  expect_false(isTRUE(all.equal(exact$beta, frozen$beta, tolerance = 1e-6)))
+  expect_error(small_fit(data, "binary", optimizer = "adam"), "should be one of")
 })
 
 test_that("models without covariates use z = NULL", {

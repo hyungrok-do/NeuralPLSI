@@ -200,7 +200,7 @@ from analytic derivatives. Both match `reproduce/sandwich/sandwich.py` and
 and 1e-14 (SplinePLSI). The results report the Newton step that remains (in SEs
 of β and γ) and the Hessian's eigenvalue nearest zero, and warn when the step
 exceeds 0.1 SE or the Hessian is indefinite: the sandwich describes a minimizer,
-and the package's stopping rule can end short of one. At n = 500 with 32×2
+which the engine's L-BFGS, run to convergence, reaches. At n = 500 with 32×2
 hidden units (about 1,200 weights) it takes about 3 s on 9 workers.
 
 ## Deployment

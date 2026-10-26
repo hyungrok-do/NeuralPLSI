@@ -23,20 +23,25 @@ fit_line <- function(object) {
   else
     sprintf("Network: %s. AdamW: %d epochs, best validation loss %s at epoch %d%s.", network,
             as.integer(d$iterations), format(d$objective, digits = 6), as.integer(d$best_epoch),
-            if (s$optimizer == "adam_exact_gamma") ", then the exact gamma fit" else "")
+            if (s$optimizer == "adam_exact_gamma") ", then the exact gamma fit"
+            else sprintf(", then the frozen correction (%d Newton steps)", as.integer(d$correction_iterations)))
 }
 
 #' Methods for NeuralPLSI and SplinePLSI fits
 #'
 #' \code{coef()} returns \eqn{\beta}, \eqn{\gamma} and, if fitted, the
 #' intercept, labelled by the column names of \code{x} and \code{z}.
-#' \code{summary()} tabulates them with bootstrap standard errors and percentile
-#' intervals once \code{\link{plsi_bootstrap}} has run. \code{confint()} returns
-#' those intervals; another \code{level} is computed from the stored draws.
+#' \code{summary()} tabulates them with standard errors and intervals once
+#' \code{\link{plsi_bootstrap}} (percentile intervals) or
+#' \code{\link{plsi_sandwich}} (Wald intervals) has run. \code{confint()}
+#' returns those intervals; for the bootstrap, another \code{level} is computed
+#' from the stored draws, and for the sandwich from the SEs.
 #'
 #' @param object,x A \code{neuralplsi} or \code{splineplsi} fit, or its summary.
 #' @param parm Coefficient names or indices; all by default.
-#' @param level Confidence level; by default that of the bootstrap.
+#' @param level Confidence level; by default that of the inference used.
+#' @param inference \code{"bootstrap"}, \code{"sandwich"}, or \code{"auto"}: the
+#'   bootstrap if it has run, otherwise the sandwich.
 #' @param digits Significant digits to print.
 #' @param ... Unused.
 #' @return \code{coef()}: a named numeric vector. \code{summary()}: an object of
@@ -69,24 +74,45 @@ print.plsi <- function(x, digits = max(3L, getOption("digits") - 3L), ...) {
   cat("\n", fit_line(x), "\n", sep = "")
   if (!is.null(x$bootstrap))
     cat(sprintf("Bootstrap: B = %d; see summary() and confint().\n", x$bootstrap$B))
+  if (!is.null(x$sandwich))
+    cat(sprintf("Sandwich (%s); see summary() and confint().\n", x$sandwich$method))
   invisible(x)
 }
 
 #' @rdname plsi-methods
 #' @export
-summary.plsi <- function(object, ...) {
+summary.plsi <- function(object, inference = c("auto", "bootstrap", "sandwich"), ...) {
   estimate <- coef(object)
-  boot <- object$bootstrap
+  which <- inference_used(object, match.arg(inference), required = FALSE)
   table <- cbind(Estimate = estimate)
-  if (!is.null(boot)) {
-    table <- cbind(table, boot$summary[names(estimate), c("se", "lower", "upper"), drop = FALSE])
-    colnames(table) <- c("Estimate", "Std. Error", percent(boot$level))
+  result <- if (is.null(which)) NULL else object[[which]]
+  if (!is.null(result)) {
+    table <- cbind(table, result$summary[names(estimate), c("se", "lower", "upper"), drop = FALSE])
+    colnames(table) <- c("Estimate", "Std. Error", percent(result$level))
   }
   structure(list(model = model_name(object), family = object$family, call = object$call,
                  n = if (is.null(object$data)) NA_integer_ else nrow(object$data$x),
                  coefficients = table, blocks = blocks(object), fit = fit_line(object),
-                 bootstrap = boot[c("B", "seed", "level", "quantile", "workers", "protocol")]),
+                 bootstrap = if (identical(which, "bootstrap"))
+                   result[c("B", "seed", "level", "quantile", "workers", "protocol")],
+                 sandwich = if (identical(which, "sandwich"))
+                   result[c("method", "level", "newton_beta", "newton_gamma", "min_eigenvalue")]),
             class = "summary.plsi")
+}
+
+# The inference a summary or interval uses: "auto" is the bootstrap if it has
+# run, otherwise the sandwich.
+inference_used <- function(object, inference, required = TRUE) {
+  if (inference == "auto")
+    inference <- if (!is.null(object$bootstrap)) "bootstrap" else if (!is.null(object$sandwich)) "sandwich"
+  if (is.null(inference) || is.null(object[[inference]])) {
+    if (!required) return(NULL)
+    stop(sprintf("No %s results: run %s first",
+                 if (is.null(inference)) "inference" else inference,
+                 if (identical(inference, "sandwich")) "plsi_sandwich()" else "plsi_bootstrap() or plsi_sandwich()"),
+         call. = FALSE)
+  }
+  inference
 }
 
 #' @rdname plsi-methods
@@ -103,24 +129,31 @@ print.summary.plsi <- function(x, digits = max(3L, getOption("digits") - 3L), ..
   }
   cat("\n", x$fit, "\n", sep = "")
   b <- x$bootstrap
+  s <- x$sandwich
   if (length(b))
     cat(sprintf(paste("Bootstrap: B = %d pairs resamples with cold-start refits, seed %s,",
                       "%s%% percentile intervals (%s quantiles), %d thread%s.\n"),
                 b$B, format(b$seed, scientific = FALSE), format(100 * b$level), b$quantile,
                 b$workers, if (b$workers == 1L) "" else "s"))
+  else if (length(s))
+    cat(sprintf(paste("Sandwich (%s): %s%% Wald intervals; remaining Newton step %s SE (beta),",
+                      "%s SE (gamma); Hessian eigenvalue nearest zero %s.\n"),
+                s$method, format(100 * s$level), format(s$newton_beta, digits = 2),
+                format(s$newton_gamma, digits = 2), format(s$min_eigenvalue, digits = 2)))
   else
-    cat("No bootstrap: run plsi_bootstrap() for standard errors and intervals.\n")
+    cat("No inference: run plsi_bootstrap() or plsi_sandwich() for standard errors and intervals.\n")
   invisible(x)
 }
 
 #' @rdname plsi-methods
 #' @export
-confint.plsi <- function(object, parm, level = NULL, ...) {
-  boot <- object$bootstrap
-  if (is.null(boot)) stop("No bootstrap results: run plsi_bootstrap() first", call. = FALSE)
-  if (is.null(level)) level <- boot$level
-  summary <- if (identical(as_level(level), boot$level)) boot$summary
-             else draw_summary(boot$draws, level, boot$quantile)
+confint.plsi <- function(object, parm, level = NULL, inference = c("auto", "bootstrap", "sandwich"), ...) {
+  which <- inference_used(object, match.arg(inference))
+  result <- object[[which]]
+  if (is.null(level)) level <- result$level
+  summary <- if (identical(as_level(level), result$level)) result$summary
+             else if (which == "sandwich") wald_summary(coef(object), result$summary[, "se"], level)
+             else draw_summary(result$draws, level, result$quantile)
   intervals <- summary[, c("lower", "upper"), drop = FALSE]
   colnames(intervals) <- percent(level)
   if (missing(parm)) intervals else intervals[parm, , drop = FALSE]
