@@ -3,7 +3,7 @@
 import {simulatedTable, parseCsv, describeColumns, LINKS, NHANES_SETUP, NHANES_SETTINGS, MAX_LEVELS} from './data.js';
 import {ROLES, blockedRole, blockedCategorical, initialRoles, presetRoles, roleOf, assignRole, setRoleForMany, selection,
         suggestFamily, changeFamily, planCsv, planFacts, summaryRows} from './roles.js';
-import {NEURAL_DEFAULTS, networkProblem} from './engine.js';
+import {NEURAL_DEFAULTS, networkProblem, parameterCount} from './engine.js';
 import {Pool, Cancelled} from './pool.js';
 import {linkChart, forestChart, histogram} from './charts.js';
 import {fmt, duration, toCsv, linspace, mergeRows, displayText} from './stats.js';
@@ -28,10 +28,14 @@ const blankSetup = () => ({table: null, columns: null, roles: null, logged: new 
   fileName: '', example: false,
   options: {outcomeType: 'continuous', standardize: true, logOutcome: false, standardizeOutcome: false},
   truth: null, design: null, simulation: null, error: null});
-// nhanesError keeps why the NHANES example did not load. booting is true while a
-// bootstrap of the fit shown runs. tab is the column setup's open tab.
+// nhanesError keeps why the NHANES example did not load. booting and
+// sandwiching are true while a bootstrap or the sandwich of the fit shown runs;
+// sandwich holds each model's sandwich SEs, and view which standard errors the
+// results show when there are both. tab is the column setup's open tab.
 const state = {setups: {csv: blankSetup(), simulated: blankSetup()}, nhanesError: null,
-               nhanesLoading: null, fit: null, boot: null, busy: false, booting: false, family: null, tab: 'columns'};
+               nhanesLoading: null, fit: null, boot: null, sandwich: null, busy: false, booting: false,
+               sandwiching: false, view: 'bootstrap', family: null, tab: 'columns'};
+const Z95 = 1.959964;
 // The NHANES example's file, as it is named in the preprocessing file.
 const NHANES_FILE = '12940_2020_644_MOESM2_ESM.csv';
 // Seeds must leave room for the bootstrap fit seeds seed+1337+b below 2**64.
@@ -69,6 +73,7 @@ function announce(text) {
 // ---- Controls
 
 const source = () => form.elements.source.value;
+const inference = () => form.elements.inference.value;
 const setup = () => state.setups[source()];
 const outcomeType = () => setup().options.outcomeType;
 const plural = (k, word, many = `${word}s`) => `${k} ${k === 1 ? word : many}`;
@@ -266,6 +271,16 @@ function onControls() {
   renderSummary(status.facts);
   familyNote();
   setText($('fit-status'), reason ? `Cannot fit yet. ${reason}${/[.!?]$/.test(reason) ? '' : '.'}` : '');
+  // The standard errors: B only for the bootstrap; the sandwich needs a continuous or binary outcome.
+  const method = inference();
+  $('bootstrap-size').hidden = method === 'sandwich';
+  $('run').textContent = {bootstrap: 'Fit with bootstrap', sandwich: 'Fit with sandwich SEs', both: 'Fit with both'}[method];
+  const cox = field('family').value === 'cox';
+  for (const e of form.elements.inference) if (e.value !== 'bootstrap') e.disabled = cox;
+  if (cox && method !== 'bootstrap') {
+    field('inference').value = 'bootstrap';
+    return onControls();
+  }
   for (const id of ['run', 'fit']) $(id).disabled = state.busy || Boolean(reason);
   const stale = state.fit && controlsKey() !== state.fit.key;
   document.querySelector('.stale')?.toggleAttribute('hidden', !stale);
@@ -712,44 +727,56 @@ function busy(on, {from = null, rendered = false} = {}) {
   }
 }
 
-// Fit with bootstrap (`bootstrap` true) fits, then bootstraps the fit; when the
-// controls still match the fit shown, it bootstraps that fit. Single fit only fits.
-async function run(bootstrap) {
+// The main run (`main` true) fits, then computes the standard errors chosen
+// (bootstrap, sandwich or both); when the controls still match the fit shown, it
+// adds them to that fit. Single fit only fits.
+async function run(main) {
+  const method = main ? inference() : 'none', wantBootstrap = method === 'bootstrap' || method === 'both';
+  const wantSandwich = method === 'sandwich' || method === 'both';
   let data, s, B;
   try {
     data = readData(); s = settings();
     const problem = s.neural ? networkProblem(data.p, data.q, s) : null;
     if (problem) throw new Error(problem);
-    if (bootstrap) B = integer('B', 2, 1000, 'B');
+    if (wantBootstrap) B = integer('B', 2, 1000, 'B');
   } catch (error) {
     return message(error.message);
   }
   message(null);
-  const key = controlsKey(), from = $(bootstrap ? 'run' : 'fit');
-  let step = bootstrap && state.fit?.key === key ? 'bootstrap' : 'fit', rendered = false;
+  const key = controlsKey(), from = $(main ? 'run' : 'fit');
+  let step = main && state.fit?.key === key ? 'reuse' : 'fit', rendered = false;
   busy(true, {from});
-  // A bootstrap of the fit shown runs with its results in view.
-  if (step === 'bootstrap') showStep('results');
+  // Standard errors for the fit shown are computed with its results in view.
+  if (step === 'reuse') showStep('results');
+  if (method === 'sandwich') state.view = 'sandwich';
+  else if (wantBootstrap) state.view = 'bootstrap';
   try {
     let done = '';
     if (step === 'fit') {
-      const seconds = await fitStep(data, s, key, bootstrap);
+      const seconds = await fitStep(data, s, key, {booting: wantBootstrap, sandwiching: wantSandwich});
       rendered = true;
       done = `Fit done in ${duration(seconds)}.`;
     }
-    if (bootstrap) {
+    if (wantSandwich && !state.sandwich) {
+      step = 'sandwich';
+      await sandwichStep(done);
+      rendered = true;
+      done = '';
+    }
+    if (wantBootstrap) {
       step = 'bootstrap';
       await bootstrapStep(B, done);
       rendered = true;
-    } else announce(`${done} The results are below.`);
+    } else if (!wantSandwich) announce(`${done} The results are below.`);
   } catch (error) {
     // A failed replicate invalidates the whole bootstrap, as in the native engine.
-    if (step === 'bootstrap') pool.cancel();
+    if (step === 'bootstrap' || step === 'sandwich') pool.cancel();
     const cancelled = error instanceof Cancelled;
-    message(cancelled ? `${step === 'fit' ? 'Fit' : 'Bootstrap'} cancelled.` : error.message, cancelled ? 'info' : 'error');
+    const what = {fit: 'Fit', reuse: 'Fit', sandwich: 'Sandwich', bootstrap: 'Bootstrap'}[step];
+    message(cancelled ? `${what} cancelled.` : error.message, cancelled ? 'info' : 'error');
   } finally {
-    if (state.booting) {
-      state.booting = false;
+    if (state.booting || state.sandwiching) {
+      state.booting = state.sandwiching = false;
       render();
     }
     busy(false, {from, rendered});
@@ -758,7 +785,7 @@ async function run(bootstrap) {
 
 // Fits NeuralPLSI (and SplinePLSI) on all rows and draws the results; returns
 // the seconds it took. With a bootstrap to follow, the tables say it is running.
-async function fitStep(data, s, key, bootstrap) {
+async function fitStep(data, s, key, {booting, sandwiching}) {
   // The file is named as it was when the fit started: another may be open by the time it ends.
   const fileName = data.source === 'simulated' ? null : setup().fileName;
   const names = MODELS.filter(([kind]) => s[kind]).map(([, name]) => name), started = performance.now();
@@ -769,11 +796,61 @@ async function fitStep(data, s, key, bootstrap) {
   const [neural, spline] = await Promise.all([s.neural ? pool.call(next.next().value, 'fitNeural', [data, s, s.seed]) : null,
     s.spline ? pool.call(next.next().value, 'fitSpline', [data, s.seed, s.splineSettings]) : null]);
   state.fit = {data, settings: s, key, fileName, neural, spline};
-  state.boot = null;
-  state.booting = bootstrap;
+  state.boot = state.sandwich = null;
+  state.booting = booting;
+  state.sandwiching = sandwiching;
   showStep('results');
   render();
   return (performance.now()-started)/1000;
+}
+
+// The sandwich standard errors of the fit shown. NeuralPLSI's Hessian columns
+// (by central differences of the engine's exact double-precision gradient), its
+// row scores and gradient are split across the pool's workers, and one worker
+// assembles them (sandwich.js); SplinePLSI's (knots held fixed) is one worker's
+// job. `done` (the fit's announcement) comes before the sandwich's.
+async function sandwichStep(done) {
+  const f = state.fit, {data, settings: s} = f, started = performance.now();
+  state.sandwiching = true;
+  render();
+  clock('');
+  announce(`${done ? `${done} ` : ''}Sandwich standard errors started.`);
+  const workers = await pool.ensure(pool.size), bar = $('progress').querySelector('progress');
+  const result = {};
+  if (f.neural) {
+    const d = parameterCount(data.p, data.q, s.hiddenUnits, s.layers, s.intercept);
+    const arrays = {x: Float32Array.from(data.x), z: Float32Array.from(data.z), y: Float32Array.from(data.y), n: data.n};
+    const width = Math.max(1, Math.ceil(d/(workers.length*4))), jobs = [['weights'], ['gradient'], ['scores', 0, data.n]];
+    for (let begin = 0; begin < d; begin += width) jobs.push(['hessian', begin, Math.min(d, begin+width)]);
+    const parts = {hessian: new Float64Array(d*d)}, total = jobs.length;
+    let count = 0;
+    const show = () => {
+      bar.value = count/total;
+      $('progress-text').textContent = `Sandwich: ${count} of ${total} parts · ${duration((performance.now()-started)/1000)} elapsed · ${workers.length} workers`;
+    };
+    show();
+    await Promise.all(workers.map(async worker => {
+      while (jobs.length) {
+        const [part, begin, end] = jobs.shift();
+        const out = await pool.call(worker, 'sandwichPart', [f.neural.state, arrays, part, begin, end]);
+        if (part === 'hessian') parts.hessian.set(out, begin*d);
+        else parts[part] = out;
+        ++count;
+        show();
+      }
+    }));
+    $('progress-text').textContent = 'Sandwich: solving…';
+    result.neural = await pool.call(workers[0], 'neuralSandwich', [{p: data.p, q: data.q, intercept: s.intercept ? 1 : 0,
+      weights: parts.weights, n: data.n, gradient: parts.gradient.gradient, scoreSum: parts.scores.sum,
+      outer: parts.scores.outer, hessian: parts.hessian}]);
+  }
+  if (f.spline) result.spline = await pool.call(workers[0], 'splineSandwich',
+    [{x: data.x, z: data.z, y: data.y, n: data.n, p: data.p, q: data.q, family: data.family}, f.spline,
+     {alpha: f.spline.alpha, degree: f.spline.degree}]);
+  state.sandwich = {...result, seconds: (performance.now()-started)/1000};
+  state.sandwiching = false;
+  render();
+  announce(`Sandwich standard errors done in ${duration(state.sandwich.seconds)}. They are in the results.`);
 }
 
 // B bootstrap refits of the fit shown, in parallel on the pool's workers. `done`
@@ -829,8 +906,27 @@ async function bootstrapStep(B, done) {
 
 // ---- Results
 
-// Summary rows of a model's bootstrap: mean, SD, lower, upper over columns [from, from+count).
-function interval(kind, from, count) {
+// Which standard errors the results show for a model: the chosen view when the
+// model has it, else whichever it has.
+function method(kind) {
+  if (state.view === 'sandwich' && state.sandwich?.[kind]) return 'sandwich';
+  return state.boot?.[kind] ? 'bootstrap' : state.sandwich?.[kind] ? 'sandwich' : null;
+}
+
+// A model's estimates in the order of its standard errors: beta, gamma, intercept.
+const estimates = kind => [...state.fit[kind].beta, ...state.fit[kind].gamma,
+                           ...(kind === 'neural' && state.fit.neural.intercept !== null ? [state.fit.neural.intercept] : [])];
+
+// SEs and 95% intervals over columns [from, from+count): from the bootstrap's
+// summary rows (SD, lower and upper percentiles), or the sandwich's SEs with
+// Wald intervals. The bootstrap's columns go on with g on its grid.
+function interval(kind, from, count, which = method(kind)) {
+  if (which === 'sandwich') {
+    const sw = state.sandwich?.[kind];
+    if (!sw || from+count > sw.se.length) return null;
+    const se = Array.from(sw.se.subarray(from, from+count)), est = estimates(kind).slice(from, from+count);
+    return {se, lo: est.map((e, i) => e-Z95*se[i]), hi: est.map((e, i) => e+Z95*se[i])};
+  }
   const b = state.boot?.[kind];
   if (!b) return null;
   const row = r => Array.from(b.summary.subarray(r*b.D+from, r*b.D+from+count));
@@ -869,7 +965,8 @@ const cellName = text => h('span', {class: 'cell-name'}, breakable(text));
 
 function estimateCells(estimate, ci) {
   return [h('td', {}, fmt(estimate)), ci ? [ci.se[0], ci.lo[0], ci.hi[0]].map(v => h('td', {}, fmt(v)))
-                                         : h('td', {class: 'na', colspan: 3}, state.booting ? 'bootstrap running…' : 'no bootstrap')];
+                                         : h('td', {class: 'na', colspan: 3}, state.booting ? 'bootstrap running…' :
+                                             state.sandwiching ? 'sandwich running…' : 'no standard errors')];
 }
 
 function diagnostics() {
@@ -889,10 +986,32 @@ function diagnostics() {
     }], ['RMSE of g vs truth', m => fmt(Math.sqrt(m.g.reduce((s, v, i) => s+(v-link(m.grid[i]))**2, 0)/m.g.length))]);
   }
   rows.push(['Bootstrap', () => state.boot ? `B = ${state.boot.B}, ${duration(state.boot.seconds)}, ${state.boot.workers} workers` :
-    state.booting ? 'running…' : 'none (single fit)']);
+    state.booting ? 'running…' : 'none']);
+  rows.push(['Sandwich', m => {
+    const sw = state.sandwich?.[m.model];
+    return sw ? `done, ${duration(state.sandwich.seconds)}` : state.sandwiching ? 'running…' : d.family === 'cox' ? 'not for Cox' : 'none';
+  }]);
+  if (state.sandwich) rows.push(['Sandwich check', m => sandwichCheck(m.model)]);
   return h('div', {class: 'card'}, h('h3', {}, 'Fit diagnostics'), h('div', {class: 'table-wrap', role: 'region', 'aria-label': 'Fit diagnostics'}, h('table', {},
     h('thead', {}, h('tr', {}, h('th'), models.map(([, name]) => h('th', {}, name)))),
     h('tbody', {}, rows.map(([label, value]) => h('tr', {}, h('td', {}, cellName(label)), models.map(([k]) => h('td', {}, value(f[k])))))))));
+}
+
+// How far the fit is from the minimizer the sandwich describes: the largest
+// beta and gamma components of the Newton step in SE units (for NeuralPLSI; the
+// spline's knots move with beta, so its fixed-knot step is not a convergence
+// check), and the Hessian's eigenvalue nearest zero, with warnings.
+function sandwichCheck(kind) {
+  const sw = state.sandwich?.[kind];
+  if (!sw) return '';
+  const parts = [], warn = [];
+  if (kind === 'neural') {
+    parts.push(`Newton step ${fmt(sw.newtonBeta, 2)} SE (β), ${fmt(sw.newtonGamma, 2)} SE (γ)`);
+    if (Math.max(sw.newtonBeta, sw.newtonGamma) > 0.1) warn.push('the fit may not have converged');
+  }
+  parts.push(`smallest |eigenvalue| ${fmt(sw.eigenvalue, 2)}`);
+  if (kind === 'neural' && sw.eigenvalue < -1e-4) warn.push('the Hessian is indefinite: the SEs may be unstable');
+  return h('span', {}, parts.join('; '), warn.length ? h('span', {class: 'warn-text'}, ` (${warn.join('; ')})`) : null);
 }
 
 function download(name, text, type = 'text/csv') {
@@ -905,16 +1024,17 @@ function download(name, text, type = 'text/csv') {
 }
 
 function estimatesCsv() {
-  const f = state.fit, d = f.data, header = ['model', 'parameter', 'estimate', 'se', 'ci_lower', 'ci_upper'];
+  const f = state.fit, d = f.data, header = ['model', 'parameter', 'estimate', 'se', 'ci_lower', 'ci_upper',
+                                             'se_sandwich', 'ci_lower_sandwich', 'ci_upper_sandwich'];
   if (d.truth) header.push('truth');
   const rows = [];
   for (const [kind, name] of MODELS.filter(([k]) => f[k])) {
     const m = f[kind], params = [...d.names.x.map((n, j) => [`beta[${n}]`, m.beta[j], d.truth?.beta[j]]),
       ...d.names.z.map((n, j) => [`gamma[${n}]`, m.gamma[j], d.truth?.gamma[j]])];
     if (kind === 'neural' && m.intercept !== null) params.push(['intercept', m.intercept, 0]);
-    const ci = interval(kind, 0, params.length);
+    const ci = interval(kind, 0, params.length, 'bootstrap'), sw = interval(kind, 0, params.length, 'sandwich');
     params.forEach(([label, estimate, truth], i) => {
-      const row = [name, label, estimate, ci?.se[i], ci?.lo[i], ci?.hi[i]];
+      const row = [name, label, estimate, ci?.se[i], ci?.lo[i], ci?.hi[i], sw?.se[i], sw?.lo[i], sw?.hi[i]];
       if (d.truth) row.push(truth);
       rows.push(row);
     });
@@ -948,6 +1068,19 @@ function preprocessingJson() {
     x: d.transforms.x, z: d.transforms.z, y: d.transforms.y}, null, 2)+'\n';
 }
 
+// Which standard errors the results show, with a switch when both are there.
+function standardErrorsLine(models) {
+  const has = which => models.some(([k]) => which === 'bootstrap' ? state.boot?.[k] : state.sandwich?.[k]);
+  const label = {bootstrap: () => `bootstrap, B = ${state.boot.B} (percentile intervals)`,
+                 sandwich: () => 'sandwich (estimate ± 1.96 SE)'};
+  const shown = has('sandwich') && (state.view === 'sandwich' || !has('bootstrap')) ? 'sandwich' : has('bootstrap') ? 'bootstrap' : null;
+  if (!shown) return null;
+  const toggle = has('bootstrap') && has('sandwich') ? h('span', {class: 'view-toggle', role: 'group', 'aria-label': 'Standard errors shown'},
+    ['bootstrap', 'sandwich'].map(which => h('button', {type: 'button', 'aria-pressed': String(which === shown),
+      onclick: () => { state.view = which; render(); }}, which === 'bootstrap' ? 'Bootstrap' : 'Sandwich'))) : null;
+  return h('p', {class: 'facts se-line'}, `Standard errors: ${label[shown]()} `, toggle);
+}
+
 function render() {
   const results = $('results'), f = state.fit;
   if (!f) return;
@@ -957,6 +1090,7 @@ function render() {
   const head = h('div', {class: 'card'}, h('div', {class: 'results-head'}, h('h2', {id: 'results-title', tabindex: '-1'}, 'Results'),
       h('span', {class: 'facts'}, h('bdi', {}, label), ` · ${d.family}`)),
     h('p', {class: 'facts'}, describe(d)),
+    standardErrorsLine(models),
     h('p', {class: 'stale', hidden: true}, 'The controls changed after this fit. Fit again to use them.'));
   // g(u) with bands, the truth and the index distribution.
   const gCard = h('div', {class: 'card'}, h('h3', {}, 'Link function g(u)'),
@@ -967,7 +1101,7 @@ function render() {
   // The estimates of β and of γ, with their 95% intervals once the bootstrap has run.
   const forest = (title, id) => h('div', {class: 'card'}, h('h3', {}, title),
     h('div', {class: 'legend'}, models.map(([, name, color]) => h('span', {}, h('i', {class: 'swatch', style: `background:${color}`}), name)),
-      state.boot ? h('span', {}, 'lines: 95% intervals') : null, d.truth ? h('span', {}, h('i', {class: 'key diamond'}), 'Truth') : null),
+      models.some(([k]) => method(k)) ? h('span', {}, 'lines: 95% intervals') : null, d.truth ? h('span', {}, h('i', {class: 'key diamond'}), 'Truth') : null),
     h('div', {class: 'chart', id}));
   const fCard = h('div', {class: 'forests'}, forest('Chemical exposure weights β', 'forest-chart'),
     d.q ? forest('Confounder effects γ', 'gamma-chart') : null);
@@ -983,7 +1117,8 @@ function render() {
       'in R and nplsi_load in C++.' +
       (d.source !== 'simulated' ? ' It takes inputs as they were fitted: transform new data as the preprocessing file says ' +
         '(column order, logs, means and SDs, indicators) before predicting. ' : ' ') : '') +
-      'Estimates are the fit on all rows; SEs and intervals come from the bootstrap.'));
+      'Estimates are the fit on all rows. The estimates file has the bootstrap SEs and percentile intervals (se, ' +
+      'ci_lower, ci_upper) and the sandwich SEs and Wald intervals (se_sandwich, ...), where they were computed.'));
   results.replaceChildren(head, h('div', {class: 'figures'}, gCard, fCard),
     h('div', {class: 'tables'}, coefficientTable('Chemical exposure weights β', d.names.x, 'beta', d.truth?.beta),
       coefficientTable('Confounder effects γ', d.names.z, 'gamma', d.truth?.gamma)),
@@ -999,7 +1134,7 @@ function drawCharts() {
   if (!f || !$('link-chart')) return;
   const d = f.data, models = MODELS.filter(([k]) => f[k]);
   const series = models.map(([kind, name, color]) => {
-    const m = f[kind], ci = state.boot?.[kind] ? interval(kind, ...gColumns(kind)) : null;
+    const m = f[kind], ci = state.boot?.[kind] ? interval(kind, ...gColumns(kind), 'bootstrap') : null;
     return {name, color, x: m.grid, y: m.g, lo: ci?.lo, hi: ci?.hi};
   });
   let truth = null;
@@ -1016,7 +1151,7 @@ function drawCharts() {
       return {name, color, estimate: f[kind].beta, lo: ci?.lo, hi: ci?.hi};
     })});
   if (d.q) forestChart($('gamma-chart'), {rows: d.names.z.map((name, j) => ({name, truth: d.truth?.gamma[j]})),
-    label: 'Confounder effects gamma with 95% bootstrap intervals', symbol: 'γ',
+    label: 'Confounder effects gamma with 95% intervals', symbol: 'γ',
     series: models.map(([kind, name, color]) => {
       const ci = interval(kind, d.p, d.q);
       return {name, color, estimate: f[kind].gamma, lo: ci?.lo, hi: ci?.hi};

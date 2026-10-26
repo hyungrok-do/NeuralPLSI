@@ -77,6 +77,7 @@ export function fitSpline(engine, data, randomState, settings = {}) {
     predictor[i] = v;
   }
   return {model: 'spline', beta: Array.from(f.beta), gamma: Array.from(f.gamma), spline: Array.from(f.coefficients),
+          knots: Array.from(f.knots), degree: spline.degree, alpha: spline.hyper[0],
           grid: Array.from(grid), g: Array.from(g), index: Array.from(index), seconds,
           diagnostics: {iterations: f.iterations, converged: f.converged, objective: f.loss},
           metrics: fitMetrics(family, predictor, data.y)};

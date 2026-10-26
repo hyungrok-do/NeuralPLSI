@@ -101,6 +101,7 @@ A model is created from two arrays:
 | `nplsi_predict`, `nplsi_link`, `nplsi_coefficients` | Linear predictor, probability, partial hazard or `g(X beta)`; `g` on a grid; beta, gamma, intercept. |
 | `nplsi_get_config`, `nplsi_get_weights`, `nplsi_set_weights`, `nplsi_canonicalize` | Settings, the four fit diagnostics and the raw parameter vector. |
 | `nplsi_bootstrap`, `nplsi_bootstrap_workers`, `nplsi_bootstrap_indices`, `nplsi_bootstrap_summary` | The threaded pairs bootstrap and its parts. |
+| `nplsi_sandwich_gradient`, `nplsi_sandwich_scores`, `nplsi_sandwich_hessian` | The parts of the sandwich (continuous and binary outcomes), in double precision: the objective's gradient, the rows' score sums and outer products, and Hessian columns by central differences. |
 | `nplsi_state_size`, `nplsi_export_state`, `nplsi_import_state`, `nplsi_save`, `nplsi_load` | Model state, in memory or in a file. |
 | `nplsi_loss_grad`, `nplsi_outcome` | Unpenalized loss and gradients, for independent checks. |
 | `splsi_fit`, `splsi_profile`, `splsi_basis`, `splsi_bootstrap`, `splsi_error` | SplinePLSI. |

@@ -1,7 +1,7 @@
 # NeuralPLSI web demo
 
 A static page that fits NeuralPLSI (and optionally SplinePLSI) with bootstrap
-inference in the browser. The C++ engine in `core/` is compiled to WebAssembly
+or sandwich inference in the browser. The C++ engine in `core/` is compiled to WebAssembly
 and runs in Web Workers on the visitor's machine; data never leave the browser.
 The page is hosted on GitHub Pages and works offline once loaded.
 
@@ -34,9 +34,12 @@ The main button, **Fit with bootstrap**, fits on all rows and then runs the
 bootstrap; the estimates show as soon as the fit ends, with the standard errors
 and intervals filled in when the bootstrap does. When the controls still match
 the fit shown, it bootstraps that fit instead of fitting again. **Single fit**
-gives the estimates alone.
+gives the estimates alone. The Run page chooses the standard errors: the
+bootstrap, the sandwich (continuous and binary outcomes) or both, with a
+toggle in the results between the two.
 
-Results: β and γ with bootstrap SEs and 95% percentile intervals, g(u) with
+Results: β and γ with bootstrap SEs and 95% percentile intervals, or sandwich
+SEs and Wald intervals (estimate ± 1.96 SE), g(u) with bootstrap
 pointwise bands, forest plots of β and γ with their intervals, fit diagnostics, and downloads of the
 estimates, the bootstrap draws and the fitted model (`.nplsi`, read by
 `NeuralPLSI.load` in Python, `load_model()` in R and `nplsi_load` in C++). For
@@ -153,7 +156,7 @@ predicts what the WebAssembly model predicts. The Python is the first of
 packages; without one, those tests are skipped. `browser.test.js` drives the
 built page in headless Chrome (set `CHROME` if it is not found;
 `NPLSI_BROWSER=0` skips it), including Fit with bootstrap and Single fit, a
-bootstrap of the fit shown, the simulated data in the column setup (the tabs,
+bootstrap of the fit shown, sandwich standard errors (off for Cox, and the Bootstrap/Sandwich toggle), the simulated data in the column setup (the tabs,
 the Log-transform checkbox and when the truth applies), the CSV step with a messy file, column
 names that look like HTML (they must show as text), long names in the result
 tables on phones 360, 390 and 430 px wide, the NHANES file as a user file
@@ -179,6 +182,26 @@ of workers. Against native builds, whose math library differs, LeakyReLU and
 ReLU fits were identical in a check on simulated data, while ELU, Tanh and
 SplinePLSI fits differed slightly, and single bootstrap replicates more than
 point fits; the root [`README.md`](../README.md#one-engine) has the numbers.
+
+## How the sandwich runs
+
+The sandwich is the M-estimator variance of the fitted minimizer,
+H⁻¹CH⁻¹/n² for the penalized objective, over every weight of the network
+(β in the tangent plane of the unit sphere), as in
+[`results/sandwich`](../results/sandwich/README.md). The engine gives, in double
+precision, the objective's gradient (`nplsi_sandwich_gradient`), the sum of the
+rows' score vectors and of their outer products (`nplsi_sandwich_scores`) and
+columns of the Hessian by central differences of the exact gradient
+(`nplsi_sandwich_hessian`); the page splits the Hessian's columns across the
+workers and assembles the parts in `src/sandwich.js` (LU with partial pivoting).
+SplinePLSI's sandwich, with its knots held fixed, is computed in `src/sandwich.js`
+from analytic derivatives. Both match `reproduce/sandwich/sandwich.py` and
+`spline_sandwich.py` on simulated fits: β SEs within 1e-4 relative (NeuralPLSI)
+and 1e-14 (SplinePLSI). The results report the Newton step that remains (in SEs
+of β and γ) and the Hessian's eigenvalue nearest zero, and warn when the step
+exceeds 0.1 SE or the Hessian is indefinite: the sandwich describes a minimizer,
+and the package's stopping rule can end short of one. At n = 500 with 32×2
+hidden units (about 1,200 weights) it takes about 3 s on 9 workers.
 
 ## Deployment
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NeuralPLSI demo</title>
-<meta name="description" content="Fit NeuralPLSI, a neural-network partial-linear single-index model, with bootstrap inference. Runs in your browser.">
+<meta name="description" content="Fit NeuralPLSI, a neural-network partial-linear single-index model, with bootstrap or sandwich inference. Runs in your browser.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
@@ -16,7 +16,7 @@
     mixture) enter through one weighted index <i>X</i>′β, with β of unit length and a positive first weight, and
     an unknown function <i>g</i> learned by a small neural network. The confounders (<i>Z</i>) enter linearly. The
     outcome can be continuous, binary (logistic) or a survival time (Cox). A pairs bootstrap gives standard
-    errors and percentile intervals. Method: Do, Wang, Liu and Lee (2025),
+    errors and percentile intervals; for continuous and binary outcomes, the sandwich gives them from the fit alone. Method: Do, Wang, Liu and Lee (2025),
     <a href="https://arxiv.org/abs/2512.11593">arXiv:2512.11593</a>.</p>
   <p class="local">Everything runs on this device: the C++ engine is compiled to WebAssembly and runs in Web
     Workers in your browser. Data you open are not uploaded.</p>
@@ -281,19 +281,34 @@
       <h2 id="run-title">Run</h2>
       <dl id="data-summary" class="summary"></dl>
       <p id="fit-status" class="status" role="status"></p>
+      <fieldset class="inference">
+        <legend>Standard errors</legend>
+        <div class="segmented" role="radiogroup" aria-label="Standard errors">
+          <label><input type="radio" name="inference" value="bootstrap" checked><span>Bootstrap</span></label>
+          <label><input type="radio" name="inference" value="sandwich"><span>Sandwich</span></label>
+          <label><input type="radio" name="inference" value="both"><span>Both</span></label>
+        </div>
+      </fieldset>
       <div class="run-row">
-        <label class="inline"><span>Bootstrap <i>B</i></span><input name="B" type="number" min="2" max="1000" step="1" value="200"></label>
+        <label class="inline" id="bootstrap-size"><span>Bootstrap <i>B</i></span><input name="B" type="number" min="2" max="1000" step="1" value="200"></label>
         <button type="button" id="run" class="primary" aria-describedby="fit-status">Fit with bootstrap</button>
       </div>
       <div class="run-alt">
         <button type="button" id="fit" class="small" aria-describedby="fit-status">Single fit</button>
         <span class="help">estimates only, no standard errors</span>
       </div>
-      <p class="help">Fit with bootstrap fits the model on all rows, then refits it on <i>B</i> bootstrap resamples
-        (rows drawn with replacement, each refit from a fresh initialization): standard errors are the SD of the
-        draws and intervals their 2.5% and 97.5% quantiles. Replicates run in parallel, one per worker. When the
-        setup has not changed since the last fit, it bootstraps that fit. The results open when the fit ends;
-        the standard errors fill in when the bootstrap does.</p>
+      <p class="help"><b>Bootstrap</b>: the model is fitted on all rows, then refitted on <i>B</i> bootstrap
+        resamples (rows drawn with replacement, each refit from a fresh initialization): standard errors are the SD
+        of the draws and intervals their 2.5% and 97.5% quantiles; it gives bands for <i>g</i> too. Replicates run
+        in parallel, one per worker.</p>
+      <p class="help"><b>Sandwich</b>: standard errors from the curvature of the fitted objective, with no refits
+        (the variance of the minimizer of the penalized objective, H<sup>−1</sup>CH<sup>−1</sup>, over every weight of
+        the network, or of the spline with its knots held fixed); intervals are the estimate ± 1.96 SE, for β and γ.
+        It assumes the fit is at the minimizer: the diagnostics report the Newton step that remains, in SEs, and the
+        Hessian's eigenvalue nearest zero, and warn when either is off. In simulation it covers as the bootstrap does
+        for converged fits, at a fraction of the cost. Continuous and binary outcomes only.</p>
+      <p class="help">When the setup has not changed since the last fit, Fit reuses it. The results open when the fit
+        ends; the standard errors fill in when they are ready.</p>
     </div>
     </section>
   </form>

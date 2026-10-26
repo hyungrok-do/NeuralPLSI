@@ -69,6 +69,20 @@ int nplsi_export_state(void* handle, char* buffer, size_t size);
 void* nplsi_import_state(const char* buffer, size_t size);
 int nplsi_save(void* handle, const char* path);
 void* nplsi_load(const char* path);
+/* Sandwich inference for a fitted model (continuous and binary outcomes), in
+   double precision, over the model's weights w (d = parameter_count, the layout
+   of nplsi_get_weights). Q(w) = mean row loss + g(0)^2 + penalty/2 |network|^2.
+   gradient: Q's value and its d-vector gradient.
+   scores: the sum over rows [begin, end) of the rows' loss gradients (d) and of
+   their outer products (d x d, row-major), for the caller to center and add up.
+   hessian: columns [begin, end) of Q's Hessian, (end-begin) x d row-major, by
+   central differences of the exact gradient (step 1e-6 max(1, |w_j|)). */
+int nplsi_sandwich_gradient(void* handle, const float* x, const float* z, const float* y, int n,
+                            double* objective, double* gradient);
+int nplsi_sandwich_scores(void* handle, const float* x, const float* z, const float* y, int n,
+                          int begin, int end, double* score_sum, double* outer);
+int nplsi_sandwich_hessian(void* handle, const float* x, const float* z, const float* y, int n,
+                           int begin, int end, double* columns);
 /* Diagnostics for independently checking the unpenalized loss and gradients. */
 int nplsi_loss_grad(const int32_t*, const float*, const float*, const float*,
                     const float*, const float*, int, int, double*, float*);

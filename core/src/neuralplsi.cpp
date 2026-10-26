@@ -1168,3 +1168,160 @@ int nplsi_bootstrap(void* handle,const float* x,const float* z,const float* y,
     } catch(const std::exception& e) {last_error=e.what();return 1;}
 }
 }
+
+// Sandwich inference: the fitted model's penalized objective in double precision.
+// Q(w) = (1/n) sum_i l_i(w) + g(0)^2 + (penalty/2) |network|^2, the objective
+// L-BFGS minimizes, with l_i the squared error or the logistic loss of row i.
+// Gradients are exact (hand-written backpropagation in double precision); the
+// Hessian is central differences of that gradient, one column at a time, so a
+// caller can split its columns across workers. Continuous and binary outcomes.
+namespace {
+struct Sandwich {
+    Model m;
+    std::vector<double> w;
+    double penalty;
+    std::vector<std::vector<double>> a, pre;  // activations and pre-activations of one row
+    std::vector<double> d, prev;
+    Sandwich(const State& s): m(s.config.data(),s.hyper[1]), w(s.weights.begin(),s.weights.end()), penalty(s.hyper[0]) {
+        if(m.family==2) throw std::invalid_argument("Sandwich inference supports continuous and binary outcomes");
+        a.resize(m.layers.size()+1); pre.resize(m.layers.size());
+    }
+    double activate(double v) const {
+        switch(m.activation) {
+            case 0: return v>0 ? v : std::expm1(v);
+            case 1: return v>0 ? v : .01*v;
+            case 2: return std::max(v,0.);
+            default: return std::tanh(v);
+        }
+    }
+    double derivative(double v) const {
+        switch(m.activation) {
+            case 0: return v>0 ? 1. : std::exp(v);
+            case 1: return v>0 ? 1. : .01;
+            case 2: return v>0 ? 1. : 0.;
+            default: { double t=std::tanh(v); return 1.-t*t; }
+        }
+    }
+    // g(u) without the linear terms, keeping the activations for backward().
+    double link(const std::vector<double>& v,double u) {
+        a[0].assign(1,u);
+        for(size_t k=0;k<m.layers.size();++k) {
+            auto l=m.layers[k]; pre[k].assign(l.out,0.); a[k+1].assign(l.out,0.);
+            for(int o=0;o<l.out;++o) {
+                double s=v[l.b+o];
+                for(int j=0;j<l.in;++j) s+=v[l.w+o*l.in+j]*a[k][j];
+                pre[k][o]=s; a[k+1][o]=k+1==m.layers.size() ? s : activate(s);
+            }
+        }
+        return a.back()[0]+v[m.p+m.q]*u;
+    }
+    // Adds dr times the gradient of link(u) with respect to the network to g;
+    // returns d link / du.
+    double backward(const std::vector<double>& v,double dr,std::vector<double>& g) {
+        g[m.p+m.q]+=dr*a[0][0];
+        d.assign(1,dr);
+        for(int k=int(m.layers.size())-1;k>=0;--k) {
+            auto l=m.layers[k]; prev.assign(l.in,0.);
+            if(k+1<int(m.layers.size())) for(int o=0;o<l.out;++o) d[o]*=derivative(pre[k][o]);
+            for(int o=0;o<l.out;++o) {
+                g[l.b+o]+=d[o];
+                for(int j=0;j<l.in;++j) { g[l.w+o*l.in+j]+=d[o]*a[k][j]; prev[j]+=d[o]*v[l.w+o*l.in+j]; }
+            }
+            d.swap(prev);
+        }
+        return d[0]+dr*v[m.p+m.q];
+    }
+    // The loss of one row; with g, sets g to its gradient.
+    double row(const std::vector<double>& v,const float* x,const float* z,float y,std::vector<double>* g) {
+        double norm2=0.,dot=0.;
+        for(int j=0;j<m.p;++j) { norm2+=v[j]*v[j]; dot+=double(x[j])*v[j]; }
+        double rnorm=std::sqrt(norm2),denom=rnorm+1e-6,u=m.sign*dot/denom;
+        double r=link(v,u);
+        for(int j=0;j<m.q;++j) r+=double(z[j])*v[m.p+j];
+        if(m.intercept) r+=v.back();
+        double loss,dr;
+        if(m.family==0) { loss=(r-y)*(r-y); dr=2.*(r-y); }
+        else {
+            loss=std::max(r,0.)-y*r+std::log1p(std::exp(-std::abs(r)));
+            dr=(r>=0 ? 1./(1.+std::exp(-r)) : std::exp(r)/(1.+std::exp(r)))-y;
+        }
+        if(!g) return loss;
+        g->assign(m.size,0.);
+        double du=backward(v,dr,*g);
+        for(int j=0;j<m.q;++j) (*g)[m.p+j]+=dr*double(z[j]);
+        if(m.intercept) g->back()+=dr;
+        // u = sign x'beta / (|beta| + 1e-6), as the engine computes the index.
+        for(int j=0;j<m.p;++j)
+            (*g)[j]=du*m.sign*(double(x[j])/denom-(rnorm>0 ? v[j]*dot/(rnorm*denom*denom) : 0.));
+        return loss;
+    }
+    bool penalized(int j) const { return j>=m.p+m.q && !(m.intercept && j==m.size-1); }
+    // Q and its gradient at v.
+    double objective(const std::vector<double>& v,const float* x,const float* z,const float* y,int n,std::vector<double>& g) {
+        std::vector<double> gi; g.assign(m.size,0.); double value=0.;
+        for(int i=0;i<n;++i) {
+            value+=row(v,x+size_t(i)*m.p,z+size_t(i)*m.q,y[i],&gi);
+            for(int j=0;j<m.size;++j) g[j]+=gi[j];
+        }
+        for(auto& e:g) e/=n;
+        value/=n;
+        double g0=link(v,0.);
+        value+=g0*g0; backward(v,2.*g0,g);
+        for(int j=0;j<m.size;++j) if(penalized(j)) { value+=.5*penalty*v[j]*v[j]; g[j]+=penalty*v[j]; }
+        return value;
+    }
+};
+void sandwich_inputs(const Model& m,const float* x,const float* z,const float* y,int n) {
+    if(n<2 || !x || (m.q && !z) || !y) throw std::invalid_argument("Invalid sandwich inputs");
+}
+}
+
+extern "C" {
+int nplsi_sandwich_gradient(void* handle,const float* x,const float* z,const float* y,int n,
+                            double* objective,double* gradient) {
+    try {
+        Sandwich s(state(handle)); sandwich_inputs(s.m,x,z,y,n);
+        std::vector<double> g; *objective=s.objective(s.w,x,z,y,n,g);
+        std::copy(g.begin(),g.end(),gradient); return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+int nplsi_sandwich_scores(void* handle,const float* x,const float* z,const float* y,int n,
+                          int begin,int end,double* score_sum,double* outer) {
+    try {
+        Sandwich s(state(handle)); sandwich_inputs(s.m,x,z,y,n);
+        if(begin<0 || end>n || begin>end) throw std::invalid_argument("Invalid sandwich row range");
+        const int d=s.m.size; std::vector<double> g;
+        std::fill(score_sum,score_sum+d,0.); std::fill(outer,outer+size_t(d)*d,0.);
+        for(int i=begin;i<end;++i) {
+            s.row(s.w,x+size_t(i)*s.m.p,z+size_t(i)*s.m.q,y[i],&g);
+            for(int j=0;j<d;++j) {
+                score_sum[j]+=g[j];
+                if(g[j]==0.) continue;
+                double* out=outer+size_t(j)*d;
+                for(int k=j;k<d;++k) out[k]+=g[j]*g[k];
+            }
+        }
+        for(int j=0;j<d;++j) for(int k=0;k<j;++k) outer[size_t(j)*d+k]=outer[size_t(k)*d+j];
+        return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+int nplsi_sandwich_hessian(void* handle,const float* x,const float* z,const float* y,int n,
+                           int begin,int end,double* columns) {
+    try {
+        Sandwich s(state(handle)); sandwich_inputs(s.m,x,z,y,n);
+        const int d=s.m.size;
+        if(begin<0 || end>d || begin>end) throw std::invalid_argument("Invalid sandwich column range");
+        std::vector<double> plus,minus,v=s.w;
+        for(int j=begin;j<end;++j) {
+            // Small: ELU's second derivative jumps at 0, and a wider step averages
+            // across the jump for rows near it (1e-5 moved binary SEs by 9%).
+            double h=1e-6*std::max(1.,std::abs(s.w[j]));
+            v[j]=s.w[j]+h; s.objective(v,x,z,y,n,plus);
+            v[j]=s.w[j]-h; s.objective(v,x,z,y,n,minus);
+            v[j]=s.w[j];
+            for(int k=0;k<d;++k) columns[size_t(j-begin)*d+k]=(plus[k]-minus[k])/(2.*h);
+        }
+        return 0;
+    } catch(const std::exception& e) {last_error=e.what();return 1;}
+}
+}

@@ -291,6 +291,8 @@ legend { font-size: 0.86rem; color: var(--ink-2); padding: 0; margin-bottom: 4px
 .opt input { margin: 0; width: 0.95rem; height: 0.95rem; accent-color: var(--accent); cursor: inherit; }
 .opt .suggest { color: var(--muted); white-space: nowrap; }
 .outcome-chosen { margin: 0; font-size: 0.86rem; color: var(--ink); overflow-wrap: anywhere; }
+.inference { margin: 0 0 12px; max-width: 26rem; }
+.inference legend { margin-bottom: 6px; }
 .run-alt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 10px; }
 .run-alt .help { margin: 0; }
 
@@ -319,6 +321,10 @@ button.small { padding: 4px 10px; font-size: 0.84rem; }
 }
 .load-error[hidden] { display: none; }
 
+.view-toggle { display: inline-grid; grid-auto-flow: column; gap: 2px; padding: 2px; border-radius: 8px; background: var(--raised); }
+.view-toggle button { border: 0; background: none; padding: 3px 10px; font-size: 0.84rem; color: var(--ink-2); }
+.view-toggle button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.warn-text { color: var(--critical); }
 .results-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
 .facts { color: var(--ink-2); font-size: 0.86rem; margin: 0.25rem 0 0; }
 .stale { margin: 10px 0 0; font-size: 0.86rem; padding: 6px 10px; border-radius: 8px; background: var(--raised); }

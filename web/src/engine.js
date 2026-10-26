@@ -202,6 +202,46 @@ export class Engine {
     });
   }
 
+  weights(handle) {
+    const {config} = this.getConfig(handle), size = config[7];
+    return this.scope((put, alloc) => {
+      const w = alloc(Float32Array, size);
+      this.check(this.m._nplsi_get_weights(handle, w));
+      return this.read(Float32Array, w, size);
+    });
+  }
+
+  // Sandwich inference in double precision (nplsi_sandwich_* in the header):
+  // the penalized objective's value and gradient; the sum of the rows' loss
+  // gradients and of their outer products over rows [begin, end); and the
+  // Hessian's columns [begin, end), (end-begin) x d.
+  sandwichGradient(handle, x, z, y, n) {
+    const d = this.getConfig(handle).config[7];
+    return this.scope((put, alloc) => {
+      const value = alloc(Float64Array, 1), gradient = alloc(Float64Array, d);
+      this.check(this.m._nplsi_sandwich_gradient(handle, put(x), put(z), put(y), n, value, gradient));
+      return {objective: this.read(Float64Array, value, 1)[0], gradient: this.read(Float64Array, gradient, d)};
+    });
+  }
+
+  sandwichScores(handle, x, z, y, n, begin, end) {
+    const d = this.getConfig(handle).config[7];
+    return this.scope((put, alloc) => {
+      const sum = alloc(Float64Array, d), outer = alloc(Float64Array, d*d);
+      this.check(this.m._nplsi_sandwich_scores(handle, put(x), put(z), put(y), n, begin, end, sum, outer));
+      return {sum: this.read(Float64Array, sum, d), outer: this.read(Float64Array, outer, d*d)};
+    });
+  }
+
+  sandwichHessian(handle, x, z, y, n, begin, end) {
+    const d = this.getConfig(handle).config[7];
+    return this.scope((put, alloc) => {
+      const columns = alloc(Float64Array, (end-begin)*d);
+      this.check(this.m._nplsi_sandwich_hessian(handle, put(x), put(z), put(y), n, begin, end, columns));
+      return this.read(Float64Array, columns, (end-begin)*d);
+    });
+  }
+
   // Lowest-level loss for tests: the objective at the current weights.
   lossGrad(handle, x, z, y, n, anchor = true) {
     const {config, hyper} = this.getConfig(handle), size = config[7];

@@ -1,6 +1,7 @@
 // One single-threaded engine instance per Web Worker, driven by numbered requests.
 import {loadEngine, fromCompiled, errorMessage} from './engine.js';
 import {fitNeural, fitSpline, NeuralReplicate, SplineReplicate} from './models.js';
+import {neuralSandwich, splineSandwich} from './sandwich.js';
 
 let engine = null, replicates = {};
 
@@ -19,6 +20,21 @@ const operations = {
   },
   replicate: (kind, b) => replicates[kind].run(b),
   summary: (draws, B, D) => engine.bootstrapSummary(draws, B, D),
+  // A part of a NeuralPLSI sandwich, from the fitted model's state: its weights, the
+  // gradient, the score sums of rows [begin, end) or the Hessian's columns [begin, end).
+  sandwichPart(state, {x, z, y, n}, part, begin, end) {
+    const handle = engine.importState(state);
+    try {
+      if (part === 'weights') return engine.weights(handle);
+      if (part === 'gradient') return engine.sandwichGradient(handle, x, z, y, n);
+      if (part === 'scores') return engine.sandwichScores(handle, x, z, y, n, begin, end);
+      return engine.sandwichHessian(handle, x, z, y, n, begin, end);
+    } finally {
+      engine.destroy(handle);
+    }
+  },
+  neuralSandwich: parts => neuralSandwich(parts),
+  splineSandwich: (data, fit, settings) => splineSandwich(data, fit, settings),
 };
 
 self.onmessage = async ({data: {id, op, args}}) => {

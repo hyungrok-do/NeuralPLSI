@@ -145,7 +145,7 @@ export function linkChart(host, {series, truth, index, indexLabel}) {
 // rows: [{name, truth?}], series: [{name, color, estimate[], lo?[], hi?[]}].
 // One row per coefficient: each model's estimate with its 95% interval, and the
 // truth when known. `label` names the chart for screen readers, `symbol` its axis.
-export function forestChart(host, {rows, series, label = 'Chemical exposure weights beta with 95% bootstrap intervals', symbol = 'β'}) {
+export function forestChart(host, {rows, series, label = 'Chemical exposure weights beta with 95% intervals', symbol = 'β'}) {
   host.replaceChildren();
   const W = Math.max(280, host.clientWidth), rowH = series.length > 1 ? 34 : 28;
   const longest = Math.max(...rows.map(r => r.name.length));

@@ -311,7 +311,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
 
     await t.test('the page opens on your own data; Cancel stops a fit while the WebAssembly module is still loading', async () => {
       assert.deepEqual(await page.evaluate(`[document.forms.controls.elements.source.value, document.getElementById('setup').hidden,
-        [...document.querySelectorAll('.segmented span')].map(e => e.textContent)]`),
+        [...document.querySelectorAll('.segmented:not(.inference *) span')].map(e => e.textContent)]`),
         ['csv', true, ['Your own data', 'Simulated']]);
       assert.deepEqual(await page.evaluate(FIT_STATE), [true, 'Cannot fit yet. Open a CSV file.']);
       // The steps are tabs along the top; Data shows first.
@@ -397,10 +397,44 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       // γ too: three confounders, two models, each with its estimate, interval and truth.
       assert.deepEqual(await page.evaluate(`['line.whisker', 'circle.dot', 'path.truth-mark', 'text.row-label'].map(s =>
         document.querySelectorAll('#gamma-chart '+s).length).concat(document.querySelector('#gamma-chart svg').getAttribute('aria-label'))`),
-        [6, 6, 3, 3, 'Confounder effects gamma with 95% bootstrap intervals']);
+        [6, 6, 3, 3, 'Confounder effects gamma with 95% intervals']);
       // The setup is the design, so the results show the truth.
       assert.deepEqual(await page.evaluate(`[nplsiDemo.state.fit.data.truth.g, nplsiDemo.state.fit.data.names.x.join(),
         document.querySelector('.results .tables thead tr:not(.group) th:nth-child(2)').textContent]`), ['sigmoid', 'x1,x2,x3,x4,x5,x6,x7,x8', 'Truth']);
+    });
+
+    await t.test('sandwich standard errors: not for Cox; with the bootstrap, a toggle between the two', async () => {
+      const choose = value => `(() => { const e = document.querySelector('input[name=inference][value=${value}]');
+        e.click(); })()`;
+      // The simulated setup is still Cox: only the bootstrap.
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('input[name=inference]')].map(e => e.disabled)`),
+                       [false, true, true]);
+      await page.evaluate(setValue('outcome', 'continuous'));
+      await page.evaluate(choose('sandwich'));
+      assert.deepEqual(await page.evaluate(`[document.getElementById('bootstrap-size').hidden, document.getElementById('run').textContent]`),
+                       [true, 'Fit with sandwich SEs']);
+      await page.evaluate(choose('both'));
+      await page.evaluate(setValue('B', '8'));
+      assert.deepEqual(await page.evaluate(`[document.getElementById('bootstrap-size').hidden, document.getElementById('run').textContent]`),
+                       [false, 'Fit with both']);
+      await page.evaluate(click('#run'));
+      await page.until('nplsiDemo.state.sandwich && nplsiDemo.state.boot && !nplsiDemo.state.busy', 300);
+      const sw = await page.evaluate(`(() => { const s = nplsiDemo.state.sandwich;
+        return ['neural', 'spline'].map(k => [s[k].se.length, Array.from(s[k].se).every(v => v > 0 && v < 1)]); })()`);
+      assert.deepEqual(sw, [[11, true], [11, true]]);
+      // Bootstrap first; the toggle shows the sandwich SEs and Wald intervals in the tables.
+      assert.match(await page.evaluate(`document.querySelector('.se-line').textContent`), /^Standard errors: bootstrap, B = 8/);
+      await page.evaluate(`[...document.querySelectorAll('.view-toggle button')].find(b => b.textContent === 'Sandwich').click()`);
+      assert.match(await page.evaluate(`document.querySelector('.se-line').textContent`), /^Standard errors: sandwich \(estimate ± 1\.96 SE\)/);
+      const cells = await page.evaluate(`(() => { const s = nplsiDemo.state.sandwich.neural.se[0], b = nplsiDemo.state.fit.neural.beta[0];
+        const td = [...document.querySelector('.results .tables tbody tr').children].map(c => c.textContent.replace('\u2212', '-'));
+        return {se: +td[3], lower: +td[4], expect: s, lowerExpect: b-1.959964*s}; })()`);
+      assert.ok(Math.abs(cells.se/cells.expect-1) < 0.01 && Math.abs(cells.lower-cells.lowerExpect) < 0.01, JSON.stringify(cells));
+      assert.match(await page.evaluate(`[...document.querySelectorAll('tr')].find(r => /^Sandwich check/.test(r.textContent)).textContent`),
+                   /Newton step [0-9.]+ SE \(β\)/);
+      await page.evaluate(`[...document.querySelectorAll('.view-toggle button')].find(b => b.textContent === 'Bootstrap').click()`);
+      await page.evaluate(choose('bootstrap'));
+      await page.evaluate(setValue('outcome', 'cox'));
     });
 
     await t.test('buttons and links have AA contrast in light and dark', async () => {
@@ -599,7 +633,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       assert.deepEqual(await page.evaluate('nplsiDemo.state.fit.data.names.z'), ['age', 'group=b', 'group=c']);
       assert.match(await page.evaluate(ANNOUNCED), /^Fit done in [0-9.]+ s\. The results are below\.$/);
       assert.deepEqual(await page.evaluate(`[nplsiDemo.state.boot, document.querySelector('.results .tables td.na').textContent]`),
-                       [null, 'no bootstrap']);
+                       [null, 'no standard errors']);
       assert.match(await page.evaluate('document.querySelector(".results-head + .facts").textContent'),
                    /^118 of 120 rows used · dropped: 2 missing · 3 chemical exposures \(X\) · 3 confounders \(Z\)$/);
       assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.results thead tr:not(.group) th:first-child')]
@@ -1063,7 +1097,7 @@ test('the page fits, bootstraps in parallel, cancels and downloads in headless C
       await page.until('!nplsiDemo.state.busy');
       assert.equal(await page.evaluate('document.getElementById("message").textContent'), 'Bootstrap cancelled.');
       assert.deepEqual(await page.evaluate(`[nplsiDemo.state.boot, nplsiDemo.state.fit === nplsiDemo.before,
-        document.querySelector('.results .tables td.na').textContent]`), [null, true, 'no bootstrap']);
+        document.querySelector('.results .tables td.na').textContent]`), [null, true, 'no standard errors']);
       await page.evaluate(setValue('B', '8'));
       await page.evaluate(click('#run'));
       await page.until('nplsiDemo.state.boot && !nplsiDemo.state.busy');
