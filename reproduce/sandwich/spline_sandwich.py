@@ -38,9 +38,13 @@ class SplineObjective:
         self.phi = torch.cat([torch.zeros(self.p-1), gamma, coeffs])
 
     def basis(self, u):
-        """The engine's Cox-de Boor recursion (basis_row), vectorized; u is clipped to the boundary knots."""
+        """The engine's Cox-de Boor recursion (basis_row), vectorized."""
         t, nb = self.t, self.nb
-        u = torch.minimum(torch.maximum(u, t[0]), t[-1])[:, None]
+        # Clipped as the engine clips, with the derivative passed through: the
+        # boundary knots are the smallest and largest index, so two rows sit on
+        # them, where clipping has a kink; they take the boundary polynomial's
+        # derivative from the inside, as a smooth local model at the fit.
+        u = (u+(torch.clamp(u, t[0].item(), t[-1].item())-u).detach())[:, None]
         i = torch.arange(nb)
         b = (((u >= t[i]) & (u < t[i+1])) | ((i == nb-1) & (u == t[i+1]))).to(u.dtype)
         for d in range(1, self.degree+1):
