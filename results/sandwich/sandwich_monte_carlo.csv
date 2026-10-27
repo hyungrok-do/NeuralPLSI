@@ -1,16 +1,22 @@
 arm,fit,outcome,g_fn,block,datasets,se_sd,se_sd_min,se_sd_max,coverage,coverage_min,coverage_max,newton_step_median,min_eigenvalue_median
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,linear,beta,200,1.01438,0.943233,1.06729,0.95125,0.925,0.97,0.000658642,0.000175136
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,linear,gamma,200,0.958236,0.89051,1.01327,0.941667,0.92,0.965,0.000137606,0.000175136
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,sigmoid,beta,200,1.04086,0.96541,1.10007,0.955625,0.94,0.97,0.0030316,1.79237e-06
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,sigmoid,gamma,200,0.960476,0.893898,1.00998,0.938333,0.91,0.97,0.000874807,1.79237e-06
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,threshold,beta,200,1.02717,0.998657,1.07794,0.95375,0.93,0.975,0.00846046,1.31083e-08
-lbfgs,"L-BFGS to convergence, full sandwich",continuous,threshold,gamma,200,0.960299,0.900086,1.00753,0.941667,0.92,0.965,0.00148757,1.31083e-08
-lbfgs,"L-BFGS to convergence, full sandwich",binary,linear,beta,200,1.00179,0.930606,1.07101,0.955,0.935,0.965,0.000356934,0.00099946
-lbfgs,"L-BFGS to convergence, full sandwich",binary,linear,gamma,200,1.04301,0.984356,1.0989,0.958333,0.955,0.96,8.20607e-05,0.00099946
-lbfgs,"L-BFGS to convergence, full sandwich",binary,sigmoid,beta,200,1.03056,0.947253,1.10301,0.95375,0.94,0.97,0.00194415,4.00422e-06
-lbfgs,"L-BFGS to convergence, full sandwich",binary,sigmoid,gamma,200,1.05343,1.00966,1.12586,0.961667,0.95,0.97,0.000456775,4.00422e-06
-lbfgs,"L-BFGS to convergence, full sandwich",binary,threshold,beta,200,0.994167,0.941125,1.06479,0.946875,0.915,0.97,0.00164799,1.76759e-06
-lbfgs,"L-BFGS to convergence, full sandwich",binary,threshold,gamma,200,1.01885,1.008,1.03028,0.961667,0.95,0.97,0.000345602,1.76759e-06
+lbfgs,"L-BFGS, full sandwich",continuous,linear,beta,200,1.01785,0.94687,1.07068,0.953125,0.93,0.97,0.0168024,2.65368e-06
+lbfgs,"L-BFGS, full sandwich",continuous,linear,gamma,200,0.9593,0.890425,1.01504,0.941667,0.92,0.965,0.00370862,2.65368e-06
+lbfgs,"L-BFGS, full sandwich",continuous,sigmoid,beta,200,1.04728,0.969071,1.10524,0.956875,0.945,0.965,0.0478125,5.31278e-07
+lbfgs,"L-BFGS, full sandwich",continuous,sigmoid,gamma,200,0.962822,0.896323,1.01266,0.941667,0.92,0.965,0.0112366,5.31278e-07
+lbfgs,"L-BFGS, full sandwich",continuous,threshold,beta,200,1.06699,1.03796,1.12203,0.956875,0.93,0.98,0.099466,-6.87071e-07
+lbfgs,"L-BFGS, full sandwich",continuous,threshold,gamma,200,0.963231,0.901365,1.01214,0.943333,0.925,0.965,0.0160101,-6.87071e-07
+lbfgs,"L-BFGS, full sandwich",binary,linear,beta,200,1.00206,0.931178,1.07258,0.956875,0.935,0.97,0.014644,0.00069175
+lbfgs,"L-BFGS, full sandwich",binary,linear,gamma,200,1.04382,0.985813,1.09931,0.958333,0.955,0.96,0.00276847,0.00069175
+lbfgs,"L-BFGS, full sandwich",binary,sigmoid,beta,200,1.03476,0.956196,1.1092,0.95625,0.945,0.975,0.0523803,-8.61882e-08
+lbfgs,"L-BFGS, full sandwich",binary,sigmoid,gamma,200,1.05484,1.01193,1.12627,0.965,0.955,0.975,0.0161361,-8.61882e-08
+lbfgs,"L-BFGS, full sandwich",binary,threshold,beta,200,0.998995,0.90987,1.04795,0.9525,0.93,0.965,0.0561841,6.65369e-08
+lbfgs,"L-BFGS, full sandwich",binary,threshold,gamma,200,1.01899,1.00662,1.03176,0.961667,0.95,0.97,0.0126559,6.65369e-08
+lbfgs,"L-BFGS, full sandwich",cox,linear,beta,200,0.957064,0.867503,1.00362,0.93875,0.91,0.955,0.0257616,1.44261e-05
+lbfgs,"L-BFGS, full sandwich",cox,linear,gamma,200,1.03591,0.984199,1.06366,0.948333,0.94,0.96,0.010439,1.44261e-05
+lbfgs,"L-BFGS, full sandwich",cox,sigmoid,beta,200,0.980302,0.927469,1.035,0.94375,0.925,0.96,0.081722,-9.10819e-07
+lbfgs,"L-BFGS, full sandwich",cox,sigmoid,gamma,200,1.02447,0.997132,1.0596,0.95,0.945,0.955,0.0342589,-9.10819e-07
+lbfgs,"L-BFGS, full sandwich",cox,threshold,beta,200,1.01683,0.924924,1.09409,0.959375,0.92,0.97,0.130816,-2.29705e-07
+lbfgs,"L-BFGS, full sandwich",cox,threshold,gamma,200,1.0567,1.00742,1.08462,0.958333,0.95,0.965,0.0302163,-2.29705e-07
 adam_frozen,"AdamW + frozen correction, frozen sandwich",continuous,linear,beta,200,0.988692,0.914561,1.05767,0.945625,0.92,0.97,5.89054e-07,1.28494
 adam_frozen,"AdamW + frozen correction, frozen sandwich",continuous,linear,gamma,200,0.960969,0.892139,1.01786,0.941667,0.92,0.965,1.09633e-06,1.28494
 adam_frozen,"AdamW + frozen correction, frozen sandwich",continuous,sigmoid,beta,200,1.0246,0.945915,1.07495,0.951875,0.925,0.97,9.31392e-07,1.91145
@@ -23,6 +29,12 @@ adam_frozen,"AdamW + frozen correction, frozen sandwich",binary,sigmoid,beta,200
 adam_frozen,"AdamW + frozen correction, frozen sandwich",binary,sigmoid,gamma,200,1.00085,0.933981,1.08268,0.94,0.92,0.96,3.78919e-07,0.117275
 adam_frozen,"AdamW + frozen correction, frozen sandwich",binary,threshold,beta,200,0.952816,0.896673,1.01236,0.933125,0.9,0.96,2.85161e-07,0.100537
 adam_frozen,"AdamW + frozen correction, frozen sandwich",binary,threshold,gamma,200,0.983953,0.927495,1.01438,0.946667,0.925,0.96,4.023e-07,0.100537
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,linear,beta,200,0.930728,0.84549,0.986616,0.928125,0.89,0.96,5.52015e-07,0.582474
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,linear,gamma,200,0.967577,0.91917,1.03244,0.94,0.915,0.97,8.01424e-07,0.582474
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,sigmoid,beta,200,0.961363,0.897671,1.01472,0.94,0.92,0.96,8.68333e-07,0.746962
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,sigmoid,gamma,200,0.915215,0.816903,0.997721,0.911667,0.875,0.935,8.0727e-07,0.746962
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,threshold,beta,200,0.96585,0.89276,1.04397,0.945625,0.915,0.96,6.03709e-07,0.613735
+adam_frozen,"AdamW + frozen correction, frozen sandwich",cox,threshold,gamma,200,0.974803,0.898262,1.03778,0.936667,0.905,0.965,7.79501e-07,0.613735
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",continuous,linear,beta,200,0.918806,0.847713,0.993003,0.926875,0.885,0.955,0.834794,1.00101e-06
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",continuous,linear,gamma,200,0.965431,0.898646,1.02058,0.941667,0.92,0.965,0.0626081,1.00101e-06
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",continuous,sigmoid,beta,200,0.932436,0.856052,0.985417,0.93375,0.93,0.95,0.865871,1.44809e-06
@@ -35,6 +47,12 @@ adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",binary,sigmoi
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",binary,sigmoid,gamma,200,1.0492,1.01422,1.11019,0.958333,0.95,0.965,0.250426,3.48342e-08
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",binary,threshold,beta,200,0.993827,0.92183,1.05977,0.94875,0.92,0.97,0.990639,-5.67546e-07
 adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",binary,threshold,gamma,200,1.01533,0.978279,1.03651,0.951667,0.935,0.965,0.279874,-5.67546e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,linear,beta,200,0.863069,0.784947,0.942883,0.919375,0.9,0.96,0.947356,-1.01823e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,linear,gamma,200,0.990351,0.946019,1.05173,0.946667,0.925,0.97,0.443042,-1.01823e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,sigmoid,beta,200,0.872575,0.800651,0.911735,0.914375,0.89,0.93,0.896877,3.50651e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,sigmoid,gamma,200,0.97651,0.919976,1.0412,0.94,0.925,0.95,0.500232,3.50651e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,threshold,beta,200,0.912119,0.848001,0.945543,0.935,0.915,0.965,1.04901,3.69577e-07
+adam_exact_gamma,"AdamW + exact gamma (comparator), full sandwich",cox,threshold,gamma,200,1.01637,0.963214,1.06845,0.946667,0.925,0.965,0.487446,3.69577e-07
 spline,"SplinePLSI, as fitted",continuous,linear,beta,500,1.01169,0.968787,1.04051,0.954,0.946,0.966,nan,3.57698
 spline,"SplinePLSI, as fitted",continuous,linear,gamma,500,0.976012,0.952323,0.999785,0.948,0.942,0.954,nan,3.57698
 spline,"SplinePLSI, as fitted",continuous,sigmoid,beta,500,1.00571,0.961623,1.05753,0.94925,0.934,0.964,nan,3.59983

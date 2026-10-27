@@ -2,7 +2,7 @@
 
 Usage: python reproduce/sandwich/summarize.py [--input output/sandwich] [--out results/sandwich]
 
-Reads methods.jsonl (monte_carlo.py: L-BFGS with the full sandwich, AdamW +
+Reads methods.jsonl (monte_carlo.py, all three outcomes: L-BFGS with the full sandwich, AdamW +
 frozen correction with the frozen sandwich, AdamW + exact gamma with the full
 sandwich) and spline.jsonl (SplinePLSI, as fitted and polished), and writes
 sandwich_monte_carlo.csv: for beta and gamma, the mean, smallest and largest
@@ -31,7 +31,7 @@ def main(argv=None):
     table = []
     rows = [json.loads(line) for line in open(Path(args.input)/'methods.jsonl')]
     for method, label in METHODS.items():
-        for outcome in ('continuous', 'binary'):
+        for outcome in ('continuous', 'binary', 'cox'):
             for g in ('linear', 'sigmoid', 'threshold'):
                 cell = [r[method] for r in rows if r['outcome'] == outcome and r['g'] == g]
                 for block, truth in (('beta', TRUE_BETA), ('gamma', TRUE_GAMMA)):
