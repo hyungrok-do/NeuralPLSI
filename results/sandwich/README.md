@@ -103,6 +103,10 @@ Coverage (SE/SD), from `sandwich_monte_carlo.csv`:
 - **For Cox outcomes (2) is slightly short**: β covers 0.928-0.946 (SE/SD
   0.93-0.97) and γ 0.912-0.940; γ with sigmoid g (0.912, SE/SD 0.92) is below the
   Monte-Carlo range. The frozen sandwich's SEs are 3-8% too small there.
+- **The bootstraps** (main simulation, B = 1,000, `inference_methods.png`):
+  L-BFGS covers β 0.936-0.966 and γ 0.938-0.955; AdamW + frozen correction β
+  0.937-0.962 and γ 0.938-0.973, Cox γ included (0.963-0.973), where its frozen
+  sandwich is short. Both over-cover β somewhat for threshold g (SE/SD up to 1.11).
 - **The comparator under-covers β** (0.914-0.949, SE/SD 0.86-0.99, lowest for
   Cox): AdamW's early-stopped β is not corrected, only γ is. Its γ covers
   0.940-0.965. Without any correction AdamW's γ covered 0.78-0.85 (earlier study),
@@ -113,6 +117,35 @@ fits (β coverage 0.64-0.76). That was an error in `sandwich.py`: it gave the
 variance of the raw β weights, whose length AdamW leaves at about 0.5 (L-BFGS
 keeps it at 1); the unit-length β's variance is that divided by the squared
 length. Fixed in 0da332e.
+
+## At scale: large n and wide networks
+
+`scale_monte_carlo.py` (BigPurple, job 28865627): AdamW + frozen correction
+with the frozen sandwich, 200 datasets per cell, n of 2,000, 20,000 and 100,000,
+2-layer networks of width 32, 128 and 512 (1,165, 16,909 and 264,205 weights),
+three outcomes, sigmoid and threshold g; for width 32 also the full sandwich of
+the same fits (`scale_coverage.csv`).
+
+| | β coverage | β SE/SD | γ coverage, continuous | γ coverage, binary | γ coverage, Cox |
+|---|---|---|---|---|---|
+| n = 2,000 | 0.927-0.954 | 0.91-1.03 | 0.945-0.955 | 0.917-0.945 | 0.900-0.912 |
+| n = 20,000 | 0.934-0.955 | 0.94-1.01 | 0.933-0.937 | 0.888-0.922 | 0.835-0.903 |
+| n = 100,000 | 0.921-0.953 | 0.91-1.00 | 0.937-0.942 | 0.792-0.918 | 0.687-0.833 |
+
+- **β is valid at every n and width**, and the network's width does not matter:
+  the frozen sandwich, which costs 0.08 s at n = 100,000, gives calibrated SEs
+  where the full one cannot be formed. So is γ for continuous outcomes.
+- **γ for binary and Cox outcomes is not, and gets worse with n**: down to 0.79
+  (binary) and 0.69 (Cox) at n = 100,000, with SE/SD 0.54-0.87. Its bias is
+  small (0.02-0.17 SD), so the SEs are too small, and the full sandwich does no
+  better (binary, n = 100,000, width 32: 0.878 against 0.853). The estimate
+  varies more than any sandwich, which describes a minimizer, allows for: the
+  network AdamW returns depends on its initialization, minibatches and
+  early-stopping epoch, and at large n training stops after about 22 epochs
+  instead of about 95, so that noise is a growing share of γ's variance.
+  A bootstrap refits the network and so draws it; at n = 2,000 the bootstrap
+  of AdamW + frozen correction covers Cox γ (0.963-0.973) where the frozen
+  sandwich does not (0.910-0.912).
 
 ## Sandwich and bootstrap on the same fits
 
@@ -181,10 +214,8 @@ checked to be identical to these.
 
 ## Not yet done
 
-- The frozen sandwich's Cox shortfall (SEs 3-8% too small).
-- Coverage of (2) at the scale it is for: large n and wide networks, where the
-  full sandwich cannot be formed (only the frozen sandwich's cost has been
-  measured there: `results/scalability`).
+- γ for binary and Cox outcomes with AdamW at large n (above): the bootstrap at
+  that scale, or training that leaves less noise (more epochs, no early stopping).
 
 ## Files and how to reproduce
 
@@ -192,6 +223,7 @@ checked to be identical to these.
   with their range over coordinates, the median remaining Newton step and the
   median smallest Hessian eigenvalue; SplinePLSI as fitted and polished (mean SE).
 - `matched_comparison.csv`: the sandwich and the bootstrap on the same L-BFGS fits.
+- `scale_coverage.csv`: AdamW + frozen correction at large n and wide networks.
 - Raw rows (one per fit) are in `output/sandwich/`, not versioned.
 
 ```bash
@@ -199,9 +231,10 @@ python reproduce/sandwich/monte_carlo.py output/sandwich/methods.jsonl 200      
 python reproduce/sandwich/spline_monte_carlo.py output/sandwich/spline.jsonl 500
 python reproduce/sandwich/summarize.py
 python reproduce/sandwich/summarize_matched.py   # after copying the matched rows to output/sandwich/matched
+python reproduce/sandwich/summarize_scale.py     # after copying the scale rows to output/sandwich/scale
 python reproduce/sandwich/plot.py               # also reads output/simulation (the main simulation's bootstraps)
 ```
 
-The matched study: `sbatch reproduce/sandwich/study.slurm` from the repository
-root on BigPurple. `sandwich.py` and `frozen.py` are the PyTorch references the
+The matched study and the scale study: `sbatch reproduce/sandwich/study.slurm`
+and `sbatch reproduce/sandwich/scale.slurm` from the repository root on BigPurple. `sandwich.py` and `frozen.py` are the PyTorch references the
 engine was checked against.
