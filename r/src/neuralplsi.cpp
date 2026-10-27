@@ -464,17 +464,19 @@ int profile_gamma(const Model& m,const Network& net,Vec& w,
 // where the network includes the skip weight but not beta, gamma or the
 // intercept. The loss ignores the scale of beta, so beta is renormalized after
 // every step instead of being penalized. Training stops once the objective
-// falls by less than a relative 1e-9 over 20 iterations, or the gradient
-// vanishes: run to convergence, the fit is the minimizer the sandwich
-// describes (results/sandwich; 1e-5 over 10 stopped 2-5 times sooner and left
-// threshold-g fits short of it). config[8] caps the iterations; gamma is then
-// fitted exactly. max_iter=0 performs initialization only.
+// falls by less than a relative 1e-5 over 10 iterations, or the gradient
+// vanishes. On simulated n = 2000 data, stopping at 1e-9 over 20 iterations
+// took 3-11 times longer (10-33 times for a bootstrap) and changed sandwich
+// coverage by under 0.01; it removed the occasional threshold-g fit whose
+// nearly singular Hessian gives a very wide sandwich SE, which the sandwich's
+// Newton-step diagnostic flags (results/sandwich). config[8] caps the
+// iterations; gamma is then fitted exactly. max_iter=0 performs initialization only.
 void train(const int32_t* config,const float* hyper,float* weights,
            const float* x,const float* z,const float* y,int n,
            double* diagnostics,TrainingWorkspace& ws) {
     Model m(config,hyper[1]); Network net(m);
-    const int size=m.size,cap=config[8],history=10,window=20;
-    const double lambda=hyper[0],tolerance=1e-9;
+    const int size=m.size,cap=config[8],history=10,window=10;
+    const double lambda=hyper[0],tolerance=1e-5;
     if(n<1 || cap<0) throw std::invalid_argument("Invalid native training sizes");
     auto& w=ws.w; auto& grad=ws.grad;
     if(m.family==2) ws.backward.outcome.cox.prepare(y,n);
@@ -798,6 +800,71 @@ void fit_adam(State& s,const float* x,const float* z,const float* y,int n,
     };
     train_adam(s.config.data(),s.hyper.data(),s.weights.data(),tx.data(),tz.data(),ty.data(),nt,
                vx.data(),vz.data(),vy.data(),nv,next_order,s.diagnostics.data(),work.training);
+}
+// The Breslow Cox loss in double precision, as outcome(): the negative log
+// partial likelihood over the number of events, and with delta its derivative
+// in each row's linear predictor r.
+double cox_loss(const std::vector<double>& r,const float* y,int n,std::vector<double>* delta) {
+    CoxOrder c; c.prepare(y,n);
+    if(delta) delta->assign(size_t(n),0.);
+    if(c.events==0.) return 0.;
+    const double neginf=-std::numeric_limits<double>::infinity();
+    std::vector<double> logden(c.begin.size());
+    double cumulative=neginf,loss=0.;
+    for(size_t g=0;g<c.begin.size();++g) {
+        for(int j=c.begin[g];j<c.end[g];++j) cumulative=logadd(cumulative,r[c.order[j]]);
+        logden[g]=cumulative;
+        for(int j=c.begin[g];j<c.end[g];++j) { int i=c.order[j]; loss+=y[2*i+1]*(cumulative-r[i]); }
+    }
+    if(delta) {
+        double tail=neginf;
+        for(int g=int(c.begin.size())-1;g>=0;--g) {
+            if(c.count[g]>0) tail=logadd(tail,std::log(c.count[g])-logden[g]);
+            for(int j=c.begin[g];j<c.end[g];++j) { int i=c.order[j]; (*delta)[i]=(std::exp(r[i]+tail)-y[2*i+1])/c.events; }
+        }
+    }
+    return loss/c.events;
+}
+// Lin and Wei's score residuals of the Breslow partial likelihood, for a
+// parameter whose rows' linear predictors r have gradients J (n x k):
+//   U_i = d_i (J_i - Jbar(t_i)) - sum over event times t_g <= t_i of
+//         d_g exp(r_i) / S0(t_g) (J_i - Jbar(t_g)),
+// with Jbar(t) the risk set's exp(r)-weighted mean of J and d_g the events at
+// t_g (ties as Breslow). They sum to the score of the log partial likelihood,
+// and play the part of the rows' scores in the sandwich. Returns the events.
+double cox_score_residuals(const std::vector<double>& r,const std::vector<double>& J,int k,
+                           const float* y,int n,std::vector<double>& U) {
+    CoxOrder c; c.prepare(y,n);
+    U.assign(size_t(n)*k,0.);
+    if(c.events==0.) return 0.;
+    double top=-std::numeric_limits<double>::infinity();
+    for(double v:r) top=std::max(top,v);
+    const size_t G=c.begin.size();
+    // From the longest time down: S0 and the weighted mean of J over each risk set.
+    std::vector<double> S0(G),mean(G*k),S1(size_t(k),0.); double s0=0.;
+    for(size_t g=0;g<G;++g) {
+        for(int j=c.begin[g];j<c.end[g];++j) {
+            int i=c.order[j]; double e=std::exp(r[i]-top);
+            s0+=e; for(int a=0;a<k;++a) S1[a]+=e*J[size_t(i)*k+a];
+        }
+        S0[g]=s0; for(int a=0;a<k;++a) mean[g*k+a]=S1[a]/s0;
+    }
+    // From the shortest time up: A = sum d_g / S0_g and B = sum d_g Jbar_g / S0_g.
+    double A=0.; std::vector<double> B(size_t(k),0.);
+    for(int g=int(G)-1;g>=0;--g) {
+        if(c.count[g]>0) {
+            A+=c.count[g]/S0[g];
+            for(int a=0;a<k;++a) B[a]+=c.count[g]*mean[size_t(g)*k+a]/S0[g];
+        }
+        for(int j=c.begin[g];j<c.end[g];++j) {
+            int i=c.order[j]; double e=std::exp(r[i]-top),d=y[2*i+1];
+            for(int a=0;a<k;++a) {
+                double Ji=J[size_t(i)*k+a];
+                U[size_t(i)*k+a]=d*(Ji-mean[size_t(g)*k+a])-e*(A*Ji-B[a]);
+            }
+        }
+    }
+    return c.events;
 }
 // Dense LU with partial pivoting (P A = L U), as web/src/sandwich.js: factor
 // swaps whole rows, multipliers included, so solve applies every swap first.
@@ -1463,7 +1530,6 @@ struct Sandwich {
     std::vector<std::vector<double>> a, pre;  // activations and pre-activations of one row
     std::vector<double> d, prev;
     Sandwich(const State& s): m(s.config.data(),s.hyper[1]), w(s.weights.begin(),s.weights.end()), penalty(s.hyper[0]) {
-        if(m.family==2) throw std::invalid_argument("Sandwich inference supports continuous and binary outcomes");
         a.resize(m.layers.size()+1); pre.resize(m.layers.size());
     }
     double activate(double v) const {
@@ -1511,14 +1577,30 @@ struct Sandwich {
         }
         return d[0]+dr*v[m.p+m.q];
     }
-    // The loss of one row; with g, sets g to its gradient.
-    double row(const std::vector<double>& v,const float* x,const float* z,float y,std::vector<double>* g) {
+    // A row's linear predictor, keeping the link's activations for add_gradient().
+    double predictor(const std::vector<double>& v,const float* x,const float* z) {
         double norm2=0.,dot=0.;
         for(int j=0;j<m.p;++j) { norm2+=v[j]*v[j]; dot+=double(x[j])*v[j]; }
-        double rnorm=std::sqrt(norm2),denom=rnorm+1e-6,u=m.sign*dot/denom;
-        double r=link(v,u);
+        double r=link(v,m.sign*dot/(std::sqrt(norm2)+1e-6));
         for(int j=0;j<m.q;++j) r+=double(z[j])*v[m.p+j];
         if(m.intercept) r+=v.back();
+        return r;
+    }
+    // Adds dr times the gradient of the row's linear predictor to g (after predictor()).
+    void add_gradient(const std::vector<double>& v,const float* x,const float* z,double dr,std::vector<double>& g) {
+        double norm2=0.,dot=0.;
+        for(int j=0;j<m.p;++j) { norm2+=v[j]*v[j]; dot+=double(x[j])*v[j]; }
+        const double rnorm=std::sqrt(norm2),denom=rnorm+1e-6;
+        double du=backward(v,dr,g);
+        for(int j=0;j<m.q;++j) g[m.p+j]+=dr*double(z[j]);
+        if(m.intercept) g.back()+=dr;
+        // u = sign x'beta / (|beta| + 1e-6), as the engine computes the index.
+        for(int j=0;j<m.p;++j)
+            g[j]+=du*m.sign*(double(x[j])/denom-(rnorm>0 ? v[j]*dot/(rnorm*denom*denom) : 0.));
+    }
+    // The loss of one row (continuous and binary); with g, sets g to its gradient.
+    double row(const std::vector<double>& v,const float* x,const float* z,float y,std::vector<double>* g) {
+        double r=predictor(v,x,z);
         double loss,dr;
         if(m.family==0) { loss=(r-y)*(r-y); dr=2.*(r-y); }
         else {
@@ -1527,24 +1609,31 @@ struct Sandwich {
         }
         if(!g) return loss;
         g->assign(m.size,0.);
-        double du=backward(v,dr,*g);
-        for(int j=0;j<m.q;++j) (*g)[m.p+j]+=dr*double(z[j]);
-        if(m.intercept) g->back()+=dr;
-        // u = sign x'beta / (|beta| + 1e-6), as the engine computes the index.
-        for(int j=0;j<m.p;++j)
-            (*g)[j]=du*m.sign*(double(x[j])/denom-(rnorm>0 ? v[j]*dot/(rnorm*denom*denom) : 0.));
+        add_gradient(v,x,z,dr,*g);
         return loss;
     }
     bool penalized(int j) const { return j>=m.p+m.q && !(m.intercept && j==m.size-1); }
     // Q and its gradient at v.
     double objective(const std::vector<double>& v,const float* x,const float* z,const float* y,int n,std::vector<double>& g) {
         std::vector<double> gi; g.assign(m.size,0.); double value=0.;
-        for(int i=0;i<n;++i) {
-            value+=row(v,x+size_t(i)*m.p,z+size_t(i)*m.q,y[i],&gi);
-            for(int j=0;j<m.size;++j) g[j]+=gi[j];
+        if(m.family==2) {
+            // Cox: the Breslow loss over the events, as outcome(), then each row's
+            // linear-predictor gradient weighted by the loss's derivative in it.
+            std::vector<double> r(static_cast<size_t>(n)),delta;
+            for(int i=0;i<n;++i) r[i]=predictor(v,x+size_t(i)*m.p,z+size_t(i)*m.q);
+            value=cox_loss(r,y,n,&delta);
+            for(int i=0;i<n;++i) {
+                predictor(v,x+size_t(i)*m.p,z+size_t(i)*m.q);
+                add_gradient(v,x+size_t(i)*m.p,z+size_t(i)*m.q,delta[i],g);
+            }
+        } else {
+            for(int i=0;i<n;++i) {
+                value+=row(v,x+size_t(i)*m.p,z+size_t(i)*m.q,y[i],&gi);
+                for(int j=0;j<m.size;++j) g[j]+=gi[j];
+            }
+            for(auto& e:g) e/=n;
+            value/=n;
         }
-        for(auto& e:g) e/=n;
-        value/=n;
         double g0=link(v,0.);
         value+=g0*g0; backward(v,2.*g0,g);
         for(int j=0;j<m.size;++j) if(penalized(j)) { value+=.5*penalty*v[j]*v[j]; g[j]+=penalty*v[j]; }
@@ -1578,9 +1667,10 @@ void sandwich_summary(const Model& m,const std::vector<double>& T,double norm,co
     diagnostics[0]=newton_beta; diagnostics[1]=newton_gamma;
 }
 // X = H^-1 [E | g] for the kept columns E and the gradient g, then
-// V = X' C X / n^2 and the Newton step X[:, last].
+// V = X' C X / n^2 and the Newton step X[:, last]. For Cox, n is the number of
+// events, by which the objective is averaged.
 void sandwich_solve(const std::vector<double>& H,const std::vector<double>& C,const std::vector<double>& g,
-                    const std::vector<int>& kept,int k,int n,std::vector<double>& V,std::vector<double>& step,
+                    const std::vector<int>& kept,int k,double n,std::vector<double>& V,std::vector<double>& step,
                     double& eigenvalue) {
     const int m=int(kept.size())+1;
     std::vector<double> X(size_t(k)*m,0.);
@@ -1600,7 +1690,7 @@ void sandwich_solve(const std::vector<double>& H,const std::vector<double>& C,co
         const double x=X[size_t(l)*m+a];
         if(x!=0.) for(int c=0;c<K;++c) V[size_t(a)*K+c]+=x*CX[size_t(l)*K+c];
     }
-    for(double& v:V) v/=double(n)*n;
+    for(double& v:V) v/=n*n;
     step.assign(size_t(K),0.);
     for(int j=0;j<K;++j) step[j]=X[size_t(kept[j])*m+m-1];
 }
@@ -1614,17 +1704,33 @@ void full_sandwich(const State& source,const float* x,const float* z,const float
         " weights (at most 8000); use method='frozen' or the bootstrap");
     std::vector<double> gradient; s.objective(s.w,x,z,y,n,gradient);
     std::vector<double> sum(size_t(d),0.),outer(size_t(d)*d,0.),gi;
-    for(int i=0;i<n;++i) {
-        s.row(s.w,x+size_t(i)*m.p,z+size_t(i)*m.q,y[i],&gi);
+    double scale=n;
+    auto accumulate=[&](const double* score) {
         for(int j=0;j<d;++j) {
-            sum[j]+=gi[j];
-            if(gi[j]==0.) continue;
+            sum[j]+=score[j];
+            if(score[j]==0.) continue;
             double* out=outer.data()+size_t(j)*d;
-            for(int l=j;l<d;++l) out[l]+=gi[j]*gi[l];
+            for(int l=j;l<d;++l) out[l]+=score[j]*score[l];
         }
+    };
+    if(m.family==2) {
+        // Cox: Lin and Wei's score residuals of every weight, not centered.
+        if(double(n)*d>1e8) throw std::invalid_argument("The full Cox sandwich keeps an n x d matrix of row gradients "
+            "(at most 1e8 entries); use method='frozen' or the bootstrap");
+        std::vector<double> r(static_cast<size_t>(n)),J(size_t(n)*d,0.),U;
+        for(int i=0;i<n;++i) {
+            r[i]=s.predictor(s.w,x+size_t(i)*m.p,z+size_t(i)*m.q);
+            gi.assign(size_t(d),0.);
+            s.add_gradient(s.w,x+size_t(i)*m.p,z+size_t(i)*m.q,1.,gi);
+            std::copy(gi.begin(),gi.end(),J.begin()+size_t(i)*d);
+        }
+        scale=cox_score_residuals(r,J,d,y,n,U);
+        for(int i=0;i<n;++i) accumulate(U.data()+size_t(i)*d);
+    } else {
+        for(int i=0;i<n;++i) { s.row(s.w,x+size_t(i)*m.p,z+size_t(i)*m.q,y[i],&gi); accumulate(gi.data()); }
     }
     for(int j=0;j<d;++j) for(int l=0;l<j;++l) outer[size_t(j)*d+l]=outer[size_t(l)*d+j];
-    for(int j=0;j<d;++j) for(int l=0;l<d;++l) outer[size_t(j)*d+l]-=sum[j]*sum[l]/n;
+    if(m.family!=2) for(int j=0;j<d;++j) for(int l=0;l<d;++l) outer[size_t(j)*d+l]-=sum[j]*sum[l]/n;
     // Hessian columns by central differences of the exact gradient, split across threads.
     std::vector<double> hessian(size_t(d)*d);
     const int workers=bootstrap_workers(jobs,std::max(2,d));
@@ -1685,7 +1791,7 @@ void full_sandwich(const State& source,const float* x,const float* z,const float
     for(int j=0;j<t+m.q;++j) kept.push_back(j);
     if(m.intercept) kept.push_back(k-1);
     std::vector<double> V,step; double eigenvalue=0.;
-    sandwich_solve(H,C,g,kept,k,n,V,step,eigenvalue);
+    sandwich_solve(H,C,g,kept,k,scale,V,step,eigenvalue);
     sandwich_summary(m,T,norm,V,step,se,diagnostics);
     double gnorm=0.; for(double e:g) gnorm+=e*e;
     diagnostics[2]=eigenvalue; diagnostics[3]=std::sqrt(gnorm);
@@ -1695,18 +1801,19 @@ void full_sandwich(const State& source,const float* x,const float* z,const float
 void frozen_sandwich(const State& source,const float* x,const float* z,const float* y,int n,
                      double* se,double* diagnostics) {
     Frozen f(source);
-    if(f.m.family==2) throw std::invalid_argument("Sandwich inference supports continuous and binary outcomes");
     const int k=f.k;
     std::vector<double> G,H,S;
-    f.derivatives(x,z,y,n,G,H,&S);
+    f.derivatives(x,z,y,n,G,H,f.m.family==2 ? nullptr : &S);
     std::vector<double> mean(size_t(k),0.),C(size_t(k)*k,0.);
-    for(int i=0;i<n;++i) for(int a=0;a<k;++a) mean[a]+=S[size_t(i)*k+a]/n;
+    double scale=n;
+    if(f.m.family==2) scale=cox_score_residuals(f.r,f.J,k,y,n,S);  // not centered
+    else for(int i=0;i<n;++i) for(int a=0;a<k;++a) mean[a]+=S[size_t(i)*k+a]/n;
     for(int i=0;i<n;++i) for(int a=0;a<k;++a) for(int b=0;b<k;++b)
         C[size_t(a)*k+b]+=(S[size_t(i)*k+a]-mean[a])*(S[size_t(i)*k+b]-mean[b]);
     for(int a=0;a<k;++a) for(int b=0;b<a;++b) H[size_t(a)*k+b]=H[size_t(b)*k+a]=(H[size_t(a)*k+b]+H[size_t(b)*k+a])/2.;
     std::vector<int> kept(static_cast<size_t>(k)); std::iota(kept.begin(),kept.end(),0);
     std::vector<double> V,step; double eigenvalue=0.;
-    sandwich_solve(H,C,G,kept,k,n,V,step,eigenvalue);
+    sandwich_solve(H,C,G,kept,k,scale,V,step,eigenvalue);
     sandwich_summary(f.m,f.T,f.norm,V,step,se,diagnostics);
     double gnorm=0.; for(double e:G) gnorm+=e*e;
     diagnostics[2]=eigenvalue; diagnostics[3]=std::sqrt(gnorm);
@@ -1726,6 +1833,8 @@ int nplsi_sandwich_scores(void* handle,const float* x,const float* z,const float
                           int begin,int end,double* score_sum,double* outer) {
     try {
         Sandwich s(state(handle)); sandwich_inputs(s.m,x,z,y,n);
+        if(s.m.family==2) throw std::invalid_argument("Per-row sandwich scores are for continuous and binary outcomes; "
+            "nplsi_sandwich handles Cox outcomes with score residuals");
         if(begin<0 || end>n || begin>end) throw std::invalid_argument("Invalid sandwich row range");
         const int d=s.m.size; std::vector<double> g;
         std::fill(score_sum,score_sum+d,0.); std::fill(outer,outer+size_t(d)*d,0.);

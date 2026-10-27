@@ -159,7 +159,7 @@ NeuralPLSI and SplinePLSI see the same resamples for the same seed. `n_jobs =
 ## Sandwich
 
 `plsi_sandwich()` gives standard errors and Wald intervals for NeuralPLSI fits
-of continuous and binary outcomes without refitting: the variance of the
+without refitting (for Cox outcomes, with Lin and Wei's score residuals): the variance of the
 minimizer of the fitted objective, computed by the engine in double precision.
 `method = "full"` covers every weight of the network (a dense Hessian, for
 networks of at most 8000 weights); `method = "frozen"` covers beta, gamma and
@@ -168,7 +168,9 @@ the intercept with the network held fixed (any size, slightly narrower);
 otherwise. `summary()` and `confint()` then use it (with `inference =
 "sandwich"` when a bootstrap is also attached). The result reports the
 remaining Newton step in SE units and the Hessian's eigenvalue nearest zero:
-the formula describes a minimizer, which a converged L-BFGS fit is.
+the formula describes a minimizer, and a large step (well above 0.1 SE) flags a
+fit that stopped short of one; continue it with a larger `max_iter` or use the
+bootstrap.
 
 ```r
 fit <- plsi_sandwich(fit, n_jobs = -1)

@@ -33,11 +33,18 @@ def frozen(obj):
     g = gQ(th0)
     basis = torch.eye(m, dtype=torch.float64)
     H = torch.stack([jvp(gQ, (th0,), (e,))[1] for e in basis], 1)
-    S = torch.stack([jvp(L, (th0,), (e,))[1] for e in basis], 1)
-    S = S-S.mean(0)
     Hi = torch.linalg.inv((H+H.T)/2)
     step = Hi @ g
-    V = Hi @ (S.T @ S) @ Hi/n**2
+    if obj.family == 2:
+        # Cox: Lin and Wei's score residuals of the linear predictors' gradients in theta.
+        r = obj.predictor(w_of(th0), obj.X, obj.Z).detach()
+        J = torch.stack([jvp(lambda th: obj.predictor(w_of(th), obj.X, obj.Z), (th0,), (e,))[1] for e in basis], 1)
+        S, events = obj.lin_wei(r, J)
+        V = Hi @ (S.T @ S) @ Hi/events**2
+    else:
+        S = torch.stack([jvp(L, (th0,), (e,))[1] for e in basis], 1)
+        S = S-S.mean(0)
+        V = Hi @ (S.T @ S) @ Hi/n**2
     # The unit-length beta moves by T d / |b| (sandwich.py).
     se_beta = torch.sqrt(torch.diag(obj.T @ V[:k, :k] @ obj.T.T))/obj.b.norm()
     se_gamma = torch.sqrt(torch.diag(V[k:, k:]))

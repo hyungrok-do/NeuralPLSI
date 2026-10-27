@@ -24,9 +24,8 @@ class NeuralPLSI(_SummaryMixin):
     the link fixed, gamma and the optional intercept are then fitted exactly by
     deterministic Newton iterations, with g(X @ beta) as an offset.
 
-    L-BFGS runs to convergence: until the objective falls by less than a
-    relative 1e-9 over 20 iterations, so that the fit is the minimizer the
-    sandwich describes.
+    L-BFGS stops once the objective falls by less than a relative 1e-5 over 10
+    iterations.
 
     The other two optimizers train like typical neural networks: AdamW
     (learning_rate, decoupled weight_decay on the link network) on minibatches
@@ -165,7 +164,8 @@ class NeuralPLSI(_SummaryMixin):
 
         The variance of the minimizer of the fit's objective, H^-1 C H^-1 / n^2,
         at the fitted weights on the rows given (the rows the model was fitted
-        on); continuous and binary outcomes. method='full' takes H and C over
+        on). For Cox outcomes the rows' scores are Lin and Wei's score
+        residuals and n is the number of events. method='full' takes H and C over
         every weight of the network (a dense Hessian, for networks of at most
         8,000 weights; n_jobs threads); method='frozen' over beta, gamma and the
         intercept with the network held fixed (any size; slightly narrower, as it

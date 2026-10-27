@@ -94,7 +94,7 @@ def output_path(base, model, n, g_fn, outcome, x_dist, initial=False):
 
 MODEL_CLS = {'PLSI': SplinePLSI, 'NeuralPLSI': NeuralPLSI, 'NeuralPLSI-AdamGamma': NeuralPLSI,
              'NeuralPLSI-AdamFrozen': NeuralPLSI}
-# NeuralPLSI is L-BFGS to convergence. The AdamW models train like typical
+# NeuralPLSI is full-batch L-BFGS. The AdamW models train like typical
 # neural networks (minibatches, early stopping on a 20% validation split), then
 # NeuralPLSI-AdamGamma fits gamma exactly and NeuralPLSI-AdamFrozen takes the
 # frozen correction of beta and gamma, on all rows.
@@ -102,7 +102,7 @@ ADAM = dict(max_iter=200, batch_size=64, learning_rate=1e-3, weight_decay=1e-4, 
 NEURAL_OPTIONS = {'NeuralPLSI': {},
                   'NeuralPLSI-AdamGamma': dict(optimizer='adam_exact_gamma', **ADAM),
                   'NeuralPLSI-AdamFrozen': dict(optimizer='adam_frozen', **ADAM)}
-TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_converged_exact_gamma_v2',
+TRAINING_POLICY = {'NeuralPLSI': 'full_batch_lbfgs_exact_gamma_v1',
                    'NeuralPLSI-AdamGamma': 'minibatch_adamw_early_stopping_exact_gamma_v1',
                    'NeuralPLSI-AdamFrozen': 'minibatch_adamw_early_stopping_frozen_correction_v1'}
 

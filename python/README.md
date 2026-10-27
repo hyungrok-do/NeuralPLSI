@@ -132,7 +132,8 @@ same resampled rows.
 standard errors and Wald intervals for beta, gamma and the intercept without
 refitting: the variance of the minimizer of the fit's objective, `H^-1 C H^-1 /
 n^2`, computed by the engine in double precision on the rows given (those the
-model was fitted on), for continuous and binary outcomes. `method='full'` takes
+model was fitted on); for Cox outcomes the scores are Lin and Wei's score
+residuals. `method='full'` takes
 the Hessian and score covariance over every weight of the network (dense, for
 networks of at most 8,000 weights; `n_jobs` threads); `method='frozen'` over
 beta, gamma and the intercept with the network held fixed (any size, slightly
@@ -163,11 +164,11 @@ optimizer='lbfgs', batch_size=64, learning_rate=1e-3, patience=10)`
 | `max_iter` | L-BFGS iterations (AdamW epochs); 0 only initializes. |
 | `add_intercept` | Intercept for continuous and binary outcomes. Cox models reject it. |
 | `initial` | Start from a linear, logistic or Cox regression fitted to all rows. |
-| `optimizer` | `'lbfgs'` (the default: full-batch L-BFGS to convergence), or minibatch AdamW with early stopping (`batch_size`, `learning_rate`, `patience`) followed on all rows by `'adam_exact_gamma'`, the exact gamma fit, or `'adam_frozen'`, the frozen correction of beta, gamma and the intercept. |
+| `optimizer` | `'lbfgs'` (the default: full-batch L-BFGS), or minibatch AdamW with early stopping (`batch_size`, `learning_rate`, `patience`) followed on all rows by `'adam_exact_gamma'`, the exact gamma fit, or `'adam_frozen'`, the frozen correction of beta, gamma and the intercept. |
 
 Each L-BFGS fit uses all rows: it minimizes the outcome loss plus a `g(0)^2`
-anchor and the penalty until the objective converges (a relative decrease below
-1e-9 over 20 iterations), then gamma (and the intercept) are fitted exactly by
+anchor and the penalty until the objective stops decreasing (by less than a
+relative 1e-5 over 10 iterations), then gamma (and the intercept) are fitted exactly by
 Newton iterations. `fit(X, Z, y, random_state=0)`
 seeds the initialization (an integer in `[0, 2**64)`). `device='cpu'` (or its
 alias `'auto'`), `backend='cpp'` and `num_workers=0` are accepted for

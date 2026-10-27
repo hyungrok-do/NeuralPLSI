@@ -3,7 +3,8 @@
 Usage: python reproduce/sandwich/study.py <outcome> <g> <first seed> <last seed> <B> <out.jsonl>
 
 For each dataset (seeds as the main simulation, n = 2000): the L-BFGS
-NeuralPLSI fit (to convergence, the package default), its full sandwich SEs,
+NeuralPLSI fit (NEURALPLSI_LIBRARY may point at a build with another stopping
+rule), its full sandwich SEs,
 and a cold-start bootstrap of the same fit (B draws, all saved). Rows are JSON
 lines, written as they finish.
 """

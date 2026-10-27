@@ -141,18 +141,19 @@ class SandwichTest(unittest.TestCase):
                 np.testing.assert_array_equal(model.beta_se, full['beta_se'])
                 # Threads split the Hessian's columns without changing it.
                 np.testing.assert_array_equal(model.inference_sandwich(x, z, y, ci=.9, n_jobs=3)['beta_se'], full['beta_se'])
-                # At a converged L-BFGS fit, almost no Newton step remains.
-                self.assertLess(full['newton_beta'], .05)
+                # At an L-BFGS fit, little of a Newton step remains.
+                self.assertLess(full['newton_beta'], .1)
                 frozen = model.inference_sandwich(x, z, y, method='frozen')
                 self.assertTrue(np.all(frozen['beta_se'] > 0))
                 corrected = baseline(family, optimizer='adam_frozen').fit(x, z, y, random_state=2)
                 self.assertEqual(corrected.inference_sandwich(x, z, y)['method'], 'frozen')
 
-    def test_sandwich_refuses_cox_and_large_networks(self):
-        x, z, y, *_ = simulate_data(100, outcome='cox', seed=6)
-        model = baseline('cox').fit(x, z, y, random_state=1)
-        with self.assertRaisesRegex(RuntimeError, 'continuous and binary'):
-            model.inference_sandwich(x, z, y)
+    def test_cox_sandwich_and_large_networks(self):
+        x, z, y, *_ = simulate_data(300, outcome='cox', seed=6)
+        model = NeuralPLSI(family='cox', hidden_units=4, n_hidden_layers=1).fit(x, z, y, random_state=1)
+        for method in ('full', 'frozen'):
+            se = model.inference_sandwich(x, z, y, method=method, n_jobs=1)['beta_se']
+            self.assertTrue(np.all(np.isfinite(se)) and np.all(se > 0))
         x, z, y, *_ = simulate_data(100, outcome='continuous', seed=6)
         model = NeuralPLSI(hidden_units=100, n_hidden_layers=2, max_iter=1).fit(x, z, y)  # 10,413 weights
         with self.assertRaisesRegex(RuntimeError, 'at most 8000'):

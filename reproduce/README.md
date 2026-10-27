@@ -28,7 +28,7 @@ records test-set MSE (continuous), AUC (binary) or C-index (Cox) on the other
 bootstrap with random state `s`. NeuralPLSI uses the ELU activation
 (`--activation`) and fit seed `--fit_seed` (0); SplinePLSI uses fit seed `s`.
 
-`--models` takes `NeuralPLSI` (L-BFGS to convergence), `PLSI` (SplinePLSI),
+`--models` takes `NeuralPLSI` (L-BFGS), `PLSI` (SplinePLSI),
 `NeuralPLSI-AdamGamma` and `NeuralPLSI-AdamFrozen` (minibatch AdamW with early
 stopping: at most 200 epochs, batch size 64, learning rate 1e-3, weight decay
 1e-4, patience 10; then the exact gamma fit, or the frozen correction of beta,

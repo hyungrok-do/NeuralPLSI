@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'python'))
 from neuralplsi.simulation import beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 Z = 1.959964
-METHODS = {'lbfgs': 'L-BFGS to convergence, full sandwich',
+METHODS = {'lbfgs': 'L-BFGS, full sandwich',
            'adam_frozen': 'AdamW + frozen correction, frozen sandwich',
            'adam_exact_gamma': 'AdamW + exact gamma (comparator), full sandwich'}
 

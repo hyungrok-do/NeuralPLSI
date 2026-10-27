@@ -6,8 +6,7 @@ NeuralPLSI fits partial-linear single-index models for environmental mixtures:
 
 The exposures `X` enter through a single index `X'beta`, whose weights `beta`
 give the relative contribution of each exposure, and a nonlinear link `g`,
-here a small neural network. It is fitted by full-batch L-BFGS to convergence,
-or, for data or networks too large for that, by minibatch AdamW followed by an
+here a small neural network. It is fitted by full-batch L-BFGS, or, for data or networks too large for that, by minibatch AdamW followed by an
 exact correction on all rows (the exact `gamma` fit, or the frozen correction of
 `beta` and `gamma`). The covariates `Z` enter linearly. Outcomes can be
 continuous, binary or time-to-event (Cox). A pairs bootstrap gives standard

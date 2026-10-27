@@ -1,6 +1,6 @@
 test_that("plsi_sandwich gives SEs, Wald intervals and the Python package's numbers", {
   data <- simulate("binary")
-  # Converged (the helper's 300 iterations stop L-BFGS short of the minimizer).
+  # The package's iteration cap (the helper's 300 stop L-BFGS short of its rule).
   fit <- small_fit(data, "binary", add_intercept = TRUE, max_iter = 5000)
   expect_error(confint(fit, inference = "sandwich"), "run plsi_sandwich")
   fit <- plsi_sandwich(fit, level = 0.9, n_jobs = 1)
@@ -10,7 +10,7 @@ test_that("plsi_sandwich gives SEs, Wald intervals and the Python package's numb
   expect_true(all(is.finite(s$summary[, "se"]) & s$summary[, "se"] > 0))
   expect_equal(unname(s$summary[, "lower"]),
                unname(coef(fit) - stats::qnorm(0.95) * s$summary[, "se"]))
-  expect_lt(s$newton_beta, 0.05)
+  expect_lt(s$newton_beta, 0.1)
   # Threads split the Hessian's columns without changing it.
   expect_identical(plsi_sandwich(fit, level = 0.9, n_jobs = 3)$sandwich$summary, s$summary)
   table <- summary(fit)$coefficients
@@ -27,8 +27,9 @@ test_that("plsi_sandwich gives SEs, Wald intervals and the Python package's numb
   expect_identical(plsi_sandwich(frozen)$sandwich$method, "frozen")
 })
 
-test_that("plsi_sandwich refuses Cox outcomes and SplinePLSI fits", {
+test_that("plsi_sandwich handles Cox outcomes and refuses SplinePLSI fits", {
   data <- simulate("cox")
-  expect_error(plsi_sandwich(small_fit(data, "cox")), "continuous and binary")
+  fit <- plsi_sandwich(small_fit(data, "cox"), n_jobs = 1)
+  expect_true(all(is.finite(fit$sandwich$summary[, "se"]) & fit$sandwich$summary[, "se"] > 0))
   expect_error(plsi_sandwich(splineplsi(data$x, data$z, data$y, family = "cox")), "NeuralPLSI fits")
 })

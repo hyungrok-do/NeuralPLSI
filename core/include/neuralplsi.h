@@ -26,8 +26,8 @@ const char* nplsi_error(void);
 void* nplsi_create(const int32_t* config, const float* hyper, uint64_t seed);
 void nplsi_destroy(void* handle);
 /* Every fit starts from a fresh initialization drawn from seed. L-BFGS runs
-   on all rows to convergence (relative decrease below 1e-9 over 20 iterations)
-   and then fits gamma exactly. AdamW is typical neural-network training:
+   on all rows until the objective falls by less than a relative 1e-5 over 10
+   iterations, then fits gamma exactly. AdamW is typical neural-network training:
    minibatches on 80% of rows, early stopping on the other 20%, the best
    checkpoint restored. Optimizer 2 then fits gamma (and the intercept) exactly
    on all rows; optimizer 3 takes the frozen correction: Newton steps on beta
@@ -79,14 +79,17 @@ void* nplsi_load(const char* path);
    of nplsi_get_weights). Q(w) = mean row loss + g(0)^2 + penalty/2 |network|^2.
    gradient: Q's value and its d-vector gradient.
    scores: the sum over rows [begin, end) of the rows' loss gradients (d) and of
-   their outer products (d x d, row-major), for the caller to center and add up.
+   their outer products (d x d, row-major), for the caller to center and add up
+   (continuous and binary outcomes).
    hessian: columns [begin, end) of Q's Hessian, (end-begin) x d row-major, by
    central differences of the exact gradient (step 1e-6 max(1, |w_j|)). */
 /* Sandwich standard errors of beta, gamma and the intercept at the model's
-   weights, on the rows given (those it was fitted on); continuous and binary
-   outcomes. method 0 (full): over every weight of the network, H^-1 C H^-1 /
-   n^2 for the penalized objective, with the Hessian dense (networks of at most
-   8000 weights; its columns use n_jobs threads, as nplsi_bootstrap). method 1
+   weights, on the rows given (those it was fitted on). For Cox outcomes the
+   rows' scores are Lin and Wei's score residuals and n is the number of events.
+   method 0 (full): over every weight of the network, H^-1 C H^-1 / n^2 for the
+   penalized objective, with the Hessian dense (networks of at most 8000
+   weights, and for Cox n x weights at most 1e8; its columns use n_jobs
+   threads, as nplsi_bootstrap). method 1
    (frozen): over beta, gamma and the intercept with the network held fixed
    (any network size). se: p + q + intercept. diagnostics: the largest beta and
    the largest gamma/intercept component of the Newton step H^-1 grad Q in SE

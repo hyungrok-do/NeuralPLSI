@@ -102,7 +102,7 @@ A model is created from two arrays:
 | `nplsi_predict`, `nplsi_link`, `nplsi_coefficients` | Linear predictor, probability, partial hazard or `g(X beta)`; `g` on a grid; beta, gamma, intercept. |
 | `nplsi_get_config`, `nplsi_get_weights`, `nplsi_set_weights`, `nplsi_canonicalize` | Settings, the four fit diagnostics and the raw parameter vector. |
 | `nplsi_bootstrap`, `nplsi_bootstrap_workers`, `nplsi_bootstrap_indices`, `nplsi_bootstrap_summary` | The threaded pairs bootstrap and its parts. |
-| `nplsi_sandwich` | Sandwich SEs of beta, gamma and the intercept, with the Newton-step diagnostic (continuous and binary outcomes): `full` over every weight (dense Hessian, at most 8,000 weights, threaded columns) or `frozen` over beta, gamma and the intercept with the network fixed (any size). |
+| `nplsi_sandwich` | Sandwich SEs of beta, gamma and the intercept, with the Newton-step diagnostic (Cox through Lin and Wei's score residuals): `full` over every weight (dense Hessian, at most 8,000 weights, threaded columns) or `frozen` over beta, gamma and the intercept with the network fixed (any size). |
 | `nplsi_sandwich_gradient`, `nplsi_sandwich_scores`, `nplsi_sandwich_hessian` | The full sandwich's parts, in double precision: the objective's gradient, the rows' score sums and outer products, and Hessian columns by central differences (the web demo splits the columns across workers). |
 | `nplsi_state_size`, `nplsi_export_state`, `nplsi_import_state`, `nplsi_save`, `nplsi_load` | Model state, in memory or in a file. |
 | `nplsi_loss_grad`, `nplsi_outcome` | Unpenalized loss and gradients, for independent checks. |
@@ -139,13 +139,14 @@ the skip weight, but not beta, gamma or the intercept. The loss does not depend
 on the length of beta, so beta is renormalized to unit length after every step
 instead of being penalized.
 
-Training runs to convergence: it stops once the objective decreases by less
-than a relative 1e-9 over 20 iterations, when the gradient vanishes, or after
-`max_iter` iterations (5000 in the Python and R packages; `max_iter=0` performs
-initialization only). The fit is then the minimizer the sandwich describes
-(`results/sandwich`). The earlier rule, 1e-5 over 10, stopped 2-5 times sooner
-and changed beta and g RMSE by under 2%, but left threshold-g fits far enough
-from the minimum that their sandwich SEs were too wide. With
+Training stops once the objective decreases by less than a relative 1e-5 over
+10 iterations, when the gradient vanishes, or after `max_iter` iterations (5000
+in the Python and R packages; `max_iter=0` performs initialization only).
+Stopping at 1e-9 over 20 iterations took 3-11 times longer (10-33 times for a
+bootstrap of 1,000 refits), changed beta and g RMSE by under 2% and sandwich
+coverage by under 0.01; it removed the occasional threshold-g fit that stops
+where the Hessian is nearly singular and gets a very wide sandwich SE, which the
+sandwich's Newton-step diagnostic flags (`results/sandwich`). With
 beta and the link fixed, gamma and the optional intercept are then fitted
 exactly, with `g(x'beta)` as a fixed offset: least squares, logistic regression
 or the Breslow Cox partial likelihood, by double-precision damped Newton

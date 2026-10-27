@@ -1,9 +1,9 @@
 """Sandwich inference for NeuralPLSI's fitting methods, against the truth.
 
-Usage: python reproduce/sandwich/monte_carlo.py <out.jsonl> <datasets per setting>
+Usage: python reproduce/sandwich/monte_carlo.py <out.jsonl> <datasets per setting> [outcomes, e.g. continuous,binary,cox]
 
-The main simulation's design (n = 2000 of 4000 rows, seeds 0, 1, ...; continuous
-and binary outcomes, linear, sigmoid and threshold g). Each dataset gets
+The main simulation's design (n = 2000 of 4000 rows, seeds 0, 1, ...; continuous,
+binary and Cox outcomes, linear, sigmoid and threshold g). Each dataset gets
 converged L-BFGS with the full sandwich, AdamW + frozen correction with the
 frozen sandwich, and, as a comparator, AdamW + exact gamma with the full
 sandwich. Runs 10 processes, one thread each.
@@ -42,8 +42,8 @@ def task(args):
 
 if __name__ == '__main__':
     out, reps = sys.argv[1], int(sys.argv[2])
-    jobs = [(o, g, s) for o in ('continuous', 'binary') for g in ('linear', 'sigmoid', 'threshold')
-            for s in range(reps)]
+    outcomes = sys.argv[3].split(',') if len(sys.argv) > 3 else ('continuous', 'binary', 'cox')
+    jobs = [(o, g, s) for o in outcomes for g in ('linear', 'sigmoid', 'threshold') for s in range(reps)]
     with Pool(10) as pool, open(out, 'w') as f:
         for k, row in enumerate(pool.imap_unordered(task, jobs, chunksize=2)):
             f.write(json.dumps(row)+'\n'); f.flush()

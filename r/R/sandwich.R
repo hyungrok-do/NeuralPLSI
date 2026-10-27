@@ -5,7 +5,8 @@
 #' the variance of its minimizer, \eqn{H^{-1} C H^{-1} / n^2}, with \eqn{H} the
 #' Hessian of the objective and \eqn{C} the sum of the rows' centered score
 #' outer products, computed in C++ in double precision. \eqn{\beta} enters in
-#' the tangent plane of the unit sphere. Continuous and binary outcomes.
+#' the tangent plane of the unit sphere. For Cox outcomes the rows' scores are
+#' Lin and Wei's score residuals of the Breslow partial likelihood.
 #'
 #' \code{method = "full"} takes \eqn{H} and \eqn{C} over every weight of the
 #' network, so the network's estimation enters the variance of \eqn{\beta} and

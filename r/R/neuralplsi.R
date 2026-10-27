@@ -7,9 +7,8 @@
 #' Each fit uses all rows and minimizes the outcome loss (mean squared error,
 #' binary cross-entropy, or the negative Breslow partial likelihood divided by
 #' the number of events) plus \eqn{g(0)^2} and \code{weight_decay}/2 times the
-#' squared link-network weights, by full-batch L-BFGS run to convergence (until
-#' the objective falls by less than a relative \eqn{10^{-9}} over 20
-#' iterations). \eqn{\beta} has unit length and \eqn{\beta_1 \ge 0}. With
+#' squared link-network weights, by full-batch L-BFGS (until the objective
+#' falls by less than a relative \eqn{10^{-5}} over 10 iterations). \eqn{\beta} has unit length and \eqn{\beta_1 \ge 0}. With
 #' \eqn{\beta} and \eqn{g} fixed, \eqn{\gamma} and the optional intercept are
 #' then fitted exactly.
 #'
