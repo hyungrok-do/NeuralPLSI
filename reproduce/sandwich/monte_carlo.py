@@ -1,12 +1,12 @@
-"""The three methods when the exposures are strongly correlated.
+"""Sandwich inference for NeuralPLSI's fitting methods, against the truth.
 
-Usage: python reproduce/sandwich/correlated_monte_carlo.py <out.jsonl> <rho> <datasets per setting>
+Usage: python reproduce/sandwich/monte_carlo.py <out.jsonl> <datasets per setting>
 
-The main simulation's design (n = 2000 of 4000 rows, seeds 0, 1, ...) with
-equicorrelated exposures at correlation rho (0.3 in every other study). Each
-dataset gets the package's three fits: converged L-BFGS with the full and the
-frozen sandwich, AdamW + exact gamma with the full sandwich, and AdamW + frozen
-correction with the frozen sandwich. Runs 10 processes, one thread each.
+The main simulation's design (n = 2000 of 4000 rows, seeds 0, 1, ...; continuous
+and binary outcomes, linear, sigmoid and threshold g). Each dataset gets
+converged L-BFGS with the full sandwich, AdamW + frozen correction with the
+frozen sandwich, and, as a comparator, AdamW + exact gamma with the full
+sandwich. Runs 10 processes, one thread each.
 """
 import json, os, sys
 os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -26,13 +26,12 @@ def task(args):
     from neuralplsi import NeuralPLSI
     from neuralplsi.simulation import simulate_data
     from sklearn.model_selection import train_test_split
-    outcome, g, seed, rho = args
-    X, Z, y, *_ = simulate_data(4000, outcome=outcome, g_type=g, seed=seed, rho=rho)
+    outcome, g, seed = args
+    X, Z, y, *_ = simulate_data(4000, outcome=outcome, g_type=g, seed=seed)
     X, _, Z, _, y, _ = train_test_split(X, Z, y, test_size=2000, random_state=seed)
-    row = dict(outcome=outcome, g=g, seed=seed, rho=rho)
+    row = dict(outcome=outcome, g=g, seed=seed)
     m = NeuralPLSI(family=outcome).fit(X, Z, y, random_state=seed)
     row['lbfgs'] = result(m, m.inference_sandwich(X, Z, y, method='full', n_jobs=1))
-    row['lbfgs']['frozen_beta_se'] = m.inference_sandwich(X, Z, y, method='frozen')['beta_se'].tolist()
     m = NeuralPLSI(family=outcome, optimizer='adam_exact_gamma', **ADAM).fit(X, Z, y, random_state=1337)
     row['adam_exact_gamma'] = result(m, m.inference_sandwich(X, Z, y, method='full', n_jobs=1))
     m = NeuralPLSI(family=outcome, optimizer='adam_frozen', **ADAM).fit(X, Z, y, random_state=1337)
@@ -42,8 +41,8 @@ def task(args):
 
 
 if __name__ == '__main__':
-    out, rho, reps = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
-    jobs = [(o, g, s, rho) for o in ('continuous', 'binary') for g in ('linear', 'sigmoid', 'threshold')
+    out, reps = sys.argv[1], int(sys.argv[2])
+    jobs = [(o, g, s) for o in ('continuous', 'binary') for g in ('linear', 'sigmoid', 'threshold')
             for s in range(reps)]
     with Pool(10) as pool, open(out, 'w') as f:
         for k, row in enumerate(pool.imap_unordered(task, jobs, chunksize=2)):

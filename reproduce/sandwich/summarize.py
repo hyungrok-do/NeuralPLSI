@@ -1,12 +1,14 @@
-"""Summaries of the sandwich Monte Carlo: SE/SD and Wald coverage per arm, setting and block.
+"""Summaries of the sandwich Monte Carlo: SE/SD and Wald coverage per method, setting and block.
 
 Usage: python reproduce/sandwich/summarize.py [--input output/sandwich] [--out results/sandwich]
 
-Reads <arm>.jsonl for the arms converged, current, adam and adamgamma, and
-spline.jsonl (SplinePLSI, as fitted and polished), and writes
+Reads methods.jsonl (monte_carlo.py: L-BFGS with the full sandwich, AdamW +
+frozen correction with the frozen sandwich, AdamW + exact gamma with the full
+sandwich) and spline.jsonl (SplinePLSI, as fitted and polished), and writes
 sandwich_monte_carlo.csv: for beta and gamma, the mean, smallest and largest
-sandwich SE / empirical SD and Wald coverage over the coordinates, and the fits'
-median gradient norm and smallest Hessian eigenvalue.
+SE / empirical SD and Wald coverage over the coordinates (NeuralPLSI: the
+median SE over the datasets; SplinePLSI: the mean), the median remaining
+Newton step in SE units and the median smallest Hessian eigenvalue.
 """
 import argparse, csv, json, os, sys
 from pathlib import Path
@@ -15,8 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'python'))
 from neuralplsi.simulation import beta as TRUE_BETA, gamma as TRUE_GAMMA
 
 Z = 1.959964
-ARMS = {'converged': 'L-BFGS, converged (1e-9 over 20 iterations)', 'current': 'L-BFGS, package stopping rule (1e-5 over 10)',
-        'adam': 'minibatch AdamW with early stopping', 'adamgamma': 'AdamW, then the exact gamma fit'}
+METHODS = {'lbfgs': 'L-BFGS to convergence, full sandwich',
+           'adam_frozen': 'AdamW + frozen correction, frozen sandwich',
+           'adam_exact_gamma': 'AdamW + exact gamma (comparator), full sandwich'}
 
 
 def main(argv=None):
@@ -26,26 +29,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     table = []
-    for arm, label in ARMS.items():
-        path = Path(args.input)/f'{arm}.jsonl'
-        if not path.exists():
-            continue
-        rows = [json.loads(line) for line in open(path)]
+    rows = [json.loads(line) for line in open(Path(args.input)/'methods.jsonl')]
+    for method, label in METHODS.items():
         for outcome in ('continuous', 'binary'):
             for g in ('linear', 'sigmoid', 'threshold'):
-                cell = [r for r in rows if r['outcome'] == outcome and r['g'] == g]
+                cell = [r[method] for r in rows if r['outcome'] == outcome and r['g'] == g]
                 for block, truth in (('beta', TRUE_BETA), ('gamma', TRUE_GAMMA)):
-                    est, se = np.array([r[block] for r in cell]), np.array([r['se_'+block] for r in cell])
-                    ratio = se.mean(axis=0)/est.std(axis=0, ddof=1)
+                    est, se = np.array([r[block] for r in cell]), np.array([r[block+'_se'] for r in cell])
+                    ratio = np.median(se, axis=0)/est.std(axis=0, ddof=1)
                     cover = (np.abs(est-truth) <= Z*se).mean(axis=0)
-                    table.append(dict(arm=arm, fit=label, outcome=outcome, g_fn=g, block=block, datasets=len(cell),
+                    table.append(dict(arm=method, fit=label, outcome=outcome, g_fn=g, block=block, datasets=len(cell),
                         se_sd=ratio.mean(), se_sd_min=ratio.min(), se_sd_max=ratio.max(),
                         coverage=cover.mean(), coverage_min=cover.min(), coverage_max=cover.max(),
-                        grad_norm_median=np.median([r['grad_norm'] for r in cell]),
-                        min_eigenvalue_median=np.median([r['min_eig'] for r in cell]),
-                        hessian_not_pd=np.mean([r['min_eig'] <= 0 for r in cell]),
-                        time_fit_median=np.median([r['time_fit'] for r in cell]),
-                        time_sandwich_median=np.median([r['time_sandwich'] for r in cell])))
+                        newton_step_median=np.median([r['newton_'+block] for r in cell]),
+                        min_eigenvalue_median=np.median([r['min_eigenvalue'] for r in cell])))
     # SplinePLSI: knots at their fitted values; as fitted and after Newton polishing.
     path = Path(args.input)/'spline.jsonl'
     if path.exists():
@@ -62,11 +59,8 @@ def main(argv=None):
                         table.append(dict(arm=arm, fit=label, outcome=outcome, g_fn=g, block=block, datasets=len(cell),
                             se_sd=ratio.mean(), se_sd_min=ratio.min(), se_sd_max=ratio.max(),
                             coverage=cover.mean(), coverage_min=cover.min(), coverage_max=cover.max(),
-                            grad_norm_median=np.median([r[prefix+'grad_norm'] for r in cell]),
-                            min_eigenvalue_median=np.median([r['min_eig'] for r in cell]),
-                            hessian_not_pd=np.mean([r['min_eig'] <= 0 for r in cell]),
-                            time_fit_median=np.median([r['time_fit'] for r in cell]),
-                            time_sandwich_median=np.median([r['time_sandwich'] for r in cell])))
+                            newton_step_median=float('nan'),
+                            min_eigenvalue_median=np.median([r['min_eig'] for r in cell])))
     path = out/'sandwich_monte_carlo.csv'
     with open(path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(table[0]))
