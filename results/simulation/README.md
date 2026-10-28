@@ -1,26 +1,26 @@
-# Simulation: NeuralPLSI, SplinePLSI and typical neural-network training, n = 2000
+# Simulation: NeuralPLSI fitted by L-BFGS and by minibatch AdamW, and SplinePLSI, n = 2000
 
 Summaries of the current simulation run. The raw per-replicate results are not
 in git. They are on BigPurple at `/gpfs/scratch/doh03/NeuralPLSI/output/simulation`.
 
 | Setting | Value |
 |---|---|
-| Estimators | NeuralPLSI (full-batch L-BFGS, exact Newton γ, no validation split), SplinePLSI (C++ profile fit), NeuralPLSI-Adam, a baseline of typical neural-network training (minibatch AdamW, early stopping on a 20% validation split, no γ refit), and NeuralPLSI-AdamGamma, the same AdamW fit followed by the exact γ fit of L-BFGS |
+| Estimators | NeuralPLSI (full-batch L-BFGS, exact Newton γ, no validation split), SplinePLSI (C++ profile fit), NeuralPLSI-AdamFrozen (minibatch AdamW with early stopping on a 20% validation split, then the frozen correction: Newton steps on β, γ and the intercept with the network fixed, on all rows), and NeuralPLSI-AdamGamma, the same AdamW fit followed by the exact γ fit only (the comparator: β is not corrected) |
 | Sample size | n = 2000 (training set; the test set has the same size) |
 | g | linear; sigmoid; threshold, g(u) = 2 tanh(1.5 max(u, 0)) + 0.1u, nearly flat below u = 0 and then a steep rise that levels off, with a kink at u = 0 |
 | Outcomes | continuous, binary, cox |
 | Replicates | 500 per setting (seeds 0-499) |
 | Bootstrap | Cold-start refits, 95% percentile intervals. B = 1000, except SplinePLSI with linear and sigmoid g (B = 999), which was not rerun |
 | Exposures | normal |
-| Code | Linear and sigmoid g: NeuralPLSI commit `d7338d0`, SplinePLSI `816893d`, NeuralPLSI-Adam `b3b88cb`, NeuralPLSI-AdamGamma `99e1a1c`. Threshold g: all four estimators at commit `2a11768`, where its key was `nlrelu`; the raw files were relabelled `threshold` afterwards, with no other change |
-| Run | Linear and sigmoid g: NeuralPLSI 2026-10-22, job 28702575; NeuralPLSI-Adam 2026-10-22, job 28707312; NeuralPLSI-AdamGamma 2026-10-23, job 28718391; SplinePLSI 2026-10-21, job 28680527. Threshold g: all four estimators 2026-10-23 to 24, job 28756719. All on `cpu_short` with 40 CPUs per task |
+| Code | Linear and sigmoid g: NeuralPLSI commit `d7338d0`, SplinePLSI `816893d`, NeuralPLSI-AdamGamma `99e1a1c`. Threshold g: these three at commit `2a11768`, where its key was `nlrelu`; the raw files were relabelled `threshold` afterwards, with no other change. NeuralPLSI-AdamFrozen, all g: commit `0ba060d` |
+| Run | Linear and sigmoid g: NeuralPLSI 2026-10-22, job 28702575; NeuralPLSI-AdamGamma 2026-10-23, job 28718391; SplinePLSI 2026-10-21, job 28680527. Threshold g: these three 2026-10-23 to 24, job 28756719. NeuralPLSI-AdamFrozen 2026-10-27, job 28865591. All on `cpu_short` with 40 CPUs per task. NeuralPLSI's fitting code is unchanged since, so its rows stand |
 
 The `source_sha256` recorded in every result row matches these commits.
 
 ## Files
 
-- `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-Adam green, NeuralPLSI-AdamGamma purple, which panel D leaves out because its g is the baseline's). Panels A and B are forest plots, one row per coordinate of β (8) and γ (3), labelled with its true value:
-  - A: the mean bias of each coordinate in units of its empirical SD, with its 95% Monte-Carlo interval over the 500 replicates (±0.088 SD). The shaded band is the Monte-Carlo range at exactly zero bias. The axis stops at ±0.5 SD; the baseline's γ₁ biases lie beyond it and are drawn as arrows labelled with their value.
+- `inference.png` / `.pdf`, one figure with four panels and the four estimators (NeuralPLSI blue, SplinePLSI orange, NeuralPLSI-AdamFrozen green, NeuralPLSI-AdamGamma purple, which panel D leaves out because neither correction changes the network, so its g is NeuralPLSI-AdamFrozen's). Panels A and B are forest plots, one row per coordinate of β (8) and γ (3), labelled with its true value:
+  - A: the mean bias of each coordinate in units of its empirical SD, with its 95% Monte-Carlo interval over the 500 replicates (±0.088 SD). The shaded band is the Monte-Carlo range at exactly zero bias. The axis stops at ±0.5 SD; a bias beyond it is drawn as an arrow labelled with its value.
   - B: coverage of the 95% interval for each coordinate, with its 95% Monte-Carlo (Wilson) interval. The shaded band is the Monte-Carlo range of one coordinate's coverage at exact 0.95.
   - C: mean bootstrap SE / empirical SD for each coordinate.
   - D: the estimated g, its mean over the 500 replicates with a band of ±1 empirical SD, against the true g. The shading marks |u| > 2, which holds 7% of the index values.
@@ -62,81 +62,50 @@ exact 0.95 coverage is 0.931-0.969 for a single coefficient.
   - Bootstrap: 8-25 s for NeuralPLSI with B = 1000; 3-10 s for SplinePLSI.
   - NeuralPLSI is slowest for continuous outcomes (bootstrap 16-25 s).
 
-## Typical neural-network training (NeuralPLSI-Adam)
+## Minibatch AdamW with the frozen correction (NeuralPLSI-AdamFrozen)
 
-The baseline trains the same network the way neural networks are usually
-trained: AdamW on minibatches of 64 rows from a random 80% of the data, early
-stopping on the other 20% (patience 10, at most 200 epochs) with the best
-checkpoint restored, and no exact fit of γ. Every bootstrap refit uses the same
-procedure from a fresh initialization. Ranges are across the 9 settings and
-compare it with the L-BFGS NeuralPLSI.
+The network is trained the way neural networks usually are: AdamW on
+minibatches of 64 rows from a random 80% of the data, early stopping on the
+other 20% (patience 10, at most 200 epochs) with the best checkpoint restored.
+Then, on all rows, the frozen correction takes Newton steps on β (in the
+tangent plane of the unit sphere), γ and the intercept with the network fixed,
+until they converge. Every bootstrap refit uses the same procedure from a fresh
+initialization. Ranges are across the 9 settings and compare it with L-BFGS.
 
-- **γ: intervals centred in the wrong place.** Early stopping halts γ before it
-  converges, and every bootstrap refit stops the same way, so the bootstrap
-  cannot see the bias.
-  - γ₁ (true value 1) is shrunk toward zero: mean bias about -0.04 for
-    continuous outcomes, -0.06 to -0.07 for Cox and -0.11 to -0.13 for binary,
-    or 1.1-1.4 empirical SDs in every setting (panel A). Its RMSE is 2.2-2.6
-    times that of L-BFGS.
-  - γ₁ coverage is 0.89-0.94, below the Monte-Carlo range in 7 of 9 settings
-    (the exceptions are threshold-binary and threshold-Cox, at 0.944 and 0.938).
-    An interval of the same width centred on the estimate covers only
-    0.72-0.81. The percentile interval does better because it is centred on
-    the bootstrap mean, which is more accurate than the single fit (26-33%
-    lower RMSE for the γ block).
-  - γ₂ and γ₃ over-cover (0.95-0.98), with SE/SD 1.04-1.17. Averaged over the
-    block, coverage is 0.937-0.965, which hides both problems.
+- **β: as accurate as L-BFGS, and its intervals cover.** β RMSE is 0-3% above
+  L-BFGS's. Coverage is 0.941-0.968 for the block (L-BFGS 0.940-0.971), with 4
+  of 72 coordinates below the Monte-Carlo range and 6 above (L-BFGS 2 and 7);
+  SE/SD is 0.97-1.14, the highest for threshold-binary, as for L-BFGS (1.15).
+- **γ: as accurate as L-BFGS, and its intervals cover.** RMSE is 1% below to 9%
+  above L-BFGS's (the most for Cox). Coverage is 0.943-0.964 with SE/SD
+  0.98-1.05, none of 27 coordinates below the Monte-Carlo range.
+- **g is AdamW's**: the correction does not change the network, so g's RMSE is
+  4-88% above L-BFGS's, the most for linear g.
+- **Prediction.** Test MSE is 1.010-1.016 (L-BFGS 1.008-1.011); AUC and C-index
+  match L-BFGS's to 0.001.
+- **Cost.** Fits take 0.28-0.31 s and the bootstrap 6-9 s with B = 1000
+  (L-BFGS: 0.3-0.8 s and 8-25 s).
+
+## AdamW followed by the exact γ fit only (NeuralPLSI-AdamGamma)
+
+The comparator runs the same AdamW fit and then fits only γ and the intercept
+exactly on all rows, with the index and link fixed. Its g is
+NeuralPLSI-AdamFrozen's (the same network), but its β is AdamW's, uncorrected.
+
 - **β: intervals wider than needed, estimates less accurate.** Coverage is
-  0.965-0.982, against 0.940-0.971 for L-BFGS, and 41 of 72 coordinates are
-  above the Monte-Carlo range. SE/SD is 0.98-1.03 except for
-  threshold-binary (1.13, close to L-BFGS's 1.15 there): the over-coverage comes
-  from optimizer noise in the single fit. The bagged β has 7-11% lower RMSE
-  than the single fit, and the percentile interval is centred on it; an
-  interval of the same width centred on the estimate covers 0.944-0.955 (0.968
-  for threshold-binary). β RMSE is 10-15% higher than with L-BFGS.
-- **g.** RMSE is 4-88% higher than with L-BFGS: 1.47-1.88 times for linear g,
-  1.43-1.48 times for threshold g with continuous and Cox outcomes, and
-  1.04-1.23 times for sigmoid g and threshold-binary. On |u| ≤ 2 its
-  largest bias is larger than L-BFGS's in 7 of 9 settings (up to 0.35 for
-  threshold-Cox, against 0.23; 0.25 against 0.16 once a constant is
-  removed), and its spread is larger in all 9.
-- **Prediction.** Test MSE is 1.014-1.020, against 1.008-1.011 for L-BFGS. AUC
-  and C-index are within 0.002.
-- **Cost.** Fits take 0.24-0.29 s and the bootstrap 5-8 s with B = 1000.
+  0.965-0.982, against 0.941-0.968 with the frozen correction, and 41 of 72
+  coordinates are above the Monte-Carlo range: the bootstrap's percentile
+  interval is centred on the bagged estimate, which averages out AdamW's
+  optimizer noise in the single fit. β RMSE is 10-15% above L-BFGS's.
+- **γ is fine**: coverage 0.943-0.965, SE/SD 0.98-1.05, RMSE 1% below to 10%
+  above L-BFGS's. Without the γ step (plain AdamW, an earlier arm) early
+  stopping biased γ₁ toward zero by 1.1-1.4 empirical SDs and its coverage fell
+  to 0.89-0.94.
+- **Cost.** The bootstrap takes 5-7 s with B = 1000.
 
-So with typical training the bootstrap does not give valid inference for the
-linear coefficients: early stopping biases them, the bias is reproduced in
-every refit, and the intervals for the largest coefficient under-cover in 7 of
-9 settings. The full-batch fit with an exact γ step removes this.
-
-## The baseline followed by the exact γ fit (NeuralPLSI-AdamGamma)
-
-This arm runs the baseline's AdamW fit unchanged and then fits γ and the
-intercept exactly on all rows, with the index and link fixed, as L-BFGS does.
-Its β and g are therefore the baseline's: they were identical in all 4500
-datasets, so β coverage (0.965-0.982), β RMSE (10-15% above L-BFGS) and the
-g results above apply unchanged. Only γ differs.
-
-- **γ is repaired.** Coverage is 0.943-0.965 for the block and 0.938-0.980 per
-  coordinate, with none below the Monte-Carlo range (the baseline had 7).
-  SE/SD is 0.98-1.05. The bias of γ₁ is about 0 for continuous outcomes and
-  -0.006 to -0.019 for binary and Cox, against -0.04 to -0.13 before. An
-  interval of the same width centred on the estimate covers 0.928-0.972.
-- **γ accuracy.** RMSE is within 1% of L-BFGS for continuous and binary
-  outcomes and 7-10% higher for Cox. For Cox, the bootstrap mean of γ is 8-11%
-  more accurate than the single fit, so the remaining noise in β and g reaches
-  γ through the offset, and γ₁'s percentile interval over-covers there
-  (0.968-0.980).
-- **Prediction.** Test MSE is 1.011-1.017, between the baseline (1.014-1.020)
-  and L-BFGS (1.008-1.011). AUC and C-index are within 0.002.
-- **Cost.** The γ step adds no measurable time: the bootstrap takes 5-7 s with
-  B = 1000.
-
-So the two parts of typical training fail in different ways. Early stopping
-biases γ, the bootstrap cannot see that bias, and an exact γ step afterwards
-removes it. Minibatch training of β and g on 80% of the rows makes them less
-accurate and makes the β intervals over-cover, and a γ step cannot change
-that. Full-batch L-BFGS addresses both.
+So for minibatch training the correction on all rows is what makes the
+bootstrap work: correcting γ alone fixes γ, and correcting β as well makes β as
+accurate as full-batch L-BFGS, at a lower cost.
 
 ## Regenerate
 
